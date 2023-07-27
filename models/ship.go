@@ -3,7 +3,8 @@ package models
 import (
 	"database/sql"
 	//"strconv"
-//	"fmt"
+	"fmt"
+		"encoding/json"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -20,15 +21,21 @@ func ConnectDatabase() error {
 }
 
 type Ship struct {
-	hashcode string `"json:hashcode"`
-	username string `"json:username"`
-	dstIp    string `"json:dstIp"`
-	dstPort  string `"json:dstPort"`
+	Hashcode string `json:"hashcode"`
+	DstIp    string `json:"dstIp"`
+	DstPort  string `json:"dstPort"`
+	Username string `json:"username"`
 }
 
-func GetShips() ([]Ship, error) {
+type Fleet struct {
+	DstIp    string `json:"dstIp"`
+	DstPort  string `json:"dstPort"`
+	Username string `json:"username"`
+}
 
-	rows, err := DB.Query("SELECT hashcode, dstIp, dstPort, username from fleet")
+func GetShips() ([]Fleet, error) {
+
+	rows, err := DB.Query("SELECT dstIp, dstPort, username from fleet")
 
 	if err != nil {
 		return nil, err
@@ -36,11 +43,11 @@ func GetShips() ([]Ship, error) {
 
 	defer rows.Close()
 
-	ships := make([]Ship, 0)
+	ships := make([]Fleet, 0)
 
 	for rows.Next() {
-		singleShip := Ship{}
-		err = rows.Scan(&singleShip.hashcode, &singleShip.dstIp, &singleShip.dstPort,  &singleShip.username)
+		singleShip := Fleet{}
+		err = rows.Scan(&singleShip.DstIp, &singleShip.DstPort, &singleShip.Username)
 
 		if err != nil {
 			return nil, err
@@ -60,17 +67,21 @@ func GetShips() ([]Ship, error) {
 
 func AddShip(newShip Ship) (bool, error) {
 
+		j, _ := json.MarshalIndent(newShip, "", "  "); fmt.Println(string(j))
+
+	//	fmt.Println("vals=" + newShip.Hashcode + " - " + newShip.DstIp + " - " + newShip.DstPort + " - " + newShip.Username)
 	tx, err := DB.Begin()
 	if err != nil {
 		return false, err
 	}
 
+	fmt.Println("val=" + newShip.Username)
 	/*
-  stmt, err := db.Prepare("INSERT OR REPLACE INTO fleet (hashcode, dstIp, dstPort, username) VALUES (?, ?, ?, ?)")
-          //      Console.Writeln(stmt);
-	          //      fmt.Printf(stmt)
-		          stmt.Exec(newShip.hashcode, newShip.dstIp, newShip.dstPort, newShip.username)
-			          stmt.Close()
+	  stmt, err := db.Prepare("INSERT OR REPLACE INTO fleet (hashcode, dstIp, dstPort, username) VALUES (?, ?, ?, ?)")
+	          //      Console.Writeln(stmt);
+		          //      fmt.Printf(stmt)
+			          stmt.Exec(newShip.hashcode, newShip.dstIp, newShip.dstPort, newShip.username)
+				          stmt.Close()
 
 	*/
 	stmt, err := tx.Prepare("INSERT OR REPLACE INTO fleet (hashcode, dstIp, dstPort, username) VALUES (?, ?, ?, ?)")
@@ -78,9 +89,10 @@ func AddShip(newShip Ship) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
 	defer stmt.Close()
 
-	_, err = stmt.Exec(newShip.hashcode, newShip.dstIp, newShip.dstPort, newShip.username)
+	_, err = stmt.Exec(newShip.Hashcode, newShip.DstIp, newShip.DstPort, newShip.Username)
 
 	if err != nil {
 		return false, err
