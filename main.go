@@ -2,12 +2,8 @@ package main
 
 import (
 	"pir9/models"
-	"fmt"
 	"log"
 	"net/http"
-//	"io/ioutil"
-//	"strconv"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -46,22 +42,21 @@ func getShips(c *gin.Context) {
 
 func addShip(c *gin.Context) {
 
-  // body, _ := ioutil.ReadAll(c.Request.Body)
-    //   println(string(body))
+	var jsonShip models.Ship
 
-	var json models.Ship
-
-	if err := c.ShouldBindJSON(&json); err != nil {
+	if err := c.BindJSON(&jsonShip); err != nil {
+//	log.Println(jsonShip.Username)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+
 		return
 	}
-	success, err := models.AddShip(json)
-fmt.Print("addShip is here")
+	success, err := models.AddShip(jsonShip)
 	if success {
 		c.JSON(http.StatusOK, gin.H{"message": "Success"})
 	} else {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err})
 	}
+
 }
 
 func checkErr(err error) {
