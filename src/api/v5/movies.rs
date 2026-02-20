@@ -658,6 +658,33 @@ pub async fn fetch_radarr_images(imdb_id: &str) -> Vec<MovieImage> {
 
 // ---- TMDB direct API ----
 
+/// TMDB API key from `PIR9_TMDB_API_KEY` environment variable.
+static TMDB_API_KEY: once_cell::sync::Lazy<Option<String>> =
+    once_cell::sync::Lazy::new(|| std::env::var("PIR9_TMDB_API_KEY").ok());
+
+/// Shared HTTP client for TMDB requests.
+static TMDB_HTTP_CLIENT: once_cell::sync::Lazy<reqwest::Client> =
+    once_cell::sync::Lazy::new(|| {
+        reqwest::Client::builder()
+            .user_agent(format!("pir9/{}", env!("CARGO_PKG_VERSION")))
+            .build()
+            .expect("failed to build TMDB HTTP client")
+    });
+
+/// Build an authenticated TMDB GET request.
+/// Auto-detects key type: JWT Read Access Tokens (starting with `eyJ`) use
+/// `Authorization: Bearer` header; v3 API keys use `?api_key=` query parameter.
+fn tmdb_get(url: &str) -> Option<reqwest::RequestBuilder> {
+    let key = TMDB_API_KEY.as_deref()?;
+    if key.starts_with("eyJ") {
+        // API Read Access Token → Bearer header
+        Some(TMDB_HTTP_CLIENT.get(url).bearer_auth(key))
+    } else {
+        // v3 API Key → query parameter
+        Some(TMDB_HTTP_CLIENT.get(url).query(&[("api_key", key)]))
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct TmdbFindResponse {
     movie_results: Vec<TmdbMovieResult>,
@@ -673,20 +700,12 @@ struct TmdbMovieResult {
 /// Fetch movie images and TMDB ID directly from TMDB's `/find/{imdb_id}` endpoint.
 /// Requires `PIR9_TMDB_API_KEY` environment variable. Returns None if key absent or API fails.
 async fn fetch_tmdb_movie_data(imdb_id: &str) -> Option<(i64, Vec<MovieImage>)> {
-    static TMDB_API_KEY: once_cell::sync::Lazy<Option<String>> =
-        once_cell::sync::Lazy::new(|| std::env::var("PIR9_TMDB_API_KEY").ok());
-
-    let api_key = TMDB_API_KEY.as_deref()?;
-
     let url = format!(
-        "https://api.themoviedb.org/3/find/{}?api_key={}&external_source=imdb_id",
-        imdb_id, api_key
+        "https://api.themoviedb.org/3/find/{}?external_source=imdb_id",
+        imdb_id
     );
-    let client = reqwest::Client::new();
 
-    let resp = client
-        .get(&url)
-        .header("User-Agent", format!("pir9/{}", env!("CARGO_PKG_VERSION")))
+    let resp = tmdb_get(&url)?
         .send()
         .await
         .ok()?;
@@ -745,20 +764,9 @@ pub struct TmdbGenre {
 /// Fetch full movie details from TMDB by TMDB ID.
 /// Calls `GET /3/movie/{tmdb_id}`. Returns None if API key absent or request fails.
 pub async fn fetch_tmdb_movie_by_id(tmdb_id: i64) -> Option<TmdbMovieDetail> {
-    static TMDB_API_KEY: once_cell::sync::Lazy<Option<String>> =
-        once_cell::sync::Lazy::new(|| std::env::var("PIR9_TMDB_API_KEY").ok());
+    let url = format!("https://api.themoviedb.org/3/movie/{}", tmdb_id);
 
-    let api_key = TMDB_API_KEY.as_deref()?;
-
-    let url = format!(
-        "https://api.themoviedb.org/3/movie/{}?api_key={}",
-        tmdb_id, api_key
-    );
-    let client = reqwest::Client::new();
-
-    let resp = client
-        .get(&url)
-        .header("User-Agent", format!("pir9/{}", env!("CARGO_PKG_VERSION")))
+    let resp = tmdb_get(&url)?
         .send()
         .await
         .ok()?;
