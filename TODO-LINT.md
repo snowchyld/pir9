@@ -1,161 +1,62 @@
-# pir9 Lint & Feature Completion TODO
+# pir9 Feature Completion & Technical Debt
 
-Generated: 2026-01-31
+Updated: 2026-02-07
 
-## Overview
+## Lint Status
 
-After running `make lint`, there are ~355 clippy errors remaining. This document tracks what needs to be done.
-
----
-
-## 1. Quick Wins (COMPLETED)
-
-- [x] `collapsible_str_replace` - `src/core/parser/mod.rs`
-- [x] `upper_case_acronyms` - Suppressed with `#[allow(...)]`
-- [x] `derivable_impls` - 4 enums now use `#[derive(Default)]`
-- [x] `useless_format` - `src/core/tv/services.rs`
-- [x] `new_ret_no_self` - Suppressed with `#[allow(...)]`
-
----
-
-## 2. Unused Imports (~50+ occurrences)
-
-Most are in API v3 modules where routing functions are imported but endpoints not yet implemented.
-
-### API v3 Modules (WIP endpoints)
-
-| File | Unused Imports |
-|------|----------------|
-| `src/api/v3/autotagging.rs` | `delete`, `post`, `put` |
-| `src/api/v3/command.rs` | `delete`, `post` |
-| `src/api/v3/config.rs` | `put` |
-| `src/api/v3/customfilter.rs` | `delete`, `post`, `put` |
-| `src/api/v3/customformat.rs` | `delete`, `post`, `put` |
-| `src/api/v3/delayprofile.rs` | `delete`, `post` |
-| `src/api/v3/downloadclient.rs` | `delete`, `put` |
-| `src/api/v3/importlist.rs` | `delete`, `put` |
-| `src/api/v3/indexer.rs` | `delete`, `put` |
-| `src/api/v3/metadata.rs` | `delete`, `put` |
-| `src/api/v3/notification.rs` | `delete`, `put` |
-| `src/api/v3/qualityprofile.rs` | `delete`, `post`, `put` |
-| `src/api/v3/releaseprofile.rs` | `delete`, `post`, `put` |
-| `src/api/v3/remotepathmapping.rs` | `delete`, `post`, `put` |
-| `src/api/v3/serieseditor.rs` | `delete` |
-
-### Other Modules
-
-| File | Unused Imports |
-|------|----------------|
-| `src/cli.rs` | `Context`, `error` |
-
-### Recommended Action
-
-Either:
-- Implement the missing endpoints, OR
-- Add `#[allow(unused_imports)]` at module level for WIP code
-
----
-
-## 3. Unused Variables (`src/cli.rs`)
-
-CLI subcommands have parameters that aren't being used:
-
-```rust
-// src/cli.rs:229
-SeriesCommands::Add { tvdb_id, title, quality_profile, root_folder }
-//                                    ^^^^^^^^^^^^^^^ ^^^^^^^^^^^^ unused
-
-// src/cli.rs:241
-SeriesCommands::Search { series_id, season, episode }
-//                       ^^^^^^^^^ ^^^^^^ ^^^^^^^ all unused
-
-// src/cli.rs:266
-SystemCommands::Backup { path }
-//                       ^^^^ unused
-```
-
-### Recommended Action
-
-Either implement the CLI handlers or prefix with `_` (e.g., `_quality_profile`).
-
----
-
-## 4. Dead Code (~200+ occurrences)
-
-Categorized by feature area:
-
-### HIGH PRIORITY - Core Features Stubbed
-
-| Feature | File(s) | Current State | Work Required |
-|---------|---------|---------------|---------------|
-| **Download History** | `core/download/history.rs` | All methods return `Ok(())` | DB schema + insert logic |
-| **Download Queue** | `core/download/queue.rs`, `core/queue/mod.rs` | `enqueue()`, `remove()`, `grab()` are stubs | Storage backend wiring |
-| **Media Analysis** | `core/mediafiles/mod.rs` | `analyze(path)` ignores path | mediainfo library integration |
-| **Episode Cutoff Query** | `core/datastore/repositories.rs:880-915` | Returns `(vec![], 0)` | Quality comparison logic |
-
-### MEDIUM PRIORITY - Frameworks Complete, Bodies Empty
-
-| Feature | File(s) | Current State | Work Required |
-|---------|---------|---------------|---------------|
-| **Scheduler Jobs** | `core/scheduler.rs` | Loop works, jobs just log | Implement `RssSync`, `RefreshSeries`, `DownloadedEpisodesScan`, `Housekeeping`, `Backup` |
-| **Notifications** | `core/notifications/service.rs` | Event listener done | Provider dispatch completion |
-| **Download Clients API** | `core/download/clients.rs` | Routes defined | Handlers need to use request bodies |
-
-### LOW PRIORITY - Minor Gaps
-
-| Feature | File(s) | Current State |
-|---------|---------|---------------|
-| **Search Category** | `core/indexers/clients.rs:157` | Parsed but discarded |
-| **TV Services** | `core/tv/services.rs` | Mostly complete, some TODOs |
-
----
-
-## 5. Approach Options
-
-### Option A: Suppress Dead Code Warnings (Quick)
-
-Add to `src/lib.rs` or `src/main.rs`:
-```rust
-#![allow(dead_code)]  // Temporary: WIP codebase
-```
-
-Or per-module:
-```rust
-#[allow(dead_code)]
-mod download;
-```
-
-### Option B: Implement Features (Thorough)
-
-Priority order:
-1. CLI handlers (quick wins)
-2. Download history/queue (core functionality)
-3. Scheduler job bodies
-4. Media analysis integration
-
-### Option C: Remove Unused Code (If Abandoned)
-
-Only if features are confirmed abandoned - not recommended for WIP code.
-
----
-
-## 6. Running Lint
+**Clippy: 0 errors** — all warnings resolved as of v0.10.2.
 
 ```bash
-# Full lint check
-make lint
-
-# Just Rust clippy
-cargo clippy -- -D warnings
-
-# Count remaining errors
-cargo clippy -- -D warnings 2>&1 | grep "^error" | wc -l
+cargo clippy -- -D warnings    # Clean ✓
+cd frontend && npm run lint    # Clean (Biome 2.x) ✓
 ```
+
+---
+
+## Remaining Feature Gaps
+
+### HIGH PRIORITY
+
+| Feature | Location | Current State | Work Required |
+|---------|----------|---------------|---------------|
+| **RSS Sync auto-grab** | `core/scheduler.rs:248` | Fetches RSS feeds but doesn't process releases | Match releases against wanted episodes, check quality profiles, add to download queue |
+| **Episode Cutoff Query** | `core/datastore/repositories.rs` | Returns episodes with files but doesn't compare quality | Join with quality_profiles, compare against cutoff |
+
+### MEDIUM PRIORITY
+
+| Feature | Location | Current State | Work Required |
+|---------|----------|---------------|---------------|
+| **Movie Refresh metadata** | `core/movies/services.rs:75` | Refresh exists but doesn't fetch updated info | Call pir9-imdb or TMDB for updated metadata |
+| **Config Persistence** | `api/v5/config.rs:76` | Config changes aren't saved | Persist to config.toml and reload |
+| **Queue Re-grab** | `api/v5/queue.rs:699` | Can't re-grab a previously removed release | Implement re-grab logic |
+
+### LOW PRIORITY
+
+| Feature | Location | Current State | Work Required |
+|---------|----------|---------------|---------------|
+| **CLI Subcommands** | `cli.rs:224-299` | All 14 commands are logging stubs | Implement series list/add/delete, system backup/restore, config show/set |
+| **Search Category** | `core/indexers/clients.rs` | Parsed but discarded | Wire category through to indexer requests |
+| **Media Analysis** | `core/mediafiles/mod.rs` | Filename-based only | Optionally integrate mediainfo binary for deeper metadata |
+
+---
+
+## Completed (Previously Tracked)
+
+These items from the original TODO were resolved or found to be already implemented:
+
+- [x] **All clippy warnings** — 355 → 0 across v0.8.x–v0.10.2
+- [x] **Download History** — fully implemented (`record_grab`, `record_download_failed`, `record_import`)
+- [x] **Download Queue** — fully implemented via `TrackedDownloadService`
+- [x] **Scheduler Jobs** — 5 of 6 implemented (RefreshSeries, DownloadedEpisodesScan, Housekeeping, HealthCheck, Backup)
+- [x] **Notifications** — event listener and provider dispatch working
+- [x] **Download Clients API** — handlers wired and functional
+- [x] **Frontend linting** — migrated to Biome 2.x (v0.10.1)
+- [x] **Unused imports** — resolved via implementation or suppression
 
 ---
 
 ## Notes
 
-- The codebase follows a **framework-first approach** - infrastructure is solid, implementations are stubs
-- Most "dead code" is **intentional WIP**, not abandoned features
-- API v3 maintains Sonarr compatibility - don't remove endpoints even if unimplemented
+- The codebase follows a **framework-first approach** — infrastructure is solid, implementations fill in over time
+- API v3 maintains Sonarr compatibility — don't remove endpoints even if unimplemented
+- The single highest-impact gap is **RSS Sync auto-grab** — this is what makes it a fully autonomous PVR
