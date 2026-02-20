@@ -45,8 +45,8 @@ Uses `--mount=type=cache` for cargo registry and git cache acceleration.
 
 ## Registry
 
-- Image: `reg.pir9.org:2443/pir9:latest`
-- Push with: `make push` or `docker push reg.pir9.org:2443/pir9:latest`
+- Image: `nas.drew.red:2443/pir9:latest`
+- Push with: `make push` or `docker push nas.drew.red:2443/pir9:latest`
 
 ## Deployment Modes
 

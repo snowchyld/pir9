@@ -1,14 +1,6 @@
 ---
 name: parser-dev
 description: Develop and debug release title parsing regex patterns
-user-invocable: true
-allowed-tools:
-  - Read
-  - Write
-  - Edit
-  - Grep
-  - Glob
-  - Bash
 ---
 
 # Release Title Parser Development

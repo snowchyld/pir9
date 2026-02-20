@@ -51,7 +51,7 @@ docker run -d --name redis -p 6379:6379 redis:alpine
 docker run -d --name pir9 \
   -p 8989:8989 \
   -e PIR9_REDIS_URL=redis://redis:6379 \
-  reg.pir9.org:2443/pir9:latest \
+  nas.drew.red:2443/pir9:latest \
   --mode server --redis-url redis://redis:6379
 ```
 
@@ -61,7 +61,7 @@ docker run -d --name pir9 \
 docker run -d --name pir9-worker \
   -v /volume1/media/tv:/media/tv:ro \
   -v /volume1/media/anime:/media/anime:ro \
-  reg.pir9.org:2443/pir9:latest \
+  nas.drew.red:2443/pir9:latest \
   --mode worker \
   --redis-url redis://your-server-ip:6379 \
   --worker-path /media/tv \
@@ -202,7 +202,7 @@ See the main repository for complete docker-compose files:
 ```yaml
 services:
   api:
-    image: reg.pir9.org:2443/pir9:latest
+    image: nas.drew.red:2443/pir9:latest
     command:
       - "--mode"
       - "server"
@@ -233,7 +233,7 @@ services:
 ```yaml
 services:
   pir9-worker:
-    image: reg.pir9.org:2443/pir9:latest
+    image: nas.drew.red:2443/pir9:latest
     container_name: pir9-worker
     restart: unless-stopped
     command:

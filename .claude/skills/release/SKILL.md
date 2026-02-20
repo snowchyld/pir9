@@ -1,14 +1,6 @@
 ---
 name: release
 description: Guided release workflow — version bump, lint, test, build, push
-user-invocable: true
-disable-model-invocation: true
-allowed-tools:
-  - Read
-  - Edit
-  - Grep
-  - Glob
-  - Bash
 ---
 
 # Release Workflow
@@ -61,7 +53,7 @@ This builds the Docker image with the release tag.
 make push
 ```
 
-Pushes to `reg.pir9.org:2443/pir9:latest`.
+Pushes to `nas.drew.red:2443/pir9:latest`.
 
 ### 7. Tag the release
 ```bash

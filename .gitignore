@@ -40,6 +40,9 @@ frontend/node_modules/
 .env
 .env.local
 
+# Deploy config (host-specific SSH/project settings)
+reg/deploy.json
+
 # Secrets & certificates
 certs/
 *.key

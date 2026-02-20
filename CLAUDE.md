@@ -52,7 +52,7 @@ make test             # Run tests
 make lint             # Run all linters
 make run-api          # Run API locally with debug logging
 make release          # Build and push to registry
-make push             # Push to reg.pir9.org:2443/pir9:latest
+make push             # Push to nas.drew.red:2443/pir9:latest
 ```
 
 ### Docker
