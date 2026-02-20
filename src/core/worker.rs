@@ -305,11 +305,8 @@ impl WorkerRunner {
             }
             // File move requests from server (download import Phase 3)
             Message::ImportFilesRequest { job_id, files } => {
-                info!(
-                    "Received import files request: job_id={}, files={}",
-                    job_id,
-                    files.len()
-                );
+                let total = files.len();
+                info!("[import] Starting import job {} — {} file(s)", job_id, total);
 
                 // Check if any source paths are on our volumes
                 let any_ours = files.iter().any(|f| self.handles_path(&f.source_path.to_string_lossy()));
@@ -319,28 +316,53 @@ impl WorkerRunner {
                 }
 
                 let mut results = Vec::new();
-                for spec in files {
+                let started = std::time::Instant::now();
+
+                for (idx, spec) in files.iter().enumerate() {
+                    let media_type = infer_media_type(&spec.dest_path);
+                    let filename = spec.source_path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+
+                    info!(
+                        "[import][{}] ({}/{}) {} — {} -> {}",
+                        media_type,
+                        idx + 1,
+                        total,
+                        filename,
+                        spec.source_path.display(),
+                        spec.dest_path.display()
+                    );
+
+                    let file_start = std::time::Instant::now();
                     let result = match move_file(&spec.source_path, &spec.dest_path) {
-                        Ok(size) => {
+                        Ok(mr) => {
+                            let elapsed = file_start.elapsed();
                             info!(
-                                "Moved file: {} -> {} ({} bytes)",
-                                spec.source_path.display(),
-                                spec.dest_path.display(),
-                                size
+                                "[{}][{}] ({}/{}) {} — {} in {:.1}s",
+                                mr.method,
+                                media_type,
+                                idx + 1,
+                                total,
+                                filename,
+                                format_size(mr.size as u64),
+                                elapsed.as_secs_f64()
                             );
                             crate::core::messaging::ImportFileResult {
                                 source_path: spec.source_path.clone(),
                                 dest_path: spec.dest_path.clone(),
                                 success: true,
-                                file_size: size,
+                                file_size: mr.size,
                                 error: None,
                             }
                         }
                         Err(e) => {
                             error!(
-                                "Failed to move file {} -> {}: {}",
-                                spec.source_path.display(),
-                                spec.dest_path.display(),
+                                "[error][{}] ({}/{}) {} — failed: {}",
+                                media_type,
+                                idx + 1,
+                                total,
+                                filename,
                                 e
                             );
                             crate::core::messaging::ImportFileResult {
@@ -356,6 +378,16 @@ impl WorkerRunner {
                 }
 
                 let succeeded = results.iter().filter(|r| r.success).count();
+                let total_bytes: i64 = results.iter().map(|r| r.file_size).sum();
+                let elapsed = started.elapsed();
+                info!(
+                    "[import] Job {} complete — {}/{} succeeded, {} total in {:.1}s",
+                    job_id,
+                    succeeded,
+                    total,
+                    format_size(total_bytes as u64),
+                    elapsed.as_secs_f64()
+                );
                 self.record_scan(succeeded as u64);
 
                 event_bus
@@ -372,12 +404,8 @@ impl WorkerRunner {
                 paths,
                 recursive,
             } => {
-                info!(
-                    "Received delete paths request: job_id={}, paths={}, recursive={}",
-                    job_id,
-                    paths.len(),
-                    recursive
-                );
+                let total = paths.len();
+                info!("[delete] Starting delete job {} — {} path(s), recursive={}", job_id, total, recursive);
 
                 // Check if any paths are on our volumes
                 let any_ours = paths.iter().any(|p| self.handles_path(p));
@@ -387,8 +415,11 @@ impl WorkerRunner {
                 }
 
                 let mut results = Vec::new();
-                for path_str in paths {
+                for (idx, path_str) in paths.iter().enumerate() {
                     let path = std::path::Path::new(path_str.as_str());
+                    let media_type = infer_media_type(path);
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+
                     let result = if path.is_dir() && *recursive {
                         std::fs::remove_dir_all(path)
                     } else if path.is_file() {
@@ -404,11 +435,11 @@ impl WorkerRunner {
 
                     match result {
                         Ok(()) => {
-                            info!("Deleted: {}", path_str);
+                            info!("[delete][{}] ({}/{}) {} — {}", media_type, idx + 1, total, name, path_str);
                             results.push((path_str.clone(), true, None));
                         }
                         Err(e) => {
-                            error!("Failed to delete {}: {}", path_str, e);
+                            error!("[delete][{}] ({}/{}) {} — failed: {}", media_type, idx + 1, total, name, e);
                             results.push((path_str.clone(), false, Some(e.to_string())));
                         }
                     }
@@ -460,9 +491,10 @@ impl WorkerRunner {
             ScanType::RescanSeries => {
                 for &(series_id, path_str) in series_paths {
                     let path = PathBuf::from(path_str);
+                    let media_type = infer_media_type(&path);
 
                     if !path.exists() {
-                        warn!("Scan path does not exist: {}", path_str);
+                        warn!("[scan][{}] Path does not exist: {}", media_type, path_str);
                         results.push(Message::ScanResult {
                             job_id: job_id.to_string(),
                             series_id,
@@ -473,16 +505,23 @@ impl WorkerRunner {
                         continue;
                     }
 
-                    info!("Scanning path: {} (series_id={})", path_str, series_id);
+                    let scan_start = std::time::Instant::now();
+                    info!("[scan][{}] Scanning {} (id={})", media_type, path_str, series_id);
                     let mut files = scanner::scan_series_directory(&path);
+                    let file_count = files.len();
+                    info!("[scan][{}] Found {} video file(s) in {}", media_type, file_count, path_str);
 
                     // Enrich each file with FFmpeg probe + BLAKE3 hash (LOCAL disk = fast)
-                    for file in &mut files {
-                        enrich_scanned_file(file).await;
+                    for (idx, file) in files.iter_mut().enumerate() {
+                        enrich_scanned_file(file, (idx + 1, file_count)).await;
                     }
 
-                    total_files_found += files.len() as u64;
-                    info!("Found and enriched {} video files in {}", files.len(), path_str);
+                    let elapsed = scan_start.elapsed();
+                    total_files_found += file_count as u64;
+                    info!(
+                        "[scan][{}] Complete — {} file(s) enriched in {:.1}s (id={})",
+                        media_type, file_count, elapsed.as_secs_f64(), series_id
+                    );
 
                     results.push(Message::ScanResult {
                         job_id: job_id.to_string(),
@@ -498,7 +537,7 @@ impl WorkerRunner {
                     let path = PathBuf::from(path_str);
 
                     if !path.exists() {
-                        warn!("Movie scan path does not exist: {}", path_str);
+                        warn!("[scan][movie] Path does not exist: {}", path_str);
                         results.push(Message::ScanResult {
                             job_id: job_id.to_string(),
                             series_id: movie_id,
@@ -509,15 +548,18 @@ impl WorkerRunner {
                         continue;
                     }
 
-                    info!("Scanning movie path: {} (movie_id={})", path_str, movie_id);
+                    let scan_start = std::time::Instant::now();
+                    info!("[scan][movie] Scanning {} (id={})", path_str, movie_id);
                     if let Some(mut file) = scanner::scan_movie_directory(&path) {
-                        enrich_scanned_file(&mut file).await;
+                        enrich_scanned_file(&mut file, (1, 1)).await;
                         total_files_found += 1;
+                        let elapsed = scan_start.elapsed();
                         info!(
-                            "Found movie file: {} ({} bytes, hash={})",
+                            "[scan][movie] Complete — {} ({}, hash={}) in {:.1}s",
                             file.filename,
-                            file.size,
-                            file.file_hash.as_deref().unwrap_or("none")
+                            format_size(file.size as u64),
+                            file.file_hash.as_deref().unwrap_or("none"),
+                            elapsed.as_secs_f64()
                         );
                         results.push(Message::ScanResult {
                             job_id: job_id.to_string(),
@@ -527,7 +569,7 @@ impl WorkerRunner {
                             errors: vec![],
                         });
                     } else {
-                        info!("No video files found in movie path: {}", path_str);
+                        info!("[scan][movie] No video files found in {}", path_str);
                         results.push(Message::ScanResult {
                             job_id: job_id.to_string(),
                             series_id: movie_id,
@@ -539,7 +581,6 @@ impl WorkerRunner {
                 }
             }
             ScanType::DownloadedEpisodesScan => {
-                // For download scanning, we scan the download directories
                 for &(series_id, path_str) in series_paths {
                     let path = PathBuf::from(path_str);
 
@@ -547,14 +588,22 @@ impl WorkerRunner {
                         continue;
                     }
 
-                    info!("Scanning download path: {}", path_str);
+                    let scan_start = std::time::Instant::now();
+                    info!("[scan][download] Scanning {}", path_str);
                     let mut files = scanner::scan_series_directory(&path);
+                    let file_count = files.len();
+                    info!("[scan][download] Found {} video file(s) in {}", file_count, path_str);
 
-                    for file in &mut files {
-                        enrich_scanned_file(file).await;
+                    for (idx, file) in files.iter_mut().enumerate() {
+                        enrich_scanned_file(file, (idx + 1, file_count)).await;
                     }
 
-                    total_files_found += files.len() as u64;
+                    let elapsed = scan_start.elapsed();
+                    total_files_found += file_count as u64;
+                    info!(
+                        "[scan][download] Complete — {} file(s) enriched in {:.1}s",
+                        file_count, elapsed.as_secs_f64()
+                    );
 
                     results.push(Message::ScanResult {
                         job_id: job_id.to_string(),
@@ -574,25 +623,115 @@ impl WorkerRunner {
     }
 }
 
+/// Result of a file move, including whether it was a rename or copy
+struct MoveResult {
+    size: i64,
+    method: &'static str, // "rename" or "copy"
+}
+
 /// Move a file from source to dest, trying rename first (instant on same filesystem).
 ///
 /// On the Synology NAS, `/volume1/downloads` and `/volume1/Shows` live on the same
 /// Btrfs volume, so `rename()` is a metadata-only operation — atomic and instant.
 /// Falls back to copy+delete for cross-filesystem moves.
-fn move_file(source: &std::path::Path, dest: &std::path::Path) -> std::io::Result<i64> {
+fn move_file(source: &std::path::Path, dest: &std::path::Path) -> std::io::Result<MoveResult> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
     // Try rename first (instant on same filesystem)
     if std::fs::rename(source, dest).is_ok() {
         let size = std::fs::metadata(dest)?.len() as i64;
-        return Ok(size);
+        return Ok(MoveResult { size, method: "rename" });
     }
-    // Cross-filesystem fallback: copy + delete
-    std::fs::copy(source, dest)?;
+    // Cross-filesystem fallback: copy with progress + delete
+    let source_size = std::fs::metadata(source)?.len();
+    copy_with_progress(source, dest, source_size)?;
     let size = std::fs::metadata(dest)?.len() as i64;
     let _ = std::fs::remove_file(source);
-    Ok(size)
+    Ok(MoveResult { size, method: "copy" })
+}
+
+/// Copy a file with periodic progress logging (every 10% or 500MB, whichever comes first)
+fn copy_with_progress(
+    source: &std::path::Path,
+    dest: &std::path::Path,
+    total_size: u64,
+) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+
+    let src_file = std::fs::File::open(source)?;
+    let dst_file = std::fs::File::create(dest)?;
+    let mut reader = std::io::BufReader::with_capacity(1 << 20, src_file); // 1MB buffer
+    let mut writer = std::io::BufWriter::with_capacity(1 << 20, dst_file);
+
+    let mut copied: u64 = 0;
+    let mut last_logged_pct: u64 = 0;
+    let mut buf = vec![0u8; 1 << 20]; // 1MB chunks
+    let src_name = source.file_name().unwrap_or_default().to_string_lossy();
+
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        writer.write_all(&buf[..n])?;
+        copied += n as u64;
+
+        if total_size > 0 {
+            let pct = (copied * 100) / total_size;
+            // Log every 10%
+            if pct >= last_logged_pct + 10 {
+                last_logged_pct = pct - (pct % 10);
+                info!(
+                    "[copy] {} — {}% ({}/{})",
+                    src_name,
+                    last_logged_pct,
+                    format_size(copied),
+                    format_size(total_size)
+                );
+            }
+        }
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+/// Format bytes into a human-readable string (e.g., "1.5 GB", "340 MB")
+fn format_size(bytes: u64) -> String {
+    const GB: u64 = 1_073_741_824;
+    const MB: u64 = 1_048_576;
+    const KB: u64 = 1_024;
+
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+/// Infer media category from a file path based on known library directory names
+fn infer_media_type(path: &std::path::Path) -> &'static str {
+    let path_str = path.to_string_lossy();
+    let lower = path_str.to_lowercase();
+
+    if lower.contains("/movies") || lower.contains("/film") {
+        "movie"
+    } else if lower.contains("/anime") {
+        "anime"
+    } else if lower.contains("/shows") || lower.contains("/tv") || lower.contains("/series") {
+        "show"
+    } else if lower.contains("/podcast") {
+        "podcast"
+    } else if lower.contains("/music") {
+        "music"
+    } else {
+        "media"
+    }
 }
 
 /// Enrich a scanned file with FFmpeg media info and BLAKE3 content hash.
@@ -600,34 +739,68 @@ fn move_file(source: &std::path::Path, dest: &std::path::Path) -> std::io::Resul
 /// This runs on the worker with LOCAL disk access, making it fast (seconds
 /// instead of minutes over NFS). The enriched data travels back to the server
 /// via Redis so the server can skip redundant I/O.
-async fn enrich_scanned_file(file: &mut ScannedFile) {
+///
+/// `progress` is a `(current, total)` tuple for logging progress like "(3/10)".
+async fn enrich_scanned_file(file: &mut ScannedFile, progress: (usize, usize)) {
     use crate::core::mediafiles::compute_file_hash;
 
     let path = std::path::Path::new(&file.path);
+    let (current, total) = progress;
 
     // FFmpeg probe (feature-gated)
     #[cfg(feature = "media-probe")]
     {
         use crate::core::mediafiles::{derive_quality_from_media, MediaAnalyzer};
+        let probe_start = std::time::Instant::now();
+        info!(
+            "[probe] ({}/{}) {} ({})",
+            current, total, file.filename, format_size(file.size as u64)
+        );
         match MediaAnalyzer::analyze(path).await {
             Ok(info) => {
+                let elapsed = probe_start.elapsed();
                 let quality = derive_quality_from_media(&info, &file.filename);
+                let resolution = info.resolution.as_deref().unwrap_or("?");
+                let codec = info.video_codec.as_deref().unwrap_or("?");
+                info!(
+                    "[probe] ({}/{}) {} — {}p {} in {:.1}s",
+                    current, total, file.filename, resolution, codec, elapsed.as_secs_f64()
+                );
                 file.quality = serde_json::to_string(&quality).ok();
                 file.media_info = serde_json::to_string(&info).ok();
             }
             Err(e) => {
-                debug!("FFmpeg probe failed for {}: {}", file.filename, e);
+                let elapsed = probe_start.elapsed();
+                warn!(
+                    "[probe] ({}/{}) {} — failed in {:.1}s: {}",
+                    current, total, file.filename, elapsed.as_secs_f64(), e
+                );
             }
         }
     }
 
     // BLAKE3 content hash (pure Rust, no feature gate needed)
+    let hash_start = std::time::Instant::now();
+    info!("[hash] ({}/{}) {}", current, total, file.filename);
     match compute_file_hash(path).await {
         Ok(hash) => {
+            let elapsed = hash_start.elapsed();
+            let rate = if elapsed.as_secs_f64() > 0.0 {
+                format_size((file.size as f64 / elapsed.as_secs_f64()) as u64)
+            } else {
+                "instant".to_string()
+            };
+            info!(
+                "[hash] ({}/{}) {} — {} in {:.1}s ({}/s)",
+                current, total, file.filename, &hash[..12], elapsed.as_secs_f64(), rate
+            );
             file.file_hash = Some(hash);
         }
         Err(e) => {
-            debug!("BLAKE3 hash failed for {}: {}", file.filename, e);
+            warn!(
+                "[hash] ({}/{}) {} — failed: {}",
+                current, total, file.filename, e
+            );
         }
     }
 }
