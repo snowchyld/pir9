@@ -1,6 +1,6 @@
 //! Configuration API endpoints
 
-use axum::{response::Json, routing::get, Router};
+use axum::{extract::State, response::Json, routing::get, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -205,23 +205,19 @@ pub async fn update_ui_config(Json(body): Json<UiConfigResource>) -> Json<UiConf
 }
 
 /// GET /api/v3/config/naming
-pub async fn get_naming_config() -> Json<NamingConfigResource> {
+pub async fn get_naming_config(State(state): State<Arc<AppState>>) -> Json<NamingConfigResource> {
+    let media = state.config.read().media.clone();
     Json(NamingConfigResource {
         id: 1,
-        rename_episodes: true,
-        replace_illegal_characters: true,
-        multi_episode_style: 0,
-        standard_episode_format:
-            "{Series Title} - S{season:00}E{episode:00} - {Episode Title} {Quality Full}"
-                .to_string(),
-        daily_episode_format: "{Series Title} - {Air-Date} - {Episode Title} {Quality Full}"
-            .to_string(),
-        anime_episode_format:
-            "{Series Title} - S{season:00}E{episode:00} - {Episode Title} {Quality Full}"
-                .to_string(),
+        rename_episodes: media.rename_episodes,
+        replace_illegal_characters: media.replace_illegal_chars,
+        multi_episode_style: media.multi_episode_style,
+        standard_episode_format: media.episode_naming_pattern.clone(),
+        daily_episode_format: media.daily_episode_format.clone(),
+        anime_episode_format: media.anime_episode_format.clone(),
         series_folder_format: "{Series Title}".to_string(),
-        season_folder_format: "Season {season}".to_string(),
-        specials_folder_format: "Specials".to_string(),
+        season_folder_format: media.season_folder_format.clone(),
+        specials_folder_format: media.specials_folder_format.clone(),
         include_series_title: None,
         include_episode_title: None,
         include_quality: None,
@@ -233,8 +229,31 @@ pub async fn get_naming_config() -> Json<NamingConfigResource> {
 
 /// PUT /api/v3/config/naming
 pub async fn update_naming_config(
+    State(state): State<Arc<AppState>>,
     Json(body): Json<NamingConfigResource>,
 ) -> Json<NamingConfigResource> {
+    // Persist to config file and update in-memory config
+    let config_path = crate::core::configuration::AppConfig::config_file_path();
+    {
+        let mut app_config = state.config.write();
+        app_config.media.rename_episodes = body.rename_episodes;
+        app_config.media.replace_illegal_chars = body.replace_illegal_characters;
+        app_config.media.multi_episode_style = body.multi_episode_style;
+        app_config.media.episode_naming_pattern = body.standard_episode_format.clone();
+        app_config.media.daily_episode_format = body.daily_episode_format.clone();
+        app_config.media.anime_episode_format = body.anime_episode_format.clone();
+        app_config.media.season_folder_format = body.season_folder_format.clone();
+        app_config.media.specials_folder_format = body.specials_folder_format.clone();
+
+        if let Err(e) = app_config.save(&config_path) {
+            tracing::warn!(
+                "Failed to persist v3 naming config to {:?}: {}",
+                config_path,
+                e
+            );
+        }
+    }
+
     Json(body)
 }
 

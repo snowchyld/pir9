@@ -172,8 +172,8 @@ impl EpisodeFileRepository {
             INSERT INTO episode_files (
                 series_id, season_number, relative_path, path, size,
                 date_added, scene_name, release_group, quality, languages,
-                media_info, original_file_path
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                media_info, original_file_path, file_hash
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             RETURNING id
             "#,
         )
@@ -189,6 +189,7 @@ impl EpisodeFileRepository {
         .bind(&episode_file.languages)
         .bind(&episode_file.media_info)
         .bind(&episode_file.original_file_path)
+        .bind(&episode_file.file_hash)
         .fetch_one(pool)
         .await?;
         Ok(row.0)
@@ -201,8 +202,8 @@ impl EpisodeFileRepository {
             UPDATE episode_files SET
                 series_id = $1, season_number = $2, relative_path = $3, path = $4, size = $5,
                 date_added = $6, scene_name = $7, release_group = $8, quality = $9, languages = $10,
-                media_info = $11, original_file_path = $12
-            WHERE id = $13
+                media_info = $11, original_file_path = $12, file_hash = $13
+            WHERE id = $14
             "#,
         )
         .bind(episode_file.series_id)
@@ -217,6 +218,7 @@ impl EpisodeFileRepository {
         .bind(&episode_file.languages)
         .bind(&episode_file.media_info)
         .bind(&episode_file.original_file_path)
+        .bind(&episode_file.file_hash)
         .bind(episode_file.id)
         .execute(pool)
         .await?;
@@ -837,9 +839,9 @@ impl MovieFileRepository {
             INSERT INTO movie_files (
                 movie_id, relative_path, path, size, date_added,
                 scene_name, release_group, quality, languages,
-                media_info, original_file_path, edition
+                media_info, original_file_path, edition, file_hash
             ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
             ) RETURNING id
             "#,
         )
@@ -855,6 +857,7 @@ impl MovieFileRepository {
         .bind(&file.media_info)
         .bind(&file.original_file_path)
         .bind(&file.edition)
+        .bind(&file.file_hash)
         .fetch_one(pool)
         .await?;
         Ok(row.0)
@@ -1124,6 +1127,7 @@ impl EpisodeRepository {
             "airDateUtc" | "airDate" => "air_date_utc",
             "seriesTitle" => "series_id",
             "episodeTitle" | "title" => "title",
+            "episodeNumber" => "season_number, episode_number",
             _ => "air_date_utc",
         };
         let offset = (page - 1) * page_size;
@@ -1264,9 +1268,10 @@ impl EpisodeRepository {
         let total = cutoff_unmet.len() as i64;
 
         // Sort
-        let desc = sort_direction.eq_ignore_ascii_case("desc");
+        let desc = sort_direction.eq_ignore_ascii_case("desc")
+            || sort_direction.eq_ignore_ascii_case("descending");
         match sort_key {
-            "airDateUtc" => cutoff_unmet.sort_by(|a, b| {
+            "airDateUtc" | "airDate" => cutoff_unmet.sort_by(|a, b| {
                 let cmp = a.air_date_utc.cmp(&b.air_date_utc);
                 if desc {
                     cmp.reverse()
@@ -1274,8 +1279,25 @@ impl EpisodeRepository {
                     cmp
                 }
             }),
-            "seriesId" => cutoff_unmet.sort_by(|a, b| {
+            "seriesTitle" | "seriesId" => cutoff_unmet.sort_by(|a, b| {
                 let cmp = a.series_id.cmp(&b.series_id);
+                if desc {
+                    cmp.reverse()
+                } else {
+                    cmp
+                }
+            }),
+            "episodeTitle" | "title" => cutoff_unmet.sort_by(|a, b| {
+                let cmp = a.title.to_lowercase().cmp(&b.title.to_lowercase());
+                if desc {
+                    cmp.reverse()
+                } else {
+                    cmp
+                }
+            }),
+            "episodeNumber" => cutoff_unmet.sort_by(|a, b| {
+                let cmp =
+                    (a.season_number, a.episode_number).cmp(&(b.season_number, b.episode_number));
                 if desc {
                     cmp.reverse()
                 } else {

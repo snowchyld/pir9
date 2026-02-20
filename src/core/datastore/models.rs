@@ -85,6 +85,7 @@ pub struct EpisodeFileDbModel {
     pub languages: String,          // JSON serialized
     pub media_info: Option<String>, // JSON serialized
     pub original_file_path: Option<String>,
+    pub file_hash: Option<String>, // BLAKE3 content hash
 }
 
 /// Movie database model
@@ -137,6 +138,7 @@ pub struct MovieFileDbModel {
     pub media_info: Option<String>, // JSON serialized
     pub original_file_path: Option<String>,
     pub edition: Option<String>,
+    pub file_hash: Option<String>, // BLAKE3 content hash
 }
 
 /// Episode to file mapping (for multi-episode files)

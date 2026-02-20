@@ -89,5 +89,29 @@ pub fn get_builtin_indexers() -> Vec<IndexerDefinition> {
                 },
             ],
         },
+        IndexerDefinition {
+            id: 3,
+            name: "Prowlarr".to_string(),
+            implementation: "Prowlarr".to_string(),
+            protocol: super::Protocol::Torrent,
+            fields: vec![
+                IndexerFieldDefinition {
+                    name: "baseUrl".to_string(),
+                    label: "URL".to_string(),
+                    field_type: FieldType::Url,
+                    advanced: false,
+                    help_text: Some("Prowlarr URL (e.g. https://prowlarr.example.com)".to_string()),
+                    default_value: None,
+                },
+                IndexerFieldDefinition {
+                    name: "apiKey".to_string(),
+                    label: "API Key".to_string(),
+                    field_type: FieldType::Password,
+                    advanced: false,
+                    help_text: Some("Prowlarr API key".to_string()),
+                    default_value: None,
+                },
+            ],
+        },
     ]
 }

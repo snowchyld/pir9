@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use crate::core::datastore::models::{MovieDbModel, MovieFileDbModel};
 use crate::core::datastore::repositories::{MovieFileRepository, MovieRepository};
-use crate::core::mediafiles::MediaAnalyzer;
+use crate::core::mediafiles::{compute_file_hash, derive_quality_from_media, MediaAnalyzer};
 use crate::web::AppState;
 
 // Re-use ApiError from series module
@@ -1043,10 +1043,25 @@ async fn import_movies(
 
                 // Scan folder for video file
                 if let Some(mut movie_file) = scan_movie_folder(&full_path, id) {
-                    // Analyze media info from filename (async, so done after sync scan)
-                    movie_file.media_info =
-                        MediaAnalyzer::analyze_to_json(std::path::Path::new(&movie_file.path))
-                            .await;
+                    let file_path = std::path::Path::new(&movie_file.path);
+
+                    // Real media analysis via FFmpeg probe
+                    let media_info_result = MediaAnalyzer::analyze(file_path).await;
+                    movie_file.media_info = media_info_result
+                        .as_ref()
+                        .ok()
+                        .and_then(|info| serde_json::to_string(info).ok());
+
+                    // Derive quality from actual resolution (not filename)
+                    if let Ok(ref info) = media_info_result {
+                        let quality = derive_quality_from_media(info, &movie_file.path);
+                        movie_file.quality = serde_json::to_string(&quality)
+                            .unwrap_or_else(|_| movie_file.quality.clone());
+                    }
+
+                    // BLAKE3 file hash
+                    movie_file.file_hash = compute_file_hash(file_path).await.ok();
+
                     match file_repo.insert(&movie_file).await {
                         Ok(file_id) => {
                             // Update movie with file info
@@ -1187,6 +1202,7 @@ fn scan_movie_folder(folder_path: &str, movie_id: i64) -> Option<MovieFileDbMode
             media_info: None,
             original_file_path: Some(file_path.to_string_lossy().to_string()),
             edition: None,
+            file_hash: None,
         }
     })
 }

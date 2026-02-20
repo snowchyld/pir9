@@ -311,6 +311,7 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                 let parsed = parse_title(&dl.name);
                                 let mut matched_series_id: Option<i32> = None;
                                 let mut matched_episode_id: Option<i32> = None;
+                                let mut episode_has_file = false;
                                 let mut quality_model = QualityModel {
                                     quality: QualityResource {
                                         id: 0,
@@ -357,6 +358,7 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                                         .await
                                                     {
                                                         matched_episode_id = Some(ep.id as i32);
+                                                        episode_has_file = ep.has_file;
                                                     }
                                                 }
                                             }
@@ -405,7 +407,7 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                     download_client_has_post_import_category: false,
                                     indexer: None,
                                     output_path: dl.output_path,
-                                    episode_has_file: false,
+                                    episode_has_file,
                                 });
 
                                 id_counter += 1;
@@ -425,6 +427,23 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                 }
             }
         }
+    }
+
+    // Filter out seeding/completed downloads where episode already has file (imported).
+    // These are "done" — the file is on disk, the torrent is just seeding.
+    let before = all_downloads.len();
+    all_downloads.retain(|d| {
+        if !d.episode_has_file {
+            return true;
+        }
+        // Hide if status is seeding/completed (untracked) or state is importPending (tracked)
+        let dominated = matches!(d.status.as_str(), "seeding" | "completed")
+            || d.tracked_download_state.as_deref() == Some("importPending");
+        !dominated
+    });
+    let filtered = before - all_downloads.len();
+    if filtered > 0 {
+        tracing::debug!("Queue: filtered {} imported+seeding downloads", filtered);
     }
 
     all_downloads

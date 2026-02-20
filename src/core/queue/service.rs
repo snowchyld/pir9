@@ -12,6 +12,7 @@ use crate::core::datastore::repositories::{
 use crate::core::datastore::Database;
 use crate::core::download::clients::{create_client_from_model, DownloadOptions, DownloadState};
 use crate::core::indexers::ReleaseInfo;
+use crate::core::parser::{parse_title, title_matches_series};
 use crate::core::profiles::qualities::QualityModel;
 
 use super::{
@@ -21,6 +22,119 @@ use super::{
 /// Service for managing tracked downloads
 pub struct TrackedDownloadService {
     db: Database,
+}
+
+/// Result of attempting to download a torrent file: either raw bytes or a
+/// magnet URI discovered via redirect (e.g. Prowlarr → indexer → magnet).
+enum TorrentDownload {
+    File(Vec<u8>),
+    Magnet(String),
+}
+
+/// Extract the info_hash from a bencoded .torrent file and build a magnet URI.
+///
+/// Finds the `info` dictionary in the bencoded data, SHA-1 hashes the raw
+/// bencoded bytes of that dictionary, and constructs a magnet URI with the
+/// info_hash and display name extracted from the `info.name` field.
+fn torrent_bytes_to_magnet(data: &[u8], fallback_name: &str) -> Result<String> {
+    use sha1::Digest;
+
+    // Find the `info` key in the top-level dictionary.
+    // Bencode format: d...4:infod...ee where `4:info` is the key.
+    let info_key = b"4:info";
+    let info_pos = data
+        .windows(info_key.len())
+        .position(|w| w == info_key)
+        .context("Torrent file missing 'info' dictionary")?;
+
+    let info_start = info_pos + info_key.len();
+
+    // The info value starts at info_start and must be a dictionary ('d').
+    if data.get(info_start) != Some(&b'd') {
+        anyhow::bail!("Torrent 'info' value is not a dictionary");
+    }
+
+    // Walk the bencoded value to find its end.
+    let info_end =
+        bencode_value_end(data, info_start).context("Failed to parse bencoded info dictionary")?;
+    let info_bytes = &data[info_start..info_end];
+
+    // SHA-1 hash the raw bencoded info dictionary
+    let hash = sha1::Sha1::digest(info_bytes);
+    let hex_hash = hex::encode_upper(hash);
+
+    // Try to extract the `name` field from the info dictionary for the display name.
+    let name =
+        extract_bencode_string(info_bytes, b"4:name").unwrap_or_else(|| fallback_name.to_string());
+    let encoded_name = urlencoding::encode(&name);
+
+    // Try to extract trackers from the top-level `announce` field
+    let mut magnet = format!("magnet:?xt=urn:btih:{}&dn={}", hex_hash, encoded_name);
+    if let Some(tracker) = extract_bencode_string(data, b"8:announce") {
+        magnet.push_str(&format!("&tr={}", urlencoding::encode(&tracker)));
+    }
+
+    Ok(magnet)
+}
+
+/// Find the end offset of a bencoded value starting at `pos`.
+fn bencode_value_end(data: &[u8], pos: usize) -> Option<usize> {
+    if pos >= data.len() {
+        return None;
+    }
+    match data[pos] {
+        // Integer: i<digits>e
+        b'i' => {
+            let end = data[pos..].iter().position(|&b| b == b'e')?;
+            Some(pos + end + 1)
+        }
+        // List: l<values>e
+        b'l' => {
+            let mut cursor = pos + 1;
+            while cursor < data.len() && data[cursor] != b'e' {
+                cursor = bencode_value_end(data, cursor)?;
+            }
+            Some(cursor + 1) // skip 'e'
+        }
+        // Dictionary: d<key><value>...e
+        b'd' => {
+            let mut cursor = pos + 1;
+            while cursor < data.len() && data[cursor] != b'e' {
+                // key (always a string)
+                cursor = bencode_value_end(data, cursor)?;
+                // value
+                cursor = bencode_value_end(data, cursor)?;
+            }
+            Some(cursor + 1) // skip 'e'
+        }
+        // String: <length>:<data>
+        b'0'..=b'9' => {
+            let colon = data[pos..].iter().position(|&b| b == b':')?;
+            let len_str = std::str::from_utf8(&data[pos..pos + colon]).ok()?;
+            let len: usize = len_str.parse().ok()?;
+            Some(pos + colon + 1 + len)
+        }
+        _ => None,
+    }
+}
+
+/// Extract a UTF-8 string value for a given bencoded key from raw bytes.
+fn extract_bencode_string(data: &[u8], key: &[u8]) -> Option<String> {
+    let pos = data.windows(key.len()).position(|w| w == key)?;
+    let val_start = pos + key.len();
+    // The value should be a string: <len>:<data>
+    if val_start >= data.len() || !data[val_start].is_ascii_digit() {
+        return None;
+    }
+    let colon = data[val_start..].iter().position(|&b| b == b':')?;
+    let len_str = std::str::from_utf8(&data[val_start..val_start + colon]).ok()?;
+    let len: usize = len_str.parse().ok()?;
+    let str_start = val_start + colon + 1;
+    let str_end = str_start + len;
+    if str_end > data.len() {
+        return None;
+    }
+    String::from_utf8(data[str_start..str_end].to_vec()).ok()
 }
 
 impl TrackedDownloadService {
@@ -448,19 +562,71 @@ impl TrackedDownloadService {
 
         // Prepare download options
         let options = DownloadOptions {
-            category: Some("tv-sonarr".to_string()),
+            category: Some("sonarr".to_string()),
             priority: None,
             download_dir: None,
             tags: vec![],
         };
 
         // Send to download client
-        let download_id = if let Some(ref magnet) = release.magnet_url {
+        // Prefer magnet links — they go directly to qBittorrent without needing
+        // the download client to reach the indexer/Prowlarr. Construct a magnet
+        // from info_hash if no explicit magnet_url is provided. Also check
+        // download_url itself — some indexers put the magnet URI there.
+        let magnet = release
+            .magnet_url
+            .as_deref()
+            .filter(|u| u.starts_with("magnet:"))
+            .map(String::from)
+            .or_else(|| {
+                release
+                    .download_url
+                    .as_deref()
+                    .filter(|u| u.starts_with("magnet:"))
+                    .map(String::from)
+            })
+            .or_else(|| {
+                release.info_hash.as_ref().map(|hash| {
+                    let encoded_title = urlencoding::encode(&release.title).into_owned();
+                    format!("magnet:?xt=urn:btih:{}&dn={}", hash, encoded_title)
+                })
+            });
+
+        let download_id = if let Some(ref magnet) = magnet {
             info!("Adding magnet to {}: {}", client_model.name, release.title);
             client.add_from_magnet(magnet, options).await?
         } else if let Some(ref url) = release.download_url {
-            info!("Adding URL to {}: {}", client_model.name, release.title);
-            client.add_from_url(url, options).await?
+            // No magnet available — download the torrent file through pir9 and
+            // send bytes to the client so qBittorrent doesn't need to reach the indexer.
+            if release.protocol == crate::core::indexers::Protocol::Torrent {
+                info!(
+                    "Downloading torrent file for {}: {}",
+                    client_model.name, release.title
+                );
+                match Self::download_torrent_file(url).await? {
+                    TorrentDownload::Magnet(magnet) => {
+                        info!(
+                            "Adding magnet (from redirect) to {}: {}",
+                            client_model.name, release.title
+                        );
+                        client.add_from_magnet(&magnet, options).await?
+                    }
+                    TorrentDownload::File(bytes) => {
+                        // Convert .torrent → magnet so we always use magnets
+                        let magnet = torrent_bytes_to_magnet(&bytes, &release.title)?;
+                        info!(
+                            "Adding magnet (from .torrent, {} bytes) to {}: {}",
+                            bytes.len(),
+                            client_model.name,
+                            release.title
+                        );
+                        client.add_from_magnet(&magnet, options).await?
+                    }
+                }
+            } else {
+                info!("Adding URL to {}: {}", client_model.name, release.title);
+                client.add_from_url(url, options).await?
+            }
         } else {
             anyhow::bail!("Release has no download URL or magnet link");
         };
@@ -477,6 +643,265 @@ impl TrackedDownloadService {
             .await?;
 
         Ok(tracked_id)
+    }
+
+    /// Reconcile untracked downloads from all clients.
+    ///
+    /// Scans every enabled download client, parses torrent/NZB names, matches
+    /// them to series and episodes in the database, and creates
+    /// `TrackedDownloadDbModel` entries so the downloads appear in the queue
+    /// with proper metadata and are excluded from Wanted/Missing.
+    ///
+    /// Returns the number of newly tracked downloads.
+    pub async fn reconcile_downloads(&self) -> Result<usize> {
+        let repo = TrackedDownloadRepository::new(self.db.clone());
+        let client_repo = DownloadClientRepository::new(self.db.clone());
+        let series_repo = SeriesRepository::new(self.db.clone());
+        let episode_repo = EpisodeRepository::new(self.db.clone());
+
+        let clients = client_repo.get_all().await?;
+        let all_series = series_repo.get_all().await?;
+
+        let mut reconciled = 0usize;
+
+        // Purge tracked downloads with fake qbt-* UUIDs. These were created
+        // before the info_hash extraction fix and can never match a real torrent
+        // in qBittorrent. Deleting them lets the reconciliation below re-create
+        // them with the correct info_hash as download_id.
+        let active = repo.get_all_active().await?;
+        for td in active.iter().filter(|t| t.download_id.starts_with("qbt-")) {
+            info!(
+                "Purging stale tracked download with fake ID: {} ({})",
+                td.download_id, td.title
+            );
+            repo.delete(td.id).await?;
+        }
+
+        for client_model in clients.iter().filter(|c| c.enable) {
+            let client = match create_client_from_model(client_model) {
+                Ok(c) => c,
+                Err(e) => {
+                    debug!(
+                        "Reconcile: failed to create client {}: {}",
+                        client_model.name, e
+                    );
+                    continue;
+                }
+            };
+
+            let downloads = match client.get_downloads().await {
+                Ok(d) => d,
+                Err(e) => {
+                    debug!(
+                        "Reconcile: failed to get downloads from {}: {}",
+                        client_model.name, e
+                    );
+                    continue;
+                }
+            };
+
+            for dl in downloads {
+                // Skip if already tracked
+                if repo
+                    .get_by_download_id(client_model.id, &dl.id)
+                    .await?
+                    .is_some()
+                {
+                    continue;
+                }
+
+                // Parse the download name
+                let parsed = match parse_title(&dl.name) {
+                    Some(info) => info,
+                    None => {
+                        debug!("Reconcile: could not parse title: {}", dl.name);
+                        continue;
+                    }
+                };
+
+                // Match against series
+                let matched_series = all_series.iter().find(|s| {
+                    title_matches_series(&parsed, &s.title)
+                        || title_matches_series(&parsed, &s.clean_title)
+                });
+
+                let series = match matched_series {
+                    Some(s) => s,
+                    None => {
+                        debug!("Reconcile: no series match for '{}'", dl.name);
+                        continue;
+                    }
+                };
+
+                // Match episode(s)
+                let mut episode_ids = Vec::new();
+                if let Some(season) = parsed.season_number {
+                    for &ep_num in &parsed.episode_numbers {
+                        if let Ok(Some(ep)) = episode_repo
+                            .get_by_series_season_episode(series.id, season, ep_num)
+                            .await
+                        {
+                            episode_ids.push(ep.id);
+                        }
+                    }
+                }
+
+                if episode_ids.is_empty() {
+                    debug!(
+                        "Reconcile: matched series '{}' but no episodes for '{}'",
+                        series.title, dl.name
+                    );
+                    continue;
+                }
+
+                // Serialize fields
+                let quality_json =
+                    serde_json::to_string(&parsed.quality).unwrap_or_else(|_| "{}".to_string());
+                let languages_json =
+                    serde_json::to_string(&parsed.languages).unwrap_or_else(|_| "[]".to_string());
+                let episode_ids_json =
+                    serde_json::to_string(&episode_ids).unwrap_or_else(|_| "[]".to_string());
+
+                let tracked = TrackedDownloadDbModel {
+                    id: 0,
+                    download_id: dl.id.clone(),
+                    download_client_id: client_model.id,
+                    series_id: series.id,
+                    episode_ids: episode_ids_json,
+                    title: dl.name.clone(),
+                    indexer: None,
+                    size: dl.size,
+                    protocol: client_model.protocol,
+                    quality: quality_json,
+                    languages: languages_json,
+                    status: TrackedDownloadState::Downloading as i32,
+                    status_messages: "[]".to_string(),
+                    error_message: None,
+                    output_path: dl.output_path.clone(),
+                    is_upgrade: false,
+                    added: Utc::now(),
+                };
+
+                match repo.insert(&tracked).await {
+                    Ok(id) => {
+                        info!(
+                            "Reconciled download: id={}, '{}' → {} S{:02}E{} (episodes: {:?})",
+                            id,
+                            dl.name,
+                            series.title,
+                            parsed.season_number.unwrap_or(0),
+                            parsed
+                                .episode_numbers
+                                .iter()
+                                .map(|n| format!("{:02}", n))
+                                .collect::<Vec<_>>()
+                                .join("E"),
+                            episode_ids,
+                        );
+                        reconciled += 1;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Reconcile: failed to insert tracked download for '{}': {}",
+                            dl.name, e
+                        );
+                    }
+                }
+            }
+        }
+
+        info!("Reconcile downloads complete: {} newly tracked", reconciled);
+        Ok(reconciled)
+    }
+
+    /// Download a torrent file from a URL, manually following redirects with logging.
+    /// If a redirect leads to a `magnet:` URI, returns `TorrentDownload::Magnet`
+    /// instead of trying to HTTP GET the magnet.
+    async fn download_torrent_file(url: &str) -> Result<TorrentDownload> {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .redirect(reqwest::redirect::Policy::none())
+            .danger_accept_invalid_certs(true)
+            .build()?;
+
+        let mut current_url = url.to_string();
+        for i in 0..10 {
+            debug!(
+                "Torrent download hop {}: {}",
+                i,
+                &current_url[..current_url.len().min(120)]
+            );
+            let resp = http.get(&current_url).send().await.context(format!(
+                "Failed to download torrent from: {}",
+                &current_url[..current_url.len().min(100)]
+            ))?;
+
+            let status = resp.status();
+            if status.is_redirection() {
+                if let Some(location) = resp.headers().get("location") {
+                    let loc = location.to_str().unwrap_or("(invalid)");
+                    debug!(
+                        "Redirect {} → Location: {}",
+                        status,
+                        &loc[..loc.len().min(200)]
+                    );
+
+                    // Magnet redirect — return it directly, don't try to HTTP GET it
+                    if loc.starts_with("magnet:") {
+                        info!("Redirect resolved to magnet URI");
+                        return Ok(TorrentDownload::Magnet(loc.to_string()));
+                    }
+
+                    current_url = if loc.starts_with("http") {
+                        loc.to_string()
+                    } else if loc.starts_with('/') {
+                        if let Ok(base) = reqwest::Url::parse(&current_url) {
+                            format!(
+                                "{}://{}{}",
+                                base.scheme(),
+                                base.host_str().unwrap_or(""),
+                                loc
+                            )
+                        } else {
+                            loc.to_string()
+                        }
+                    } else {
+                        loc.to_string()
+                    };
+                    continue;
+                }
+                let body = resp.text().await.unwrap_or_default();
+                anyhow::bail!(
+                    "Redirect {} with no Location header from: \"{}\". Body: \"{}\"",
+                    status,
+                    &current_url[..current_url.len().min(100)],
+                    &body[..body.len().min(200)]
+                );
+            }
+
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                anyhow::bail!(
+                    "Failed to download torrent (HTTP {}). Source: \"{}\". Reason: \"{}\"",
+                    status,
+                    &current_url[..current_url.len().min(100)],
+                    &body[..body.len().min(200)]
+                );
+            }
+
+            let bytes = resp.bytes().await?.to_vec();
+            if bytes.is_empty() {
+                anyhow::bail!(
+                    "Downloaded empty torrent file from: {}",
+                    &current_url[..current_url.len().min(100)]
+                );
+            }
+            return Ok(TorrentDownload::File(bytes));
+        }
+        anyhow::bail!(
+            "Too many redirects downloading torrent from: {}",
+            &url[..url.len().min(100)]
+        )
     }
 }
 

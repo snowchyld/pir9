@@ -173,8 +173,20 @@ pub struct MediaConfig {
     #[validate(length(min = 1))]
     pub episode_naming_pattern: String,
 
+    #[serde(default = "default_daily_episode_format")]
+    pub daily_episode_format: String,
+
+    #[serde(default = "default_anime_episode_format")]
+    pub anime_episode_format: String,
+
     #[validate(length(min = 1))]
     pub season_folder_format: String,
+
+    #[serde(default = "default_specials_folder_format")]
+    pub specials_folder_format: String,
+
+    #[serde(default)]
+    pub multi_episode_style: i32,
 
     pub create_empty_series_folders: bool,
     pub delete_empty_folders: bool,
@@ -182,6 +194,42 @@ pub struct MediaConfig {
 
     #[validate(range(min = 1))]
     pub minimum_free_space_mb: u64,
+}
+
+impl Default for MediaConfig {
+    fn default() -> Self {
+        Self {
+            default_root_folder: PathBuf::from("/data/tv"),
+            rename_episodes: true,
+            replace_illegal_chars: true,
+            colon_replacement_format: "dash".to_string(),
+            episode_naming_pattern:
+                "{Series Title} - S{season:00}E{episode:00} - {Episode Title} [{Quality Full}]"
+                    .to_string(),
+            daily_episode_format: default_daily_episode_format(),
+            anime_episode_format: default_anime_episode_format(),
+            season_folder_format: "Season {season:00}".to_string(),
+            specials_folder_format: default_specials_folder_format(),
+            multi_episode_style: 0,
+            create_empty_series_folders: false,
+            delete_empty_folders: true,
+            skip_free_space_check: false,
+            minimum_free_space_mb: 100,
+        }
+    }
+}
+
+fn default_daily_episode_format() -> String {
+    "{Series Title} - {Air-Date} - {Episode Title} [{Quality Full}]".to_string()
+}
+
+fn default_anime_episode_format() -> String {
+    "{Series Title} - S{season:00}E{episode:00} - {absolute:000} - {Episode Title} [{Quality Full}]"
+        .to_string()
+}
+
+fn default_specials_folder_format() -> String {
+    "Specials".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -241,20 +289,7 @@ impl Default for AppConfig {
                 remove_completed_downloads: false,
                 remove_failed_downloads: true,
             },
-            media: MediaConfig {
-                default_root_folder: PathBuf::from("/data/tv"),
-                rename_episodes: true,
-                replace_illegal_chars: true,
-                colon_replacement_format: "dash".to_string(),
-                episode_naming_pattern:
-                    "{Series Title} - S{season:00}E{episode:00} - {Episode Title} [{Quality Full}]"
-                        .to_string(),
-                season_folder_format: "Season {season:00}".to_string(),
-                create_empty_series_folders: false,
-                delete_empty_folders: true,
-                skip_free_space_check: false,
-                minimum_free_space_mb: 100,
-            },
+            media: MediaConfig::default(),
             notifications: NotificationConfig::default(),
             paths: PathConfig {
                 config_dir: PathBuf::from("/config"),

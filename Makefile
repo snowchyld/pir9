@@ -246,7 +246,7 @@ release: docker-build push
 	@echo "  docker compose -f docker-compose.synology-worker.yml up -d"
 
 # Full release + restart local containers
-release-restart: release
+release-restart: dev-frontend release
 	@echo ""
 	@echo "Restarting local containers..."
 #	docker compose down

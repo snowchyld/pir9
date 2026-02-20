@@ -26,7 +26,7 @@ pub struct BackupResource {
 
 /// GET /api/v3/system/backup
 pub async fn get_backups(State(state): State<Arc<AppState>>) -> Json<Vec<BackupResource>> {
-    let backup_dir = &state.config.paths.backup_dir;
+    let backup_dir = state.config.read().paths.backup_dir.clone();
     let mut backups = Vec::new();
 
     if let Ok(entries) = std::fs::read_dir(backup_dir) {
@@ -58,14 +58,20 @@ pub async fn get_backups(State(state): State<Arc<AppState>>) -> Json<Vec<BackupR
 
 /// POST /api/v3/system/backup
 pub async fn create_backup(State(state): State<Arc<AppState>>) -> Json<BackupResource> {
-    let backup_dir = &state.config.paths.backup_dir;
+    let (backup_dir, conn) = {
+        let cfg = state.config.read();
+        (
+            cfg.paths.backup_dir.clone(),
+            cfg.database.connection_string.clone(),
+        )
+    };
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
     let filename = format!("pir9_backup_{}.sql", timestamp);
     let filepath = backup_dir.join(&filename);
 
-    let _ = std::fs::create_dir_all(backup_dir);
+    let _ = std::fs::create_dir_all(&backup_dir);
 
-    let conn = &state.config.database.connection_string;
+    let conn = &conn;
     let result = tokio::process::Command::new("pg_dump")
         .arg(conn)
         .arg("--no-owner")
@@ -105,7 +111,7 @@ pub async fn create_backup(State(state): State<Arc<AppState>>) -> Json<BackupRes
 
 /// DELETE /api/v3/system/backup/:id
 pub async fn delete_backup(State(state): State<Arc<AppState>>, Path(id): Path<i32>) -> StatusCode {
-    let backup_dir = &state.config.paths.backup_dir;
+    let backup_dir = state.config.read().paths.backup_dir.clone();
 
     if let Ok(entries) = std::fs::read_dir(backup_dir) {
         for (idx, entry) in entries.flatten().enumerate() {

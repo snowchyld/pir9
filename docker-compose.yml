@@ -76,6 +76,7 @@ services:
       - ./cache:/app/cache
       - /volume1/Movies:/volume1/Movies
       - /volume1/Shows:/volume1/Shows
+      - /volume1/downloads:/volume1/downloads
     environment:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
@@ -94,6 +95,8 @@ services:
         condition: service_healthy
       imdb:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - pir9-network
     healthcheck:

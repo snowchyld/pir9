@@ -1,5 +1,6 @@
-//! Rename API endpoints
-//! Provides preview of episode file renames according to naming format
+//! Rename API endpoints (v3)
+//! Provides preview of episode file renames according to naming format.
+//! Delegates to the naming template engine for proper format rendering.
 
 use axum::{
     extract::{Query, State},
@@ -8,12 +9,12 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use std::sync::Arc;
 
 use crate::core::datastore::repositories::{
     EpisodeFileRepository, EpisodeRepository, SeriesRepository,
 };
+use crate::core::naming;
 use crate::web::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -48,19 +49,16 @@ pub async fn get_rename(
     let episode_repo = EpisodeRepository::new(state.db.clone());
     let file_repo = EpisodeFileRepository::new(state.db.clone());
 
-    // Get series info
     let series = match series_repo.get_by_id(series_id).await {
         Ok(Some(s)) => s,
         _ => return Json(vec![]),
     };
 
-    // Get episodes for this series
     let episodes = match episode_repo.get_by_series_id(series_id).await {
         Ok(eps) => eps,
         Err(_) => return Json(vec![]),
     };
 
-    // Get episode files for this series
     let files = match file_repo.get_by_series_id(series_id).await {
         Ok(f) => f,
         Err(_) => return Json(vec![]),
@@ -76,49 +74,44 @@ pub async fn get_rename(
         files
     };
 
+    let config = state.config.read().media.clone();
     let mut renames = Vec::new();
 
     for file in files {
-        // Find all episodes linked to this file
         let file_episodes: Vec<_> = episodes
             .iter()
             .filter(|e| e.episode_file_id == Some(file.id))
+            .cloned()
             .collect();
 
         if file_episodes.is_empty() {
             continue;
         }
 
-        // Get episode numbers
-        let episode_numbers: Vec<i32> = file_episodes.iter().map(|e| e.episode_number).collect();
+        let quality: crate::core::profiles::qualities::QualityModel =
+            serde_json::from_str(&file.quality).unwrap_or_default();
 
-        // Generate new filename according to naming format
-        let new_filename = generate_episode_filename(
-            &series.title,
-            file.season_number,
-            &episode_numbers,
-            &file_episodes
-                .first()
-                .map(|e| e.title.clone())
-                .unwrap_or_default(),
-            file.release_group.as_deref(),
-            &file.path,
-        );
+        let ctx = naming::EpisodeNamingContext {
+            series: &series,
+            episodes: &file_episodes,
+            quality: &quality,
+            release_group: file.release_group.as_deref(),
+        };
 
-        // Only include if the filename would change
-        let current_filename = Path::new(&file.path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let new_filename = naming::build_episode_filename(&config, &ctx);
+        let season_folder = naming::build_season_folder(&config, file.season_number);
 
-        if new_filename != current_filename {
-            // Build new full path
-            let parent = Path::new(&file.path)
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| series.path.clone());
+        let ext = std::path::Path::new(&file.path)
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default();
 
-            let new_path = format!("{}/{}", parent, new_filename);
+        let new_relative = format!("{}/{}{}", season_folder, new_filename, ext);
+        let new_path = format!("{}/{}", series.path, new_relative);
+
+        if new_path != file.path {
+            let episode_numbers: Vec<i32> =
+                file_episodes.iter().map(|e| e.episode_number).collect();
 
             renames.push(RenameEpisodeResource {
                 series_id,
@@ -131,67 +124,13 @@ pub async fn get_rename(
         }
     }
 
+    renames.sort_by(|a, b| {
+        a.season_number
+            .cmp(&b.season_number)
+            .then_with(|| a.episode_numbers.cmp(&b.episode_numbers))
+    });
+
     Json(renames)
-}
-
-/// Generate a filename according to naming format
-/// Default format: {Series Title} - S{Season:00}E{Episode:00} - {Episode Title}
-fn generate_episode_filename(
-    series_title: &str,
-    season: i32,
-    episodes: &[i32],
-    episode_title: &str,
-    release_group: Option<&str>,
-    original_path: &str,
-) -> String {
-    // Get file extension from original
-    let extension = Path::new(original_path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("mkv");
-
-    // Clean series title for filename
-    let clean_series = sanitize_for_filename(series_title);
-
-    // Build episode part (e.g., S01E01 or S01E01E02 for multi-episode)
-    let episode_part = if episodes.len() == 1 {
-        format!("S{:02}E{:02}", season, episodes[0])
-    } else {
-        let ep_str: Vec<String> = episodes.iter().map(|e| format!("E{:02}", e)).collect();
-        format!("S{:02}{}", season, ep_str.join(""))
-    };
-
-    // Clean episode title
-    let clean_episode_title = if episode_title.is_empty() {
-        "Episode".to_string()
-    } else {
-        sanitize_for_filename(episode_title)
-    };
-
-    // Build filename
-    let base_name = if let Some(group) = release_group {
-        format!(
-            "{} - {} - {} [{}]",
-            clean_series, episode_part, clean_episode_title, group
-        )
-    } else {
-        format!(
-            "{} - {} - {}",
-            clean_series, episode_part, clean_episode_title
-        )
-    };
-
-    format!("{}.{}", base_name, extension)
-}
-
-/// Sanitize a string for use in a filename
-fn sanitize_for_filename(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            _ => c,
-        })
-        .collect()
 }
 
 pub fn routes() -> Router<Arc<AppState>> {

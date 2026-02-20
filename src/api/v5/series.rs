@@ -16,7 +16,8 @@ use std::sync::Arc;
 use crate::core::datastore::models::SeriesDbModel;
 use crate::core::datastore::repositories::{EpisodeFileRepository, SeriesRepository};
 use crate::core::mediafiles::{
-    delete_series_folder, move_series_folder, update_episode_file_paths,
+    compute_file_hash, delete_series_folder, derive_quality_from_media, move_series_folder,
+    update_episode_file_paths, MediaAnalyzer,
 };
 use crate::web::AppState;
 
@@ -41,7 +42,9 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_series).put(update_series).delete(delete_series),
         )
         .route("/{id}/refresh", post(refresh_series))
+        .route("/{id}/rematch", post(rematch_series))
         .route("/{id}/rescan", post(rescan_series))
+        .route("/{id}/cleanup", post(cleanup_series))
         .route("/lookup", get(lookup_series))
         .route("/import", post(import_series))
 }
@@ -697,6 +700,25 @@ async fn refresh_series(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch metadata: {}", e)))?;
 
+    // Update year first so strip_title_year can use it
+    if let Some(year) = metadata.year {
+        series.year = year;
+    } else if let Some(first_aired) = &metadata.first_aired {
+        if let Some(year_str) = first_aired.split('-').next() {
+            if let Ok(year) = year_str.parse::<i32>() {
+                series.year = year;
+            }
+        }
+    }
+
+    // Update series title from upstream — merge_metadata strips year when Skyhook
+    // provides a year field, but some series have year: null with year baked into
+    // the title (e.g., "Echo (2023)"). Use the local series year as a fallback.
+    let clean_metadata_title = strip_title_year(&metadata.title, series.year);
+    series.title = clean_metadata_title.clone();
+    series.clean_title = clean_title(&clean_metadata_title);
+    series.sort_title = series.clean_title.clone();
+
     // Update series metadata from merged result
     series.overview = metadata.overview;
     series.status = match metadata
@@ -713,15 +735,7 @@ async fn refresh_series(
     series.network = metadata.network;
     series.runtime = metadata.runtime.unwrap_or(series.runtime);
     series.certification = metadata.certification;
-    if let Some(year) = metadata.year {
-        series.year = year;
-    } else if let Some(first_aired) = &metadata.first_aired {
-        if let Some(year_str) = first_aired.split('-').next() {
-            if let Ok(year) = year_str.parse::<i32>() {
-                series.year = year;
-            }
-        }
-    }
+    // Year was already updated above (before title strip)
     if let Some(first_aired) = &metadata.first_aired {
         series.first_aired = NaiveDate::parse_from_str(first_aired, "%Y-%m-%d").ok();
     }
@@ -755,7 +769,17 @@ async fn refresh_series(
             .map(|dt| dt.with_timezone(&Utc));
 
         let existing = if ep.tvdb_id > 0 {
-            episode_repo.get_by_tvdb_id(ep.tvdb_id).await.ok().flatten()
+            // Try tvdb_id first, fall back to season/episode match
+            let by_tvdb = episode_repo.get_by_tvdb_id(ep.tvdb_id).await.ok().flatten();
+            if by_tvdb.is_some() {
+                by_tvdb
+            } else {
+                episode_repo
+                    .get_by_series_season_episode(id, ep.season_number, ep.episode_number)
+                    .await
+                    .ok()
+                    .flatten()
+            }
         } else {
             episode_repo
                 .get_by_series_season_episode(id, ep.season_number, ep.episode_number)
@@ -879,6 +903,122 @@ async fn refresh_series(
     Ok(Json(response))
 }
 
+/// Request to re-match a series to a different TVDB/IMDB entry
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RematchRequest {
+    tvdb_id: i64,
+    imdb_id: Option<String>,
+}
+
+/// Re-match a series to a different TVDB/IMDB entry and refresh all metadata.
+///
+/// Unlike a normal refresh, rematch also updates the title, slug, and clears
+/// cached poster images since the series identity itself is changing.
+async fn rematch_series(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(req): Json<RematchRequest>,
+) -> Result<Json<SeriesResponse>, ApiError> {
+    let repo = SeriesRepository::new(state.db.clone());
+
+    let mut series = repo
+        .get_by_id(id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch series: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
+
+    tracing::info!(
+        "Rematching series '{}' (id={}) from tvdb_id={} to tvdb_id={}, imdb_id={:?}",
+        series.title,
+        id,
+        series.tvdb_id,
+        req.tvdb_id,
+        req.imdb_id
+    );
+
+    // Update external IDs
+    series.tvdb_id = req.tvdb_id;
+    series.imdb_id = req.imdb_id;
+
+    // Save the updated IDs before refreshing metadata
+    repo.update(&series)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to update series IDs: {}", e)))?;
+
+    // Delete old episodes — the series identity is changing, so the old show's
+    // episodes are meaningless and would cause duplicate key violations when
+    // the new show's episodes are inserted (same season/episode numbers).
+    {
+        use crate::core::datastore::repositories::EpisodeRepository;
+        let episode_repo = EpisodeRepository::new(state.db.clone());
+        episode_repo
+            .delete_by_series_id(id)
+            .await
+            .map_err(|e| ApiError::Internal(format!("Failed to delete old episodes: {}", e)))?;
+        tracing::info!("Deleted old episodes for series id={} before rematch", id);
+    }
+
+    // Run the standard metadata refresh (episodes, ratings, overview, etc.)
+    if let Err(e) = auto_refresh_series(id, &state.db, &state.metadata_service).await {
+        tracing::error!("Failed to refresh after rematch: {}", e);
+        return Err(ApiError::Internal(format!(
+            "Rematch saved but metadata refresh failed: {}",
+            e
+        )));
+    }
+
+    // Now apply rematch-specific updates that auto_refresh_series doesn't do:
+    // update title, slug, and clear cached images.
+    // Fetch the metadata again to get the canonical title from Skyhook.
+    let mut series = repo
+        .get_by_id(id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch series: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
+
+    let metadata = state
+        .metadata_service
+        .fetch_series_metadata(series.tvdb_id, series.imdb_id.as_deref())
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch metadata for title: {}", e)))?;
+
+    // Update title from the new TVDB entry (strip year suffix)
+    let new_title = strip_title_year(&metadata.title, series.year);
+    series.title = new_title.clone();
+    series.clean_title = clean_title(&new_title);
+    series.sort_title = series.clean_title.clone();
+
+    // Regenerate slug with year for disambiguation (e.g., "revenge-2011")
+    let slug_base = if series.year > 0 {
+        format!("{} {}", new_title, series.year)
+    } else {
+        new_title.clone()
+    };
+    series.title_slug = generate_slug(&slug_base);
+
+    repo.update(&series)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to update series title/slug: {}", e)))?;
+
+    // Clear cached poster/fanart/banner images so fresh ones are fetched from the new TVDB ID
+    let cache_dir = format!("cache/MediaCover/Series/{}", id);
+    if let Err(e) = tokio::fs::remove_dir_all(&cache_dir).await {
+        // Not fatal — cache miss will just re-fetch from Skyhook
+        tracing::debug!("Could not clear image cache at {}: {}", cache_dir, e);
+    } else {
+        tracing::info!("Cleared image cache for series id={}", id);
+    }
+
+    // Return the fully-updated series
+    let mut response = SeriesResponse::from(series);
+    enrich_series_response(&mut response, &state.db).await;
+
+    tracing::info!("Rematch complete for series id={}", id);
+
+    Ok(Json(response))
+}
+
 /// Skyhook show response (for refresh)
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -929,6 +1069,184 @@ async fn rescan_series(
     // TODO: Queue a disk scan command
 
     Ok(Json(SeriesResponse::from(series)))
+}
+
+/// POST /api/v5/series/{id}/cleanup — Remove orphan duplicate files from series folder
+///
+/// Walks the series folder for video files not tracked in the DB. For each orphan,
+/// computes a BLAKE3 hash and compares against tracked files. If a match is found,
+/// the orphan is a leftover duplicate and is deleted.
+async fn cleanup_series(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<CleanupResult>, ApiError> {
+    let repo = SeriesRepository::new(state.db.clone());
+
+    let series = repo
+        .get_by_id(id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch series: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
+
+    // Step 1: Clean up orphan DB records (not referenced by any episode)
+    let db_cleaned = sqlx::query(
+        "DELETE FROM episode_files WHERE series_id = $1
+         AND id NOT IN (SELECT episode_file_id FROM episodes WHERE episode_file_id IS NOT NULL AND series_id = $1)"
+    )
+    .bind(id)
+    .execute(state.db.pool())
+    .await
+    .map(|r| r.rows_affected())
+    .unwrap_or(0);
+
+    if db_cleaned > 0 {
+        tracing::info!(
+            "Cleanup: removed {} orphan DB records for series {}",
+            db_cleaned,
+            id
+        );
+    }
+
+    // Step 2: Get all tracked file paths (via episodes, not series_id, to handle cross-series file links)
+    let tracked_paths_rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT ef.path FROM episode_files ef
+         JOIN episodes e ON e.episode_file_id = ef.id
+         WHERE e.series_id = $1",
+    )
+    .bind(id)
+    .fetch_all(state.db.pool())
+    .await
+    .unwrap_or_default();
+    let tracked_paths: std::collections::HashSet<String> =
+        tracked_paths_rows.into_iter().map(|(p,)| p).collect();
+
+    // Step 3: Walk the series folder recursively for untracked video files
+    let series_path = std::path::Path::new(&series.path);
+    let mut orphan_paths = Vec::new();
+    collect_orphan_videos(series_path, &tracked_paths, &mut orphan_paths).await;
+
+    if orphan_paths.is_empty() {
+        return Ok(Json(CleanupResult {
+            orphan_db_records_removed: db_cleaned,
+            orphan_files_removed: 0,
+            orphan_files_found: 0,
+            errors: vec![],
+        }));
+    }
+
+    // Step 4: Build size→path index of tracked files for fast matching
+    let mut tracked_by_size: std::collections::HashMap<u64, Vec<std::path::PathBuf>> =
+        std::collections::HashMap::new();
+    for path_str in &tracked_paths {
+        let tf_path = std::path::Path::new(path_str);
+        if let Ok(meta) = tokio::fs::metadata(tf_path).await {
+            tracked_by_size
+                .entry(meta.len())
+                .or_default()
+                .push(tf_path.to_path_buf());
+        }
+    }
+
+    // Step 5: For each orphan, check size match first, then hash-confirm
+    let orphan_count = orphan_paths.len() as u64;
+    let mut removed = 0u64;
+    let mut errors = Vec::new();
+
+    for orphan in &orphan_paths {
+        let orphan_size = match tokio::fs::metadata(orphan).await {
+            Ok(meta) => meta.len(),
+            Err(e) => {
+                errors.push(format!("Failed to stat {}: {}", orphan.display(), e));
+                continue;
+            }
+        };
+
+        // Only hash if a tracked file has the exact same size
+        let size_matches = match tracked_by_size.get(&orphan_size) {
+            Some(paths) => paths.clone(),
+            None => continue, // No tracked file with same size — not a duplicate
+        };
+
+        // Hash the orphan
+        let orphan_hash = match compute_file_hash(orphan).await {
+            Ok(h) => h,
+            Err(e) => {
+                errors.push(format!("Failed to hash {}: {}", orphan.display(), e));
+                continue;
+            }
+        };
+
+        // Hash the size-matched tracked files and compare
+        let mut is_duplicate = false;
+        for tracked_path in &size_matches {
+            if let Ok(tracked_hash) = compute_file_hash(tracked_path).await {
+                if tracked_hash == orphan_hash {
+                    is_duplicate = true;
+                    break;
+                }
+            }
+        }
+
+        if is_duplicate {
+            if let Err(e) = tokio::fs::remove_file(orphan).await {
+                errors.push(format!("Failed to remove {}: {}", orphan.display(), e));
+            } else {
+                tracing::info!("Cleanup: removed orphan duplicate {}", orphan.display());
+                removed += 1;
+            }
+        }
+    }
+
+    if removed > 0 {
+        crate::core::logging::log_info(
+            "SeriesCleanup",
+            &format!(
+                "Cleaned up series '{}': {} orphan DB records, {} orphan files removed",
+                series.title, db_cleaned, removed
+            ),
+        )
+        .await;
+    }
+
+    Ok(Json(CleanupResult {
+        orphan_db_records_removed: db_cleaned,
+        orphan_files_removed: removed,
+        orphan_files_found: orphan_count,
+        errors,
+    }))
+}
+
+/// Recursively collect video files not in the tracked set
+async fn collect_orphan_videos(
+    dir: &std::path::Path,
+    tracked: &std::collections::HashSet<String>,
+    orphans: &mut Vec<std::path::PathBuf>,
+) {
+    let mut walker = match tokio::fs::read_dir(dir).await {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+
+    while let Ok(Some(entry)) = walker.next_entry().await {
+        let path = entry.path();
+        if path.is_dir() {
+            Box::pin(collect_orphan_videos(&path, tracked, orphans)).await;
+        } else if path.is_file() && crate::core::scanner::is_video_file(&path) {
+            let path_str = path.to_string_lossy().to_string();
+            if !tracked.contains(&path_str) {
+                orphans.push(path);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupResult {
+    pub orphan_db_records_removed: u64,
+    pub orphan_files_removed: u64,
+    pub orphan_files_found: u64,
+    pub errors: Vec<String>,
 }
 
 /// Lookup series by name using Skyhook (Sonarr's metadata service)
@@ -1010,6 +1328,19 @@ async fn lookup_series(
 }
 
 // Helper functions
+
+/// Strip trailing ` (YYYY)` from a title when it matches the given year.
+/// Used as a secondary pass after merge_metadata — catches cases where Skyhook
+/// returns year: null but embeds the year in the title for disambiguation.
+fn strip_title_year(title: &str, year: i32) -> String {
+    if year > 0 {
+        let suffix = format!(" ({})", year);
+        if title.ends_with(&suffix) {
+            return title[..title.len() - suffix.len()].to_string();
+        }
+    }
+    title.to_string()
+}
 
 fn clean_title(title: &str) -> String {
     title
@@ -1199,6 +1530,23 @@ async fn auto_refresh_series(
         .await
         .map_err(|e| format!("Failed to fetch metadata: {}", e))?;
 
+    // Update year first so strip_title_year can use it
+    if let Some(year) = metadata.year {
+        series.year = year;
+    } else if let Some(first_aired) = &metadata.first_aired {
+        if let Some(year_str) = first_aired.split('-').next() {
+            if let Ok(year) = year_str.parse::<i32>() {
+                series.year = year;
+            }
+        }
+    }
+
+    // Update series title from upstream — strip year suffix using local series year
+    let clean_metadata_title = strip_title_year(&metadata.title, series.year);
+    series.title = clean_metadata_title.clone();
+    series.clean_title = clean_title(&clean_metadata_title);
+    series.sort_title = series.clean_title.clone();
+
     // Update series metadata
     series.overview = metadata.overview;
     series.status = match metadata
@@ -1215,15 +1563,6 @@ async fn auto_refresh_series(
     series.network = metadata.network;
     series.runtime = metadata.runtime.unwrap_or(series.runtime);
     series.certification = metadata.certification;
-    if let Some(year) = metadata.year {
-        series.year = year;
-    } else if let Some(first_aired) = &metadata.first_aired {
-        if let Some(year_str) = first_aired.split('-').next() {
-            if let Ok(year) = year_str.parse::<i32>() {
-                series.year = year;
-            }
-        }
-    }
     if let Some(first_aired) = &metadata.first_aired {
         series.first_aired = NaiveDate::parse_from_str(first_aired, "%Y-%m-%d").ok();
     }
@@ -1242,6 +1581,7 @@ async fn auto_refresh_series(
 
     // Sync episodes
     let mut added = 0;
+    let mut updated = 0;
     for ep in metadata.episodes {
         let air_date = ep
             .air_date
@@ -1259,7 +1599,23 @@ async fn auto_refresh_series(
             .ok()
             .flatten();
 
-        if existing.is_none() {
+        let title = ep
+            .title
+            .unwrap_or_else(|| format!("Episode {}", ep.episode_number));
+
+        if let Some(mut existing_ep) = existing {
+            // Update metadata from Skyhook, preserve local state
+            existing_ep.tvdb_id = ep.tvdb_id;
+            existing_ep.title = title;
+            existing_ep.overview = ep.overview;
+            existing_ep.air_date = air_date;
+            existing_ep.air_date_utc = air_date_utc;
+            existing_ep.runtime = ep.runtime.unwrap_or(0);
+            existing_ep.absolute_episode_number = ep.absolute_episode_number;
+            if episode_repo.update(&existing_ep).await.is_ok() {
+                updated += 1;
+            }
+        } else {
             let episode = EpisodeDbModel {
                 id: 0,
                 series_id,
@@ -1271,9 +1627,7 @@ async fn auto_refresh_series(
                 scene_absolute_episode_number: None,
                 scene_episode_number: None,
                 scene_season_number: None,
-                title: ep
-                    .title
-                    .unwrap_or_else(|| format!("Episode {}", ep.episode_number)),
+                title,
                 overview: ep.overview,
                 air_date,
                 air_date_utc,
@@ -1328,7 +1682,12 @@ async fn auto_refresh_series(
         }
     }
 
-    tracing::info!("Added {} episodes for {}", added, series.title);
+    tracing::info!(
+        "Synced episodes for {}: {} added, {} updated",
+        series.title,
+        added,
+        updated
+    );
     Ok(())
 }
 
@@ -1431,8 +1790,31 @@ async fn auto_scan_series(
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_else(|_| file_name.to_string());
 
-                    // Parse quality from filename
-                    let quality = parse_quality_from_filename(file_name);
+                    // Real media analysis via FFmpeg probe
+                    let media_info_result = MediaAnalyzer::analyze(file_path).await;
+                    let media_info = media_info_result
+                        .as_ref()
+                        .ok()
+                        .and_then(|info| serde_json::to_string(info).ok());
+
+                    // Derive quality from actual resolution, fallback to filename
+                    let quality_str = match &media_info_result {
+                        Ok(info) => {
+                            let quality = derive_quality_from_media(info, file_name);
+                            serde_json::to_string(&quality).unwrap_or_else(|_| {
+                                r#"{"quality":{"id":1,"name":"HDTV-720p"}}"#.to_string()
+                            })
+                        }
+                        Err(_) => {
+                            let quality = parse_quality_from_filename(file_name);
+                            serde_json::to_string(&quality).unwrap_or_else(|_| {
+                                r#"{"quality":{"id":1,"name":"HDTV-720p"}}"#.to_string()
+                            })
+                        }
+                    };
+
+                    // BLAKE3 file hash
+                    let file_hash = compute_file_hash(file_path).await.ok();
 
                     // Create episode file record
                     let episode_file = crate::core::datastore::models::EpisodeFileDbModel {
@@ -1445,12 +1827,11 @@ async fn auto_scan_series(
                         date_added: Utc::now(),
                         scene_name: Some(file_name.to_string()),
                         release_group: parse_release_group(file_name),
-                        quality: serde_json::to_string(&quality).unwrap_or_else(|_| {
-                            r#"{"quality":{"id":1,"name":"HDTV-720p"}}"#.to_string()
-                        }),
+                        quality: quality_str,
                         languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
-                        media_info: None,
+                        media_info,
                         original_file_path: Some(file_path_str.clone()),
+                        file_hash,
                     };
 
                     // Insert episode file
@@ -1935,19 +2316,25 @@ impl From<SeriesDbModel> for SeriesResponse {
             _ => "all",
         };
 
-        // Construct default images
+        // Construct default images with cache-busting timestamp.
+        // last_info_sync changes on every metadata refresh/rematch, so the browser
+        // will fetch fresh images instead of serving stale cached ones.
+        let cache_bust = s
+            .last_info_sync
+            .map(|ts| format!("?t={}", ts.timestamp()))
+            .unwrap_or_default();
         let images = vec![
             SeriesImage {
                 cover_type: "poster".to_string(),
-                url: format!("/MediaCover/Series/{}/poster.jpg", s.id),
+                url: format!("/MediaCover/Series/{}/poster.jpg{}", s.id, cache_bust),
             },
             SeriesImage {
                 cover_type: "fanart".to_string(),
-                url: format!("/MediaCover/Series/{}/fanart.jpg", s.id),
+                url: format!("/MediaCover/Series/{}/fanart.jpg{}", s.id, cache_bust),
             },
             SeriesImage {
                 cover_type: "banner".to_string(),
-                url: format!("/MediaCover/Series/{}/banner.jpg", s.id),
+                url: format!("/MediaCover/Series/{}/banner.jpg{}", s.id, cache_bust),
             },
         ];
 

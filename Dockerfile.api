@@ -29,9 +29,12 @@ RUN cargo chef prepare --recipe-path recipe.json
 # ============================================================================
 FROM chef AS builder
 
-# Install build dependencies (curl needed for utoipa-swagger-ui download)
+# Install build dependencies (curl for utoipa-swagger-ui, FFmpeg dev libs for unbundle/media-probe)
 RUN apt-get update && apt-get install -y \
-    curl \
+    curl pkg-config clang \
+    libavcodec-dev libavformat-dev libavutil-dev \
+    libswscale-dev libswresample-dev \
+    libavfilter-dev libavdevice-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Cook dependencies from recipe (this layer is cached)
@@ -60,10 +63,12 @@ FROM debian:bookworm-slim AS runtime
 WORKDIR /app
 
 # Install runtime dependencies (no libssl needed — using rustls)
+# FFmpeg shared libs needed at runtime for unbundle media probing
 RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    gosu \
-    curl \
+    ca-certificates gosu curl \
+    libavcodec59 libavformat59 libavutil57 \
+    libswscale6 libswresample4 \
+    libavfilter8 libavdevice59 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create user and directories

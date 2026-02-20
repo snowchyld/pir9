@@ -11,6 +11,7 @@ pub mod mediafiles;
 pub mod messaging;
 pub mod metadata;
 pub mod movies;
+pub mod naming;
 pub mod notifications;
 pub mod parser;
 pub mod profiles;

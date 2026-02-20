@@ -4,14 +4,18 @@
 
 import type { ReleaseSearchModal } from '../../components/release-search-modal';
 import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
-import { type Episode, http, type Series } from '../../core/http';
-import { createMutation, createQuery, invalidateQueries } from '../../core/query';
+import { type Episode, http, type QueueItem, type Series } from '../../core/http';
+import { createMutation, createQuery, invalidateQueries, useQueueQuery } from '../../core/query';
 import { signal } from '../../core/reactive';
 import { showError, showSuccess } from '../../stores/app.store';
+import type { EpisodeRenameDialog } from './episode-rename-dialog';
 import type { SeriesEditDialog } from './series-edit-dialog';
+import type { SeriesMatchDialog } from './series-match-dialog';
 
-// Ensure the dialog component is registered
+// Ensure dialog components are registered
+import './episode-rename-dialog';
 import './series-edit-dialog';
+import './series-match-dialog';
 
 interface SeasonEpisodes {
   seasonNumber: number;
@@ -35,6 +39,7 @@ export class SeriesDetailPage extends BaseComponent {
   // Query state - will be created lazily when we have a series ID
   private seriesQuery: ReturnType<typeof createQuery<Series | null>> | null = null;
   private episodesQuery: ReturnType<typeof createQuery<Episode[]>> | null = null;
+  private queueQuery = useQueueQuery();
 
   // Observe the titleslug attribute from the router
   static get observedAttributes(): string[] {
@@ -153,6 +158,8 @@ export class SeriesDetailPage extends BaseComponent {
     this.watch(this.seriesId);
     this.watch(this.titleSlug);
     this.watch(this.expandedSeasons);
+    // Update progress bars in-place instead of full re-render to preserve modal state
+    this.watch(this.queueQuery.data, () => this.updateProgressBars());
     // Note: Query signals are watched when createQueries() is called
   }
 
@@ -180,6 +187,15 @@ export class SeriesDetailPage extends BaseComponent {
     }
 
     const seasons = this.groupEpisodesBySeason(episodes, series);
+
+    // Build episodeId → QueueItem map for download progress
+    const queueMap = new Map<number, QueueItem>();
+    const queueRecords = this.queueQuery.data.value?.records ?? [];
+    for (const item of queueRecords) {
+      if (item.episodeId && item.status === 'downloading') {
+        queueMap.set(item.episodeId, item);
+      }
+    }
 
     return html`
       <div class="series-detail">
@@ -264,6 +280,25 @@ export class SeriesDetailPage extends BaseComponent {
                 </svg>
                 Rescan Files
               </button>
+              <button class="action-btn" onclick="this.closest('series-detail-page').handleOrganize()" title="Preview and rename episode files to match naming format">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                  <polyline points="10 9 9 9 8 9"></polyline>
+                </svg>
+                Organize
+              </button>
+              <button class="action-btn" onclick="this.closest('series-detail-page').handleFixMatch()" title="Re-match this series to a different TVDB/IMDB entry">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="22" y1="2" x2="11" y2="13"></line>
+                  <polygon points="8 2 2 2 2 8"></polygon>
+                  <line x1="2" y1="2" x2="7" y2="7"></line>
+                </svg>
+                Fix Match
+              </button>
               <button class="action-btn" onclick="this.closest('series-detail-page').handleEdit()">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
@@ -279,7 +314,7 @@ export class SeriesDetailPage extends BaseComponent {
           <h2 class="section-title">Seasons</h2>
 
           <div class="seasons-list">
-            ${seasons.map((season) => this.renderSeason(season, series)).join('')}
+            ${seasons.map((season) => this.renderSeason(season, series, queueMap)).join('')}
           </div>
         </div>
 
@@ -288,6 +323,12 @@ export class SeriesDetailPage extends BaseComponent {
 
         <!-- Edit Series Dialog -->
         <series-edit-dialog></series-edit-dialog>
+
+        <!-- Episode Rename Dialog -->
+        <episode-rename-dialog></episode-rename-dialog>
+
+        <!-- Fix Match Dialog -->
+        <series-match-dialog></series-match-dialog>
       </div>
 
       <style>
@@ -589,6 +630,33 @@ export class SeriesDetailPage extends BaseComponent {
           color: var(--text-color-muted);
         }
 
+        .episode-download-progress {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          min-width: 120px;
+        }
+
+        .episode-progress-bar {
+          flex: 1;
+          height: 6px;
+          background-color: var(--bg-progress);
+          border-radius: 3px;
+          overflow: hidden;
+        }
+
+        .episode-progress-fill {
+          height: 100%;
+          background-color: var(--color-primary);
+          transition: width 0.3s ease;
+        }
+
+        .episode-progress-text {
+          font-size: 0.75rem;
+          color: var(--text-color-muted);
+          white-space: nowrap;
+        }
+
         .episode-actions {
           display: flex;
           gap: 0.25rem;
@@ -659,7 +727,11 @@ export class SeriesDetailPage extends BaseComponent {
     return seasons.sort((a, b) => b.seasonNumber - a.seasonNumber);
   }
 
-  private renderSeason(season: SeasonEpisodes, _series: Series): string {
+  private renderSeason(
+    season: SeasonEpisodes,
+    _series: Series,
+    queueMap: Map<number, QueueItem>,
+  ): string {
     const isExpanded = this.expandedSeasons.value.has(season.seasonNumber);
     const seasonLabel = season.seasonNumber === 0 ? 'Specials' : `Season ${season.seasonNumber}`;
 
@@ -685,7 +757,7 @@ export class SeriesDetailPage extends BaseComponent {
           isExpanded
             ? html`
           <div class="episodes-list">
-            ${season.episodes.map((ep) => this.renderEpisode(ep)).join('')}
+            ${season.episodes.map((ep) => this.renderEpisode(ep, queueMap)).join('')}
           </div>
         `
             : ''
@@ -694,18 +766,22 @@ export class SeriesDetailPage extends BaseComponent {
     `;
   }
 
-  private renderEpisode(episode: Episode): string {
+  private renderEpisode(episode: Episode, queueMap: Map<number, QueueItem>): string {
     const isAired = episode.airDateUtc ? new Date(episode.airDateUtc) <= new Date() : false;
-    const status = episode.hasFile ? 'downloaded' : isAired ? 'missing' : 'unaired';
-    const statusIcon =
-      status === 'downloaded'
-        ? '<svg class="episode-status-icon downloaded" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>'
-        : status === 'missing'
-          ? '<svg class="episode-status-icon missing" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>'
-          : '<svg class="episode-status-icon unaired" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
+    const queueItem = queueMap.get(episode.id);
+    const isDownloading = !!queueItem;
+    const status = isDownloading
+      ? 'downloading'
+      : episode.hasFile
+        ? 'downloaded'
+        : isAired
+          ? 'missing'
+          : 'unaired';
+
+    const statusHtml = this.buildEpisodeStatusHtml(status, queueItem);
 
     return html`
-      <div class="episode-row">
+      <div class="episode-row" data-episode-id="${episode.id}">
         <input
           type="checkbox"
           class="episode-monitor"
@@ -716,13 +792,11 @@ export class SeriesDetailPage extends BaseComponent {
         <span class="episode-number">E${String(episode.episodeNumber).padStart(2, '0')}</span>
         <span class="episode-title">${escapeHtml(episode.title)}</span>
         <span class="episode-date">${episode.airDate ? new Date(episode.airDate).toLocaleDateString() : '-'}</span>
-        <div class="episode-status">
-          ${safeHtml(statusIcon)}
-        </div>
+        <span class="episode-status-cell" data-status-for="${episode.id}">${safeHtml(statusHtml)}</span>
         <div class="episode-actions">
           <button
             class="episode-action-btn"
-            onclick="event.stopPropagation(); this.closest('series-detail-page').openInteractiveSearch(${episode.id}, ${episode.seasonNumber}, ${episode.episodeNumber}, '${escapeHtml(episode.title).replace(/'/g, "\\'")}')"
+            onclick="event.stopPropagation(); this.closest('series-detail-page').openInteractiveSearch(${episode.id}, ${episode.seasonNumber}, ${episode.episodeNumber}, '${episode.title.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')"
             title="Interactive Search"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -731,7 +805,7 @@ export class SeriesDetailPage extends BaseComponent {
             </svg>
           </button>
           ${
-            isAired && !episode.hasFile
+            isAired && !episode.hasFile && !isDownloading
               ? html`
             <button
               class="episode-action-btn auto-search"
@@ -748,6 +822,88 @@ export class SeriesDetailPage extends BaseComponent {
         </div>
       </div>
     `;
+  }
+
+  private buildEpisodeStatusHtml(status: string, queueItem?: QueueItem): string {
+    if (status === 'downloading' && queueItem) {
+      const progress =
+        queueItem.size > 0 ? ((queueItem.size - queueItem.sizeleft) / queueItem.size) * 100 : 0;
+      const downloaded = this.formatBytes(queueItem.size - queueItem.sizeleft);
+      const total = this.formatBytes(queueItem.size);
+      const timeleft = queueItem.timeleft ?? '';
+      return `
+        <div class="episode-download-progress" title="${downloaded} / ${total}${timeleft ? ` - ${timeleft} remaining` : ''}">
+          <div class="episode-progress-bar">
+            <div class="episode-progress-fill" style="width: ${progress}%"></div>
+          </div>
+          <span class="episode-progress-text">${Math.round(progress)}%</span>
+        </div>
+      `;
+    }
+    const statusIcon =
+      status === 'downloaded'
+        ? '<svg class="episode-status-icon downloaded" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>'
+        : status === 'missing'
+          ? '<svg class="episode-status-icon missing" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>'
+          : '<svg class="episode-status-icon unaired" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
+    return `<div class="episode-status">${statusIcon}</div>`;
+  }
+
+  /**
+   * Surgically update only episode progress bars without re-rendering the full DOM.
+   * This prevents destroying child components like the release search modal.
+   *
+   * SECURITY: All values interpolated are numeric (progress %, byte counts) from
+   * internal queue data — no user-controlled strings are inserted as HTML.
+   */
+  private updateProgressBars(): void {
+    const queueRecords = this.queueQuery.data.value?.records ?? [];
+    const queueMap = new Map<number, QueueItem>();
+    for (const item of queueRecords) {
+      if (item.episodeId && item.status === 'downloading') {
+        queueMap.set(item.episodeId, item);
+      }
+    }
+
+    const statusCells = this.querySelectorAll<HTMLElement>('.episode-status-cell[data-status-for]');
+    statusCells.forEach((cell) => {
+      const episodeId = Number(cell.dataset.statusFor);
+      if (!episodeId) return;
+
+      const queueItem = queueMap.get(episodeId);
+
+      // Determine current status from the existing DOM
+      const hasProgressBar = cell.querySelector('.episode-download-progress') !== null;
+      const hasDownloadedIcon = cell.querySelector('.episode-status-icon.downloaded') !== null;
+
+      if (queueItem) {
+        // Episode is downloading — update or create progress bar
+        if (hasProgressBar) {
+          // Just update the existing progress bar values in-place
+          const fill = cell.querySelector<HTMLElement>('.episode-progress-fill');
+          const text = cell.querySelector('.episode-progress-text');
+          const container = cell.querySelector<HTMLElement>('.episode-download-progress');
+          const progress =
+            queueItem.size > 0 ? ((queueItem.size - queueItem.sizeleft) / queueItem.size) * 100 : 0;
+          if (fill) fill.style.width = `${progress}%`;
+          if (text) text.textContent = `${Math.round(progress)}%`;
+          if (container) {
+            const downloaded = this.formatBytes(queueItem.size - queueItem.sizeleft);
+            const total = this.formatBytes(queueItem.size);
+            const timeleft = queueItem.timeleft ?? '';
+            container.title = `${downloaded} / ${total}${timeleft ? ` - ${timeleft} remaining` : ''}`;
+          }
+        } else {
+          // Switch from status icon to progress bar (developer-controlled template, no user strings)
+          // nosemgrep: javascript.browser.security.insecure-document-method.insecure-document-method
+          cell.innerHTML = this.buildEpisodeStatusHtml('downloading', queueItem);
+        }
+      } else if (hasProgressBar && !hasDownloadedIcon) {
+        // Was downloading, now stopped — revert to missing icon (developer-controlled SVG)
+        // nosemgrep: javascript.browser.security.insecure-document-method.insecure-document-method
+        cell.innerHTML = this.buildEpisodeStatusHtml('missing');
+      }
+    });
   }
 
   private formatBytes(bytes: number): string {
@@ -816,6 +972,26 @@ export class SeriesDetailPage extends BaseComponent {
     const id = this.seriesId.value;
     if (id) {
       this.rescanMutation.mutate(id);
+    }
+  }
+
+  handleOrganize(): void {
+    const series = this.seriesQuery?.data.value;
+    if (!series) return;
+
+    const dialog = this.querySelector('episode-rename-dialog') as EpisodeRenameDialog | null;
+    if (dialog) {
+      dialog.open(series.id, series.title);
+    }
+  }
+
+  handleFixMatch(): void {
+    const series = this.seriesQuery?.data.value;
+    if (!series) return;
+
+    const dialog = this.querySelector('series-match-dialog') as SeriesMatchDialog | null;
+    if (dialog) {
+      dialog.open(series.id, series.title, series.tvdbId, series.imdbId ?? null, series.year);
     }
   }
 

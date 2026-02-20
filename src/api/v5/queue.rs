@@ -15,7 +15,7 @@ use crate::core::datastore::repositories::{
     DownloadClientRepository, EpisodeRepository, SeriesRepository,
 };
 use crate::core::download::clients::{create_client_from_model, DownloadState};
-use crate::core::parser::{parse_title, title_matches_series};
+use crate::core::parser::{normalize_title, parse_title, title_matches_series};
 use crate::core::queue::{
     Protocol as QueueProtocol, QueueStatus, TrackedDownloadService, TrackedDownloadState,
     TrackedDownloadStatus,
@@ -291,6 +291,16 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
     match service.get_queue().await {
         Ok(queue_items) => {
             for item in queue_items {
+                // Skip downloads where the episode already has a file and
+                // the download is waiting to be imported — already in the library
+                if item.episode_has_file
+                    && matches!(
+                        item.tracked_download_state,
+                        TrackedDownloadState::ImportPending | TrackedDownloadState::Imported
+                    )
+                {
+                    continue;
+                }
                 all_downloads.push(queue_item_to_resource(&item));
             }
         }
@@ -436,6 +446,87 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                 }
                             }
 
+                            // Fallback: when parser can't extract structured data (e.g.
+                            // complete series packs with no S01E02 markers), try matching
+                            // the raw torrent name against known series titles directly.
+                            if matched_series_id.is_none() {
+                                let name_normalized = normalize_title(&dl.name);
+                                let mut best_match: Option<(i64, usize)> = None;
+
+                                for series in &all_series {
+                                    let clean = normalize_title(&series.clean_title);
+                                    // Also try title without trailing year
+                                    let clean_no_year = clean
+                                        .trim_end()
+                                        .rsplit_once(' ')
+                                        .and_then(|(prefix, suffix)| {
+                                            if suffix.len() == 4
+                                                && suffix.chars().all(|c| c.is_ascii_digit())
+                                            {
+                                                Some(prefix.to_string())
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .unwrap_or_else(|| clean.clone());
+
+                                    for candidate in [&clean, &clean_no_year] {
+                                        // Minimum length to avoid false positives (e.g. "V")
+                                        if candidate.len() >= 4
+                                            && name_normalized.contains(candidate.as_str())
+                                        {
+                                            if best_match.is_none()
+                                                || candidate.len() > best_match.as_ref().unwrap().1
+                                            {
+                                                best_match = Some((series.id, candidate.len()));
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if let Some((series_id, _)) = best_match {
+                                    matched_series_id = Some(series_id);
+                                }
+                            }
+
+                            // Check if matched episode(s) already have files in the library
+                            let mut episode_has_file_val = false;
+                            if let Some(ep_id) = matched_episode_id {
+                                if let Ok(Some(ep)) = episode_repo.get_by_id(ep_id).await {
+                                    episode_has_file_val = ep.has_file;
+                                }
+                            } else if matched_series_id.is_some() {
+                                // For season packs (no specific episode matched),
+                                // check if all episodes in the season already have files
+                                if let Some(ref info) = parsed {
+                                    if info.full_season {
+                                        if let (Some(season), Some(series_id)) =
+                                            (info.season_number, matched_series_id)
+                                        {
+                                            let season_eps = episode_repo
+                                                .get_by_series_and_season(series_id, season)
+                                                .await
+                                                .unwrap_or_default();
+                                            if !season_eps.is_empty()
+                                                && season_eps.iter().all(|e| e.has_file)
+                                            {
+                                                episode_has_file_val = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Skip completed/seeding downloads where episode(s) already imported
+                            if episode_has_file_val
+                                && matches!(
+                                    dl.status,
+                                    DownloadState::Completed | DownloadState::Seeding
+                                )
+                            {
+                                continue;
+                            }
+
                             // Build series/episode from parsed info even when not matched in DB.
                             // This gives the frontend a clean series name instead of the raw torrent title.
                             let parsed_series = if matched_series_id.is_some() {
@@ -516,7 +607,7 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                 download_client_has_post_import_category: false,
                                 indexer: None,
                                 output_path: dl.output_path,
-                                episode_has_file: false,
+                                episode_has_file: episode_has_file_val,
                                 episode: parsed_episode,
                                 series: parsed_series,
                             });
@@ -799,6 +890,250 @@ async fn grab_release(
     }
 }
 
+/// POST /api/v5/queue/{id}/import
+/// Import a completed download into the library
+async fn import_queue_item(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Json<QueueActionResponse> {
+    use crate::core::datastore::repositories::TrackedDownloadRepository;
+    use crate::core::download::import::ImportService;
+
+    let td_repo = TrackedDownloadRepository::new(state.db.clone());
+    let client_repo = DownloadClientRepository::new(state.db.clone());
+    let import_service = ImportService::new(state.db.clone(), state.config.read().media.clone());
+
+    // Find the download — either tracked (id < 10000) or untracked
+    let (download_id, download_client_id, title) = if id < 10000 {
+        // Tracked download — look up from DB
+        match td_repo.get_by_id(id).await {
+            Ok(Some(td)) => (td.download_id, td.download_client_id, td.title),
+            _ => {
+                tracing::warn!("Import: tracked download {} not found", id);
+                return Json(QueueActionResponse { success: false });
+            }
+        }
+    } else {
+        // Untracked download — find from queue data
+        let downloads = fetch_all_downloads(&state, true).await;
+        match downloads.into_iter().find(|d| d.id == id) {
+            Some(dl) => {
+                let dl_id = match dl.download_id {
+                    Some(id) => id,
+                    None => return Json(QueueActionResponse { success: false }),
+                };
+                let client_name = dl.download_client.unwrap_or_default();
+                // Look up client ID by name
+                let clients = client_repo.get_all().await.unwrap_or_default();
+                let client_id = clients
+                    .iter()
+                    .find(|c| c.name == client_name)
+                    .map(|c| c.id)
+                    .unwrap_or(0);
+                (dl_id, client_id, dl.title)
+            }
+            None => {
+                tracing::warn!("Import: queue item {} not found", id);
+                return Json(QueueActionResponse { success: false });
+            }
+        }
+    };
+
+    // Get live download status from the client (for the real content path)
+    let client_model = match client_repo.get_by_id(download_client_id).await {
+        Ok(Some(c)) => c,
+        _ => {
+            tracing::warn!("Import: download client {} not found", download_client_id);
+            return Json(QueueActionResponse { success: false });
+        }
+    };
+
+    let client = match create_client_from_model(&client_model) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Import: failed to create client: {}", e);
+            return Json(QueueActionResponse { success: false });
+        }
+    };
+
+    let live_status = match client.get_download(&download_id).await {
+        Ok(Some(dl)) => dl,
+        Ok(None) => {
+            tracing::warn!("Import: download {} not found in client", download_id);
+            return Json(QueueActionResponse { success: false });
+        }
+        Err(e) => {
+            tracing::warn!("Import: failed to query client: {}", e);
+            return Json(QueueActionResponse { success: false });
+        }
+    };
+
+    let raw_output_path = match live_status.output_path {
+        Some(ref p) => p.clone(),
+        None => {
+            tracing::warn!("Import: no output path for download {}", download_id);
+            return Json(QueueActionResponse { success: false });
+        }
+    };
+
+    // Apply remote path mappings (translate client paths to local paths)
+    let output_path = {
+        use crate::core::datastore::repositories::RemotePathMappingRepository;
+        let mapping_repo = RemotePathMappingRepository::new(state.db.clone());
+        let mut mapped = raw_output_path.clone();
+        if let Ok(mappings) = mapping_repo.get_all().await {
+            for m in &mappings {
+                if mapped.starts_with(&m.remote_path) {
+                    mapped = mapped.replacen(&m.remote_path, &m.local_path, 1);
+                    tracing::debug!("Import: mapped path '{}' -> '{}'", raw_output_path, mapped);
+                    break;
+                }
+            }
+        }
+        mapped
+    };
+
+    // Build a PendingImport using the import service's matching logic
+    let mut parsed = crate::core::parser::parse_title(&title);
+    let mut series = None;
+    let mut episodes = Vec::new();
+
+    if let Some(ref info) = parsed {
+        if let Ok(s) = import_service.match_series(info).await {
+            if let Some(ref matched) = s {
+                if let Ok(eps) = import_service.match_episodes(matched, info).await {
+                    episodes = eps;
+                }
+            }
+            series = s;
+        }
+    }
+
+    // Fallback: when parser can't extract structured data (complete series
+    // packs without S01E02 markers), or when it extracts quality info but no
+    // season/episode numbers (so match_episodes returns empty), match the raw
+    // title against known series and treat it as a multi-season pack so
+    // per-file parsing handles individual episode assignment.
+    if series.is_none() || episodes.is_empty() {
+        let series_repo = SeriesRepository::new(state.db.clone());
+        let episode_repo = EpisodeRepository::new(state.db.clone());
+
+        // If series was already matched via primary path, use it directly
+        // instead of re-matching against all series.
+        if let Some(ref matched) = series {
+            tracing::info!(
+                "Import fallback: series '{}' matched but no episodes resolved, loading all episodes for pack import",
+                matched.title
+            );
+            if let Ok(eps) = episode_repo.get_by_series_id(matched.id).await {
+                episodes = eps;
+            }
+            parsed = Some(crate::core::parser::ParsedEpisodeInfo {
+                series_title: matched.clean_title.clone(),
+                full_season: true,
+                is_multi_season: true,
+                raw_title: title.clone(),
+                ..Default::default()
+            });
+        } else if let Ok(all_series) = series_repo.get_all().await {
+            let name_normalized = normalize_title(&title);
+            let mut best_match: Option<(usize, usize)> = None;
+
+            for (idx, s) in all_series.iter().enumerate() {
+                let clean = normalize_title(&s.clean_title);
+                let clean_no_year = clean
+                    .trim_end()
+                    .rsplit_once(' ')
+                    .and_then(|(prefix, suffix)| {
+                        if suffix.len() == 4 && suffix.chars().all(|c| c.is_ascii_digit()) {
+                            Some(prefix.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| clean.clone());
+
+                for candidate in [&clean, &clean_no_year] {
+                    if candidate.len() >= 4 && name_normalized.contains(candidate.as_str()) {
+                        if best_match.is_none() || candidate.len() > best_match.as_ref().unwrap().1
+                        {
+                            best_match = Some((idx, candidate.len()));
+                        }
+                    }
+                }
+            }
+
+            if let Some((idx, _)) = best_match {
+                let matched = all_series.into_iter().nth(idx).unwrap();
+                tracing::info!(
+                    "Import fallback: matched '{}' to series '{}'",
+                    title,
+                    matched.title
+                );
+                if let Ok(eps) = episode_repo.get_by_series_id(matched.id).await {
+                    episodes = eps;
+                }
+                parsed = Some(crate::core::parser::ParsedEpisodeInfo {
+                    series_title: matched.clean_title.clone(),
+                    full_season: true,
+                    is_multi_season: true,
+                    raw_title: title.clone(),
+                    ..Default::default()
+                });
+                series = Some(matched);
+            }
+        }
+    }
+
+    let pending = crate::core::download::import::PendingImport {
+        download_id: download_id.clone(),
+        download_client_id,
+        download_client_name: client_model.name.clone(),
+        title: title.clone(),
+        output_path: std::path::PathBuf::from(&output_path),
+        parsed_info: parsed,
+        series,
+        episodes,
+    };
+
+    // Run the import
+    match import_service.import(&pending).await {
+        Ok(result) if result.success => {
+            tracing::info!(
+                "Imported '{}': {} files, {} episodes",
+                title,
+                result.files_imported,
+                result.episode_ids.len()
+            );
+
+            // Update tracked download state to Imported (if tracked)
+            if id < 10000 {
+                let _ = td_repo
+                    .update_status(
+                        id,
+                        crate::core::queue::TrackedDownloadState::Imported as i32,
+                        "[]",
+                        None,
+                    )
+                    .await;
+            }
+
+            Json(QueueActionResponse { success: true })
+        }
+        Ok(result) => {
+            let msg = result
+                .error_message
+                .unwrap_or_else(|| "Unknown error".to_string());
+            tracing::warn!("Import failed for '{}': {}", title, msg);
+            Json(QueueActionResponse { success: false })
+        }
+        Err(e) => {
+            tracing::warn!("Import error for '{}': {}", title, e);
+            Json(QueueActionResponse { success: false })
+        }
+    }
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_queue).delete(remove_from_queue))
@@ -806,4 +1141,5 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/details", get(get_queue_details))
         .route("/{id}", get(get_queue_item).delete(remove_queue_item))
         .route("/{id}/grab", get(grab_release))
+        .route("/{id}/import", axum::routing::post(import_queue_item))
 }

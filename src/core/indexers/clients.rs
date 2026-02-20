@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 //! Indexer client implementations
-//! Newznab and Torznab protocol support
+//! Newznab, Torznab, and Prowlarr protocol support
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -565,6 +565,326 @@ impl IndexerClient for TorznabClient {
 }
 
 // ============================================================================
+// Prowlarr Client Implementation (native REST API)
+// ============================================================================
+
+/// Prowlarr release from JSON API response
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProwlarrRelease {
+    guid: Option<String>,
+    title: Option<String>,
+    size: Option<i64>,
+    download_url: Option<String>,
+    info_url: Option<String>,
+    indexer_id: Option<i64>,
+    indexer: Option<String>,
+    publish_date: Option<String>,
+    tvdb_id: Option<i64>,
+    imdb_id: Option<i64>,
+    seeders: Option<i32>,
+    leechers: Option<i32>,
+    protocol: Option<String>,
+    magnet_url: Option<String>,
+    info_hash: Option<String>,
+    #[serde(default)]
+    categories: Vec<ProwlarrCategory>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProwlarrCategory {
+    id: Option<i32>,
+}
+
+/// Prowlarr native REST API client
+/// Docs: https://prowlarr.com/docs/api/
+pub struct ProwlarrClient {
+    name: String,
+    base_url: String,
+    api_key: String,
+    http_client: Client,
+}
+
+impl ProwlarrClient {
+    pub fn new(name: String, url: String, api_key: String) -> Self {
+        let http_client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
+
+        let base_url = normalize_url(&url);
+
+        Self {
+            name,
+            base_url,
+            api_key,
+            http_client,
+        }
+    }
+
+    /// Build search query text from structured search parameters.
+    /// Prowlarr's REST API doesn't accept tvdbId/season/episode as separate params,
+    /// so we encode them into the query string (e.g. "Series Title S02E06").
+    fn build_search_text(query: &SearchQuery) -> String {
+        let mut text = query.query.clone().unwrap_or_default();
+        if let Some(season) = query.season {
+            if let Some(episode) = query.episode {
+                text = format!("{} S{:02}E{:02}", text, season, episode);
+            } else {
+                text = format!("{} S{:02}", text, season);
+            }
+        }
+        text.trim().to_string()
+    }
+
+    /// Convert a ProwlarrRelease into a ReleaseInfo
+    fn map_release(&self, release: ProwlarrRelease) -> Option<ReleaseInfo> {
+        let title = release.title?;
+        tracing::debug!(
+            "Prowlarr release '{}': guid_prefix={:?}, magnet_url={:?}, info_hash={:?}, download_url={:?}",
+            title,
+            release.guid.as_deref().map(|u| &u[..u.len().min(50)]),
+            release.magnet_url.as_deref().map(|u| &u[..u.len().min(60)]),
+            release.info_hash,
+            release.download_url.as_deref().map(|u| &u[..u.len().min(80)]),
+        );
+        let guid_raw = release
+            .guid
+            .unwrap_or_else(|| release.download_url.clone().unwrap_or_default());
+        // Some indexers (EZTV) put the magnet link in `guid` — extract it
+        let guid_is_magnet = guid_raw.starts_with("magnet:");
+        let guid = guid_raw;
+
+        let protocol = match release.protocol.as_deref() {
+            Some("usenet") => Protocol::Usenet,
+            _ => Protocol::Torrent,
+        };
+
+        let publish_date = release
+            .publish_date
+            .as_deref()
+            .and_then(|d| DateTime::parse_from_rfc3339(d).ok())
+            .map(|d| d.with_timezone(&Utc))
+            .unwrap_or_else(Utc::now);
+
+        // Prowlarr returns numeric IMDB IDs — format as "tt0000000"
+        let imdb_id = release.imdb_id.map(|id| format!("tt{:07}", id));
+
+        let categories: Vec<i32> = release.categories.iter().filter_map(|c| c.id).collect();
+
+        // Some indexers put the magnet URI in download_url rather than magnet_url
+        let download_url_magnet: Option<String> = release
+            .download_url
+            .as_deref()
+            .filter(|u| u.starts_with("magnet:"))
+            .map(String::from);
+
+        Some(ReleaseInfo {
+            guid: guid.clone(),
+            title: title.clone(),
+            size: release.size.unwrap_or(0),
+            download_url: release.download_url,
+            info_url: release.info_url,
+            comment_url: None,
+            indexer_id: release.indexer_id.unwrap_or(0),
+            indexer: release.indexer.unwrap_or_else(|| self.name.clone()),
+            publish_date,
+            download_protocol: protocol,
+            tvdb_id: release.tvdb_id,
+            tv_rage_id: None,
+            imdb_id,
+            tmdb_id: None,
+            series_title: None,
+            season_number: None,
+            episode_numbers: vec![],
+            absolute_episode_numbers: vec![],
+            mapped_season_number: None,
+            mapped_episode_numbers: vec![],
+            mapped_absolute_episode_numbers: vec![],
+            release_group: None,
+            release_hash: None,
+            quality: parse_quality_from_title(&title),
+            languages: vec![Language::english()],
+            approved: true,
+            temporarily_rejected: false,
+            rejected: false,
+            rejections: vec![],
+            seeders: release.seeders,
+            leechers: release.leechers,
+            protocol,
+            is_daily: false,
+            is_absolute_numbering: false,
+            is_possible_special_episode: false,
+            special: false,
+            series_id: None,
+            episode_id: None,
+            download_client_id: None,
+            download_client: None,
+            episode_requested: false,
+            download_url_generator: None,
+            magnet_url: release
+                .magnet_url
+                .filter(|u| u.starts_with("magnet:"))
+                .or(download_url_magnet.clone())
+                .or_else(|| {
+                    if guid_is_magnet {
+                        Some(guid.clone())
+                    } else {
+                        None
+                    }
+                }),
+            info_hash: release.info_hash.or_else(|| {
+                // Extract info_hash from magnet URI in guid or download_url
+                let magnet_source = if guid_is_magnet {
+                    Some(guid.as_str())
+                } else {
+                    download_url_magnet.as_deref()
+                };
+                magnet_source.and_then(|uri| {
+                    uri.split("btih:").nth(1).and_then(|s| {
+                        let hash = s.split('&').next().unwrap_or(s);
+                        if hash.is_empty() {
+                            None
+                        } else {
+                            Some(hash.to_string())
+                        }
+                    })
+                })
+            }),
+            seed_ratio: None,
+            source_title: Some(title),
+            indexer_flags: 0,
+            categories,
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl IndexerClient for ProwlarrClient {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn protocol(&self) -> Protocol {
+        Protocol::Torrent
+    }
+
+    async fn test(&self) -> Result<IndexerCapabilities> {
+        let url = format!("{}/api/v1/health", self.base_url);
+
+        let response = self
+            .http_client
+            .get(&url)
+            .header("X-Api-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to connect to Prowlarr")?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("Prowlarr returned error: {}", response.status());
+        }
+
+        Ok(IndexerCapabilities {
+            search_available: true,
+            tv_search_available: true,
+            movie_search_available: true,
+            ..Default::default()
+        })
+    }
+
+    async fn get_capabilities(&self) -> Result<IndexerCapabilities> {
+        self.test().await
+    }
+
+    async fn search(&self, query: &SearchQuery) -> Result<Vec<ReleaseInfo>> {
+        let search_text = Self::build_search_text(query);
+
+        let mut url = format!(
+            "{}/api/v1/search?query={}&type=tvsearch",
+            self.base_url,
+            urlencoding::encode(&search_text)
+        );
+
+        if !query.categories.is_empty() {
+            let cats: Vec<String> = query.categories.iter().map(|c| c.to_string()).collect();
+            url.push_str(&format!("&categories={}", cats.join(",")));
+        }
+
+        if let Some(limit) = query.limit {
+            url.push_str(&format!("&limit={}", limit));
+        }
+        if let Some(offset) = query.offset {
+            url.push_str(&format!("&offset={}", offset));
+        }
+
+        let response = self
+            .http_client
+            .get(&url)
+            .header("X-Api-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to search Prowlarr")?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("Prowlarr search failed: {}", response.status());
+        }
+
+        let releases: Vec<ProwlarrRelease> = response
+            .json()
+            .await
+            .context("Failed to parse Prowlarr JSON response")?;
+
+        Ok(releases
+            .into_iter()
+            .filter_map(|r| self.map_release(r))
+            .collect())
+    }
+
+    async fn fetch_rss(&self, limit: Option<u32>) -> Result<Vec<ReleaseInfo>> {
+        let mut url = format!(
+            "{}/api/v1/search?type=search&categories=5000,5010,5020,5030,5040,5045,5050,5060,5070,5080",
+            self.base_url
+        );
+
+        if let Some(l) = limit {
+            url.push_str(&format!("&limit={}", l));
+        }
+
+        let response = self
+            .http_client
+            .get(&url)
+            .header("X-Api-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to fetch Prowlarr RSS")?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("Prowlarr RSS fetch failed: {}", response.status());
+        }
+
+        let releases: Vec<ProwlarrRelease> = response
+            .json()
+            .await
+            .context("Failed to parse Prowlarr RSS JSON response")?;
+
+        Ok(releases
+            .into_iter()
+            .filter_map(|r| self.map_release(r))
+            .collect())
+    }
+}
+
+/// Normalize a URL by ensuring it has a scheme prefix
+fn normalize_url(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/');
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("https://{}", trimmed)
+    }
+}
+
+// ============================================================================
 // XML Parsing Structures
 // ============================================================================
 
@@ -780,6 +1100,11 @@ pub fn create_client_from_model(
             api_key.to_string(),
         ))),
         "Torznab" => Ok(Box::new(TorznabClient::new(
+            model.name.clone(),
+            base_url.to_string(),
+            api_key.to_string(),
+        ))),
+        "Prowlarr" => Ok(Box::new(ProwlarrClient::new(
             model.name.clone(),
             base_url.to_string(),
             api_key.to_string(),

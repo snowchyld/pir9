@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::core::datastore::repositories::CommandRepository;
-use crate::core::mediafiles::MediaAnalyzer;
+use crate::core::mediafiles::{compute_file_hash, derive_quality_from_media, MediaAnalyzer};
 use crate::web::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -135,6 +135,7 @@ pub async fn create_command(
         let hybrid_event_bus = state.hybrid_event_bus.clone();
         let metadata_service = state.metadata_service.clone();
         let imdb_client = state.imdb_client.clone();
+        let media_config = state.config.read().media.clone();
         let command_tokens = state.command_tokens.clone();
         let cmd_id = id;
         let cmd_name = name.to_string();
@@ -165,6 +166,7 @@ pub async fn create_command(
                 metadata_service: Some(metadata_service),
                 imdb_client: Some(imdb_client),
                 cancel_token: Some(token),
+                media_config: Some(media_config),
             };
             let result =
                 execute_command_with_options(&cmd_name, &cmd_body, &db, &event_bus, options).await;
@@ -307,6 +309,8 @@ pub struct CommandExecutionOptions {
     pub imdb_client: Option<crate::core::imdb::ImdbClient>,
     /// Cancellation token to stop long-running commands
     pub cancel_token: Option<tokio_util::sync::CancellationToken>,
+    /// Media config for episode naming during imports
+    pub media_config: Option<crate::core::configuration::MediaConfig>,
 }
 
 /// Execute a command with additional options (for distributed mode and IMDB metadata)
@@ -332,7 +336,7 @@ pub async fn execute_command_with_options(
             execute_rescan_series(body, db, event_bus, options.hybrid_event_bus.as_ref()).await
         }
         "DownloadedEpisodesScan" | "ProcessMonitoredDownloads" => {
-            execute_process_downloads(body, db, event_bus).await
+            execute_process_downloads(body, db, event_bus, options.media_config.as_ref()).await
         }
         "RssSync" => execute_rss_sync(body, db, event_bus).await,
         "ApplicationCheckUpdate" => {
@@ -355,6 +359,13 @@ pub async fn execute_command_with_options(
                 options.cancel_token.as_ref(),
             )
             .await
+        }
+        "RefreshMonitoredDownloads" => {
+            let service = crate::core::queue::TrackedDownloadService::new(db.clone());
+            match service.reconcile_downloads().await {
+                Ok(count) => Ok(format!("Reconciled {} downloads", count)),
+                Err(e) => Err(format!("Failed to reconcile downloads: {}", e)),
+            }
         }
         "EpisodeSearch" => execute_episode_search(body, db, event_bus).await,
         "SeasonSearch" => execute_season_search(body, db, event_bus).await,
@@ -1087,28 +1098,32 @@ async fn execute_rescan_series(
                     // Parse release group from filename (simple extraction)
                     let release_group = extract_release_group(file_name);
 
-                    // Create quality JSON (default to HDTV-720p for now)
-                    let quality_json = serde_json::json!({
-                        "quality": {
-                            "id": 4,
-                            "name": "HDTV-720p",
-                            "source": "television",
-                            "resolution": 720
-                        },
-                        "revision": {
-                            "version": 1,
-                            "real": 0,
-                            "isRepack": false
-                        }
-                    });
-
                     let languages_json = serde_json::json!([{
                         "id": 1,
                         "name": "English"
                     }]);
 
-                    let media_info =
-                        MediaAnalyzer::analyze_to_json(std::path::Path::new(&file_path_str)).await;
+                    // Real media analysis via FFmpeg probe
+                    let media_info_result =
+                        MediaAnalyzer::analyze(std::path::Path::new(&file_path_str)).await;
+                    let media_info = media_info_result
+                        .as_ref()
+                        .ok()
+                        .and_then(|info| serde_json::to_string(info).ok());
+
+                    // Quality derived from actual resolution
+                    let quality_json = match &media_info_result {
+                        Ok(info) => derive_quality_from_media(info, file_name),
+                        Err(_) => serde_json::json!({
+                            "quality": {"id": 1, "name": "SDTV", "source": "unknown", "resolution": 0},
+                            "revision": {"version": 1, "real": 0, "isRepack": false}
+                        }),
+                    };
+
+                    // BLAKE3 content hash
+                    let file_hash = compute_file_hash(std::path::Path::new(&file_path_str))
+                        .await
+                        .ok();
 
                     let episode_file = EpisodeFileDbModel {
                         id: 0,
@@ -1124,6 +1139,7 @@ async fn execute_rescan_series(
                         languages: languages_json.to_string(),
                         media_info,
                         original_file_path: Some(file_path_str.clone()),
+                        file_hash,
                     };
 
                     match episode_file_repo.insert(&episode_file).await {
@@ -1267,12 +1283,13 @@ async fn execute_process_downloads(
     _body: &serde_json::Value,
     db: &crate::core::datastore::Database,
     _event_bus: &crate::core::messaging::EventBus,
+    media_config: Option<&crate::core::configuration::MediaConfig>,
 ) -> Result<String, String> {
     use crate::core::download::ImportService;
 
     tracing::info!("ProcessMonitoredDownloads: checking for completed downloads");
 
-    let import_service = ImportService::new(db.clone());
+    let import_service = ImportService::new(db.clone(), media_config.cloned().unwrap_or_default());
 
     // Check for completed downloads
     let pending = import_service
@@ -1297,9 +1314,11 @@ async fn execute_process_downloads(
         match import_service.import(&item).await {
             Ok(result) if result.success => {
                 tracing::info!(
-                    "ProcessMonitoredDownloads: imported '{}' ({} episodes)",
+                    "ProcessMonitoredDownloads: imported '{}' ({} files, {} episodes, {} skipped)",
                     item.title,
-                    result.episode_ids.len()
+                    result.files_imported,
+                    result.episode_ids.len(),
+                    result.files_skipped
                 );
                 imported += 1;
 
@@ -1424,58 +1443,8 @@ fn is_video_file(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Parse episode numbers from filename, supporting multi-episode files
-/// E.g., "Show - S01E01E02E03 - Title.mkv" returns vec![(1, 1), (1, 2), (1, 3)]
-fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
-    let mut episodes = Vec::new();
-
-    // Try S01E01E02E03 format (multi-episode)
-    // First, find the season number
-    if let Some(season_match) = regex::Regex::new(r"[Ss](\d{1,2})")
-        .ok()
-        .and_then(|re| re.captures(filename))
-    {
-        if let Some(season) = season_match
-            .get(1)
-            .and_then(|m| m.as_str().parse::<i32>().ok())
-        {
-            // Find all episode numbers after the season marker
-            // Match pattern like S01E01E02E03 or S01E01-E02-E03
-            if let Ok(re) = regex::Regex::new(r"[Ss]\d{1,2}([Ee]\d{1,2})+") {
-                if let Some(full_match) = re.find(filename) {
-                    let episode_part = full_match.as_str();
-                    // Extract all episode numbers from the match
-                    if let Ok(ep_re) = regex::Regex::new(r"[Ee](\d{1,2})") {
-                        for cap in ep_re.captures_iter(episode_part) {
-                            if let Some(ep_num) =
-                                cap.get(1).and_then(|m| m.as_str().parse::<i32>().ok())
-                            {
-                                episodes.push((season, ep_num));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // If no episodes found, try 1x01 format (single episode only)
-    if episodes.is_empty() {
-        if let Some(caps) = regex::Regex::new(r"(\d{1,2})x(\d{1,2})")
-            .ok()
-            .and_then(|re| re.captures(filename))
-        {
-            if let (Some(season), Some(episode)) = (
-                caps.get(1).and_then(|m| m.as_str().parse::<i32>().ok()),
-                caps.get(2).and_then(|m| m.as_str().parse::<i32>().ok()),
-            ) {
-                episodes.push((season, episode));
-            }
-        }
-    }
-
-    episodes
-}
+/// Re-export from scanner module to avoid duplication
+use crate::core::scanner::parse_episodes_from_filename;
 
 /// Execute EpisodeSearch command - search indexers for specific episodes
 async fn execute_episode_search(
@@ -1484,10 +1453,13 @@ async fn execute_episode_search(
     event_bus: &crate::core::messaging::EventBus,
 ) -> Result<String, String> {
     use crate::core::datastore::repositories::{
-        EpisodeRepository, IndexerRepository, SeriesRepository,
+        EpisodeRepository, IndexerRepository, QualityProfileRepository, SeriesRepository,
+        TrackedDownloadRepository,
     };
     use crate::core::indexers::search::IndexerSearchService;
     use crate::core::indexers::SearchCriteria;
+    use crate::core::profiles::QualityProfileItem;
+    use crate::core::queue::service::TrackedDownloadService;
 
     // Parse episode IDs from body
     let episode_ids: Vec<i64> = body
@@ -1535,8 +1507,24 @@ async fn execute_episode_search(
 
     let episode_repo = EpisodeRepository::new(db.clone());
     let series_repo = SeriesRepository::new(db.clone());
+    let quality_repo = QualityProfileRepository::new(db.clone());
+    let tracked_repo = TrackedDownloadRepository::new(db.clone());
+    let tracked_service = TrackedDownloadService::new(db.clone());
+
+    // Pre-load quality profiles for fast lookup
+    let all_profiles = quality_repo.get_all().await.unwrap_or_default();
+    let profiles: std::collections::HashMap<i64, _> =
+        all_profiles.into_iter().map(|p| (p.id, p)).collect();
+
+    // Get currently downloading episode IDs to avoid duplicate grabs
+    let active_downloads = tracked_repo.get_all_active().await.unwrap_or_default();
+    let downloading_episode_ids: std::collections::HashSet<i64> = active_downloads
+        .iter()
+        .flat_map(|d| serde_json::from_str::<Vec<i64>>(&d.episode_ids).unwrap_or_default())
+        .collect();
 
     let mut total_releases = 0;
+    let mut grabbed = 0u32;
 
     for episode_id in &episode_ids {
         // Get episode from database
@@ -1616,6 +1604,114 @@ async fn execute_episode_search(
                         release.quality.quality
                     );
                 }
+
+                // Auto-grab: check if episode is wanted and grab best matching release
+                let dominated_check = episode.monitored
+                    && !episode.has_file
+                    && episode.air_date_utc.is_some_and(|d| d < chrono::Utc::now())
+                    && !downloading_episode_ids.contains(episode_id);
+
+                tracing::info!(
+                    "EpisodeSearch: auto-grab check ep={}: monitored={}, has_file={}, aired={}, not_downloading={}, pass={}",
+                    episode_id,
+                    episode.monitored,
+                    episode.has_file,
+                    episode.air_date_utc.is_some_and(|d| d < chrono::Utc::now()),
+                    !downloading_episode_ids.contains(episode_id),
+                    dominated_check
+                );
+
+                if dominated_check {
+                    if let Some(profile) = profiles.get(&series.quality_profile_id) {
+                        let profile_items: Vec<QualityProfileItem> =
+                            serde_json::from_str(&profile.items).unwrap_or_default();
+
+                        tracing::info!(
+                            "EpisodeSearch: quality profile '{}' (id={}): cutoff={}, {} items",
+                            profile.name,
+                            profile.id,
+                            profile.cutoff,
+                            profile_items.len()
+                        );
+
+                        // A profile with cutoff=0 and only "Unknown" allowed means "accept any quality"
+                        let accept_any = profile.cutoff == 0
+                            && profile_items
+                                .iter()
+                                .all(|item| !item.allowed || item.quality.id == 0);
+
+                        // Find best release that passes quality checks
+                        // Releases are already sorted by quality (best first) from IndexerSearchService
+                        for mut release in releases {
+                            let release_weight = release.quality.quality.weight();
+
+                            if !accept_any {
+                                let is_quality_allowed = profile_items.iter().any(|item| {
+                                    item.allowed
+                                        && (item.quality.id == release_weight
+                                            || item.items.iter().any(|q| q.id == release_weight))
+                                });
+
+                                if !is_quality_allowed {
+                                    tracing::debug!(
+                                        "EpisodeSearch: release '{}' weight={} rejected (quality not allowed)",
+                                        release.title,
+                                        release_weight
+                                    );
+                                    continue;
+                                }
+
+                                if release_weight < profile.cutoff {
+                                    tracing::debug!(
+                                        "EpisodeSearch: release '{}' weight={} rejected (below cutoff {})",
+                                        release.title,
+                                        release_weight,
+                                        profile.cutoff
+                                    );
+                                    continue;
+                                }
+                            }
+
+                            // Grab this release
+                            release.series_id = Some(series.id);
+                            tracing::info!(
+                                "EpisodeSearch auto-grab: '{}' → {} S{:02}E{:02} ({:?})",
+                                release.title,
+                                series.title,
+                                episode.season_number,
+                                episode.episode_number,
+                                release.quality.quality
+                            );
+
+                            match tracked_service
+                                .grab_release(&release, vec![*episode_id])
+                                .await
+                            {
+                                Ok(tracked_id) => {
+                                    grabbed += 1;
+                                    tracing::info!(
+                                        "EpisodeSearch: grabbed successfully (tracked_id={})",
+                                        tracked_id
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "EpisodeSearch: failed to grab '{}': {}",
+                                        release.title,
+                                        e
+                                    );
+                                }
+                            }
+                            break; // Only grab the best matching release
+                        }
+                    } else {
+                        tracing::warn!(
+                            "EpisodeSearch: quality profile {} not found for series '{}'",
+                            series.quality_profile_id,
+                            series.title
+                        );
+                    }
+                }
             }
             Err(e) => {
                 tracing::error!(
@@ -1640,9 +1736,10 @@ async fn execute_episode_search(
     }
 
     Ok(format!(
-        "Episode search completed for {} episodes, found {} releases",
+        "Episode search completed for {} episodes, found {} releases, grabbed {}",
         episode_ids.len(),
-        total_releases
+        total_releases,
+        grabbed
     ))
 }
 

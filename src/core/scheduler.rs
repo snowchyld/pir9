@@ -26,6 +26,7 @@ pub struct JobScheduler {
     db: Database,
     jobs: Arc<RwLock<Vec<ScheduledJob>>>,
     metadata_service: Option<crate::core::metadata::MetadataService>,
+    media_config: Option<crate::core::configuration::MediaConfig>,
 }
 
 impl JobScheduler {
@@ -34,12 +35,18 @@ impl JobScheduler {
             db,
             jobs: Arc::new(RwLock::new(Vec::new())),
             metadata_service: None,
+            media_config: None,
         })
     }
 
     /// Set the metadata service for IMDB-enriched refreshes
     pub fn set_metadata_service(&mut self, service: crate::core::metadata::MetadataService) {
         self.metadata_service = Some(service);
+    }
+
+    /// Set the media configuration for episode naming during imports
+    pub fn set_media_config(&mut self, config: crate::core::configuration::MediaConfig) {
+        self.media_config = Some(config);
     }
 
     /// Initialize default scheduled jobs
@@ -128,8 +135,9 @@ impl JobScheduler {
             if job.enabled && job.interval_minutes > 0 {
                 let db = self.db.clone();
                 let metadata_service = self.metadata_service.clone();
+                let media_config = self.media_config.clone();
                 tokio::spawn(async move {
-                    run_job_loop(job, db, metadata_service).await;
+                    run_job_loop(job, db, metadata_service, media_config).await;
                 });
             }
         }
@@ -151,7 +159,13 @@ impl JobScheduler {
             .context("Job not found")?;
 
         info!("Executing job: {}", job.name);
-        execute_job_command(&job.command, &self.db, self.metadata_service.as_ref()).await?;
+        execute_job_command(
+            &job.command,
+            &self.db,
+            self.metadata_service.as_ref(),
+            self.media_config.as_ref(),
+        )
+        .await?;
 
         Ok(())
     }
@@ -172,6 +186,7 @@ async fn run_job_loop(
     job: ScheduledJob,
     db: Database,
     metadata_service: Option<crate::core::metadata::MetadataService>,
+    media_config: Option<crate::core::configuration::MediaConfig>,
 ) {
     let interval = tokio::time::Duration::from_secs(job.interval_minutes as u64 * 60);
     let mut interval_timer = tokio::time::interval(interval);
@@ -184,7 +199,14 @@ async fn run_job_loop(
     loop {
         interval_timer.tick().await;
 
-        if let Err(e) = execute_job_command(&job.command, &db, metadata_service.as_ref()).await {
+        if let Err(e) = execute_job_command(
+            &job.command,
+            &db,
+            metadata_service.as_ref(),
+            media_config.as_ref(),
+        )
+        .await
+        {
             error!("Job '{}' failed: {}", job.name, e);
         }
     }
@@ -195,6 +217,7 @@ async fn execute_job_command(
     command: &JobCommand,
     db: &Database,
     metadata_service: Option<&crate::core::metadata::MetadataService>,
+    media_config: Option<&crate::core::configuration::MediaConfig>,
 ) -> Result<()> {
     match command {
         JobCommand::RssSync => {
@@ -204,7 +227,7 @@ async fn execute_job_command(
             execute_refresh_series(db, metadata_service).await?;
         }
         JobCommand::DownloadedEpisodesScan => {
-            execute_downloaded_episodes_scan(db).await?;
+            execute_downloaded_episodes_scan(db, media_config).await?;
         }
         JobCommand::Housekeeping => {
             execute_housekeeping(db).await?;
@@ -322,23 +345,31 @@ async fn execute_rss_sync(db: &Database) -> Result<()> {
         let profile_items: Vec<QualityProfileItem> =
             serde_json::from_str(&profile.items).unwrap_or_default();
 
+        // A profile with cutoff=0 and only "Unknown" allowed means "accept any quality"
+        let accept_any = profile.cutoff == 0
+            && profile_items
+                .iter()
+                .all(|item| !item.allowed || item.quality.id == 0);
+
         // 4. Check if the release quality is allowed by the profile
         let release_weight = release.quality.quality.weight();
-        let is_quality_allowed = profile_items.iter().any(|item| {
-            item.allowed
-                && (item.quality.id == release_weight
-                    || item.items.iter().any(|q| q.id == release_weight))
-        });
+        if !accept_any {
+            let is_quality_allowed = profile_items.iter().any(|item| {
+                item.allowed
+                    && (item.quality.id == release_weight
+                        || item.items.iter().any(|q| q.id == release_weight))
+            });
 
-        if !is_quality_allowed {
-            rejected += 1;
-            continue;
-        }
+            if !is_quality_allowed {
+                rejected += 1;
+                continue;
+            }
 
-        // 5. Check quality meets cutoff (cutoff is stored as quality weight/ID)
-        if release_weight < profile.cutoff {
-            rejected += 1;
-            continue;
+            // 5. Check quality meets cutoff (cutoff is stored as quality weight/ID)
+            if release_weight < profile.cutoff {
+                rejected += 1;
+                continue;
+            }
         }
 
         // 6. Find matching wanted episodes
@@ -509,10 +540,13 @@ async fn execute_process_download_queue(db: &Database) -> Result<()> {
 }
 
 /// Downloaded Episodes Scan: Check download clients for completed downloads and import them
-async fn execute_downloaded_episodes_scan(db: &Database) -> Result<()> {
+async fn execute_downloaded_episodes_scan(
+    db: &Database,
+    media_config: Option<&crate::core::configuration::MediaConfig>,
+) -> Result<()> {
     info!("Executing downloaded episodes scan...");
 
-    let import_service = ImportService::new(db.clone());
+    let import_service = ImportService::new(db.clone(), media_config.cloned().unwrap_or_default());
     let results = import_service.process_completed_downloads(true).await?;
 
     let succeeded = results.iter().filter(|r| r.success).count();

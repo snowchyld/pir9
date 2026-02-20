@@ -113,7 +113,7 @@ pub async fn get_logs(
 }
 
 pub async fn get_log_files(State(state): State<Arc<AppState>>) -> Json<Vec<LogFileResource>> {
-    let log_dir = &state.config.paths.log_dir;
+    let log_dir = state.config.read().paths.log_dir.clone();
     let mut files = Vec::new();
     let mut id = 1;
 

@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 
 use crate::core::messaging::ScannedFile;
+use crate::core::parser::normalize_title;
 
 pub use consumer::{create_scan_request, ScanResultConsumer};
 pub use jobs::JobTrackerService;
@@ -109,7 +110,119 @@ pub fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
         }
     }
 
+    // Try "part N" / "part.N" / "pt N" — common for miniseries, maps to S01E0N
+    if episodes.is_empty() {
+        if let Some(caps) = Regex::new(r"(?i)[\.\s_-](?:part|pt)[\.\s_-]?(\d{1,2})")
+            .ok()
+            .and_then(|re| re.captures(filename))
+        {
+            if let Some(ep) = caps.get(1).and_then(|m| m.as_str().parse::<i32>().ok()) {
+                episodes.push((1, ep));
+            }
+        }
+    }
+
+    // Try bare "Ep01" / "EP02" / "Episode 3" — assume Season 1
+    if episodes.is_empty() {
+        if let Some(caps) =
+            Regex::new(r"(?i)(?:^|[\.\s_-])(?:Ep|Episode)[\.\s_-]?(\d{1,3})(?:[\.\s_-]|$)")
+                .ok()
+                .and_then(|re| re.captures(filename))
+        {
+            if let Some(ep) = caps.get(1).and_then(|m| m.as_str().parse::<i32>().ok()) {
+                episodes.push((1, ep));
+            }
+        }
+    }
+
+    // Try S01M01 / S07M02 format (specials/movies) → maps to season 0
+    if episodes.is_empty() {
+        if let Some(caps) = Regex::new(r"[Ss]\d{1,2}[Mm](\d{1,2})")
+            .ok()
+            .and_then(|re| re.captures(filename))
+        {
+            if let Some(ep) = caps.get(1).and_then(|m| m.as_str().parse::<i32>().ok()) {
+                episodes.push((0, ep));
+            }
+        }
+    }
+
     episodes
+}
+
+/// Quality/codec/source tokens to strip from filenames when extracting title words.
+const QUALITY_TOKENS: &[&str] = &[
+    "1080p", "720p", "480p", "2160p", "4k", "hdtv", "web", "webdl", "webrip", "bluray", "bdrip",
+    "dvdrip", "dvd", "xvid", "x264", "x265", "h264", "h265", "hevc", "aac", "ac3", "dd51", "dts",
+    "flac", "mp3", "amzn", "dsnp", "nf", "hulu", "atvp", "hmax", "proper", "repack", "rerip",
+    "internal", "mkv", "mp4", "avi",
+];
+
+/// Match a filename against season 0 (special) episode titles.
+///
+/// Extracts the "title portion" of the filename (after removing series name,
+/// quality tags, and release group) and compares it against each special's title
+/// using word overlap. Returns the best match if score is above threshold.
+pub fn match_special_by_title(
+    filename: &str,
+    series_title: &str,
+    specials: &[(i32, &str)], // (episode_number, title)
+) -> Option<(i32, i32)> {
+    // Normalize filename: dots/dashes/underscores → spaces, lowercase, strip articles
+    let normalized_filename = normalize_title(filename);
+    let normalized_series = normalize_title(series_title);
+
+    // Remove the series title from the filename text
+    let remainder = normalized_filename
+        .replace(&normalized_series, "")
+        .trim()
+        .to_string();
+
+    // Extract content words, removing quality/codec tokens and short noise
+    let filename_words: Vec<&str> = remainder
+        .split_whitespace()
+        .filter(|w| w.len() >= 2)
+        .filter(|w| !QUALITY_TOKENS.contains(&w.to_lowercase().as_str()))
+        .filter(|w| w.parse::<i32>().is_err()) // remove bare numbers (season/episode digits)
+        .collect();
+
+    if filename_words.is_empty() {
+        return None;
+    }
+
+    let mut best_match: Option<(i32, f64)> = None;
+
+    for &(ep_num, ep_title) in specials {
+        let normalized_ep_title = normalize_title(ep_title);
+        let title_words: Vec<&str> = normalized_ep_title.split_whitespace().collect();
+
+        // Skip single-word titles (too ambiguous — e.g., "Pilot")
+        if title_words.len() < 2 {
+            continue;
+        }
+
+        // Count how many of the special's title words appear in the filename
+        let matched = title_words
+            .iter()
+            .filter(|tw| filename_words.iter().any(|fw| fw == *tw))
+            .count();
+
+        let ratio = matched as f64 / title_words.len() as f64;
+
+        // Require >= 60% overlap
+        if ratio >= 0.6 {
+            if let Some((_, best_ratio)) = best_match {
+                if ratio > best_ratio {
+                    best_match = Some((ep_num, ratio));
+                }
+                // On tie, keep first (lowest episode number — already iterated in order)
+            } else {
+                best_match = Some((ep_num, ratio));
+            }
+        }
+    }
+
+    best_match.map(|(ep_num, _)| (0, ep_num))
 }
 
 /// Extract release group from filename
@@ -297,6 +410,126 @@ mod tests {
                 filename
             );
         }
+    }
+
+    #[test]
+    fn test_parse_part_format() {
+        let cases = vec![
+            ("The.Diamond.Hunters.2001.part.1.mkv", vec![(1, 1)]),
+            ("The.Diamond.Hunters.2001.part.2.mkv", vec![(1, 2)]),
+            ("Miniseries.Part.3.720p.mkv", vec![(1, 3)]),
+            ("Show.pt.1.mkv", vec![(1, 1)]),
+            ("Show - Part 2.mkv", vec![(1, 2)]),
+        ];
+
+        for (filename, expected) in cases {
+            assert_eq!(
+                parse_episodes_from_filename(filename),
+                expected,
+                "Failed for: {}",
+                filename
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_ep_format() {
+        let cases = vec![
+            ("Ep01.mp4", vec![(1, 1)]),
+            ("EP02.mkv", vec![(1, 2)]),
+            ("Episode 3.mp4", vec![(1, 3)]),
+            ("Show.Episode.05.mkv", vec![(1, 5)]),
+        ];
+
+        for (filename, expected) in cases {
+            assert_eq!(
+                parse_episodes_from_filename(filename),
+                expected,
+                "Failed for: {}",
+                filename
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_special_movie_format() {
+        let cases = vec![
+            (
+                "MacGyver.S07M01.Lost.Treasure.of.Atlantis.DVDRip.XviD.mkv",
+                vec![(0, 1)],
+            ),
+            (
+                "MacGyver.S07M02.Trail.to.Doomsday.DVDRip.XviD.mkv",
+                vec![(0, 2)],
+            ),
+            ("Show.S02M03.Special.Episode.mkv", vec![(0, 3)]),
+            ("show.s01m01.holiday.special.mkv", vec![(0, 1)]),
+        ];
+
+        for (filename, expected) in cases {
+            assert_eq!(
+                parse_episodes_from_filename(filename),
+                expected,
+                "Failed for: {}",
+                filename
+            );
+        }
+    }
+
+    #[test]
+    fn test_match_special_by_title_basic() {
+        let specials = vec![(1, "Lost Treasure of Atlantis"), (2, "Trail to Doomsday")];
+
+        // Full title match
+        let result = match_special_by_title(
+            "MacGyver.Lost.Treasure.of.Atlantis.DVDRip.XviD.mkv",
+            "MacGyver",
+            &specials,
+        );
+        assert_eq!(result, Some((0, 1)));
+
+        // Second special
+        let result = match_special_by_title(
+            "MacGyver.Trail.to.Doomsday.DVDRip.XviD.mkv",
+            "MacGyver",
+            &specials,
+        );
+        assert_eq!(result, Some((0, 2)));
+    }
+
+    #[test]
+    fn test_match_special_by_title_no_match() {
+        let specials = vec![(1, "Lost Treasure of Atlantis"), (2, "Trail to Doomsday")];
+
+        // Completely unrelated filename
+        let result = match_special_by_title("MacGyver.S03E05.720p.HDTV.mkv", "MacGyver", &specials);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_match_special_by_title_single_word_skipped() {
+        let specials = vec![
+            (1, "Pilot"), // Single word — should be skipped
+        ];
+
+        let result = match_special_by_title("Show.Pilot.720p.mkv", "Show", &specials);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_match_special_by_title_best_match_wins() {
+        let specials = vec![
+            (1, "Lost Treasure of Atlantis"),
+            (2, "Lost Treasure of the Deep"),
+        ];
+
+        // "Atlantis" distinguishes special 1 from special 2
+        let result = match_special_by_title(
+            "MacGyver.Lost.Treasure.of.Atlantis.DVDRip.mkv",
+            "MacGyver",
+            &specials,
+        );
+        assert_eq!(result, Some((0, 1)));
     }
 
     #[test]

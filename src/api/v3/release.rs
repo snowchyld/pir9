@@ -356,6 +356,15 @@ pub async fn get_releases(
 
     tracing::info!("Interactive search returned {} releases", releases.len());
 
+    // Stamp the pir9 series_id onto each release so grab can track it
+    let releases: Vec<ReleaseInfo> = releases
+        .into_iter()
+        .map(|mut r| {
+            r.series_id = Some(series_id);
+            r
+        })
+        .collect();
+
     // Cache results for grab
     {
         let mut cache = RELEASE_CACHE.write().await;

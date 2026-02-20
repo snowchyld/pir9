@@ -37,19 +37,31 @@ interface CutoffResponse {
   records: CutoffEpisode[];
 }
 
+type SortKey = 'seriesTitle' | 'episodeNumber' | 'title' | 'airDateUtc';
+
 @customElement('cutoff-unmet-page')
 export class CutoffUnmetPage extends BaseComponent {
   private page = signal(1);
   private pageSize = 25;
+  private sortKey = signal<SortKey>('airDateUtc');
+  private sortDirection = signal<'ascending' | 'descending'>('descending');
 
   private cutoffQuery = createQuery({
-    queryKey: ['/wanted/cutoff', this.page.value, this.pageSize],
+    queryKey: [
+      '/wanted/cutoff',
+      this.page.value,
+      this.pageSize,
+      this.sortKey.value,
+      this.sortDirection.value,
+    ],
     queryFn: () =>
       http.get<CutoffResponse>('/wanted/cutoff', {
         params: {
           page: this.page.value,
           pageSize: this.pageSize,
           monitored: true,
+          sortKey: this.sortKey.value,
+          sortDirection: this.sortDirection.value,
         },
       }),
   });
@@ -67,6 +79,8 @@ export class CutoffUnmetPage extends BaseComponent {
 
   protected onInit(): void {
     this.watch(this.page);
+    this.watch(this.sortKey);
+    this.watch(this.sortDirection);
     this.watch(this.cutoffQuery.data);
     this.watch(this.cutoffQuery.isLoading);
     this.watch(this.cutoffQuery.isError);
@@ -241,6 +255,24 @@ export class CutoffUnmetPage extends BaseComponent {
           background-color: var(--bg-card-alt);
         }
 
+        .cutoff-table th.sortable {
+          cursor: pointer;
+          user-select: none;
+        }
+
+        .cutoff-table th.sortable:hover {
+          color: var(--text-color);
+        }
+
+        .cutoff-table th.sorted {
+          color: var(--color-primary);
+        }
+
+        .sort-icon {
+          vertical-align: middle;
+          margin-left: 0.25rem;
+        }
+
         .cutoff-table tbody tr:hover td {
           background-color: var(--bg-table-row-hover);
         }
@@ -357,13 +389,23 @@ export class CutoffUnmetPage extends BaseComponent {
       `;
     }
 
+    const th = (label: string, key: SortKey): string => {
+      const isSorted = this.sortKey.value === key;
+      const icon = isSorted
+        ? this.sortDirection.value === 'ascending'
+          ? '<svg class="sort-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>'
+          : '<svg class="sort-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>'
+        : '';
+      return `<th class="sortable ${isSorted ? 'sorted' : ''}" onclick="this.closest('cutoff-unmet-page').handleSort('${key}')">${label}${icon}</th>`;
+    };
+
     return html`
       <table class="cutoff-table">
         <thead>
           <tr>
-            <th>Series</th>
-            <th>Episode</th>
-            <th>Title</th>
+            ${th('Series', 'seriesTitle')}
+            ${th('Episode', 'episodeNumber')}
+            ${th('Title', 'title')}
             <th>Current Quality</th>
             <th></th>
           </tr>
@@ -458,6 +500,17 @@ export class CutoffUnmetPage extends BaseComponent {
     if (episodeIds.length > 0) {
       this.searchMutation.mutate(episodeIds);
     }
+  }
+
+  handleSort(key: SortKey): void {
+    if (this.sortKey.value === key) {
+      this.sortDirection.set(this.sortDirection.value === 'ascending' ? 'descending' : 'ascending');
+    } else {
+      this.sortKey.set(key);
+      this.sortDirection.set('ascending');
+    }
+    this.page.set(1);
+    this.cutoffQuery.refetch();
   }
 
   goToPage(page: number): void {

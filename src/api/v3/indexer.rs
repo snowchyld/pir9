@@ -228,6 +228,46 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
                 Some("Comma-separated list of anime category IDs"),
             ));
         }
+        "Prowlarr" => {
+            fields.push(make_field(
+                0,
+                "baseUrl",
+                "URL",
+                "textbox",
+                settings.get("baseUrl").or(settings.get("url")).cloned(),
+                Some("Prowlarr URL (e.g. https://prowlarr.example.com)"),
+            ));
+            fields.push(make_field(
+                1,
+                "apiKey",
+                "API Key",
+                "textbox",
+                settings.get("apiKey").cloned(),
+                Some("Prowlarr API key"),
+            ));
+            fields.push(make_field(
+                2,
+                "categories",
+                "Categories",
+                "textbox",
+                settings
+                    .get("categories")
+                    .cloned()
+                    .or(Some(serde_json::json!("5000,5010,5020,5030,5040,5045"))),
+                Some("Comma-separated list of category IDs"),
+            ));
+            fields.push(make_field(
+                3,
+                "animeCategories",
+                "Anime Categories",
+                "textbox",
+                settings
+                    .get("animeCategories")
+                    .cloned()
+                    .or(Some(serde_json::json!("5070"))),
+                Some("Comma-separated list of anime category IDs"),
+            ));
+        }
         _ => {
             // Generic: dump all settings as fields
             if let Some(obj) = settings.as_object() {
@@ -532,7 +572,11 @@ pub async fn test_all_indexers(
 /// GET /api/v3/indexer/schema
 /// Get available indexer types (schemas)
 pub async fn get_indexer_schema() -> Json<Vec<IndexerResource>> {
-    let schemas = vec![create_newznab_schema(), create_torznab_schema()];
+    let schemas = vec![
+        create_newznab_schema(),
+        create_torznab_schema(),
+        create_prowlarr_schema(),
+    ];
 
     Json(schemas)
 }
@@ -678,6 +722,64 @@ fn create_torznab_schema() -> IndexerResource {
         implementation: "Torznab".to_string(),
         config_contract: "TorznabSettings".to_string(),
         info_link: Some("https://wiki.servarr.com/sonarr/supported#torznab".to_string()),
+        message: None,
+        tags: vec![],
+        presets: vec![],
+        enable_rss: true,
+        enable_automatic_search: true,
+        enable_interactive_search: true,
+        supports_rss: true,
+        supports_search: true,
+        protocol: "torrent".to_string(),
+        priority: 25,
+        season_search_maximum_single_episode_age: 0,
+        download_client_id: 0,
+    }
+}
+
+/// Create schema for Prowlarr indexer (native REST API)
+fn create_prowlarr_schema() -> IndexerResource {
+    IndexerResource {
+        id: 0,
+        name: "".to_string(),
+        fields: vec![
+            make_field(
+                0,
+                "baseUrl",
+                "Prowlarr URL",
+                "textbox",
+                None,
+                Some("Prowlarr URL (e.g. https://prowlarr.example.com)"),
+            ),
+            make_field(
+                1,
+                "apiKey",
+                "API Key",
+                "textbox",
+                None,
+                Some("Prowlarr API key"),
+            ),
+            make_field(
+                2,
+                "categories",
+                "Categories",
+                "textbox",
+                Some(serde_json::json!("5000,5010,5020,5030,5040,5045")),
+                Some("Comma-separated category IDs"),
+            ),
+            make_field(
+                3,
+                "animeCategories",
+                "Anime Categories",
+                "textbox",
+                Some(serde_json::json!("5070")),
+                Some("Comma-separated anime category IDs"),
+            ),
+        ],
+        implementation_name: "Prowlarr".to_string(),
+        implementation: "Prowlarr".to_string(),
+        config_contract: "ProwlarrSettings".to_string(),
+        info_link: Some("https://prowlarr.com/docs/api/".to_string()),
         message: None,
         tags: vec![],
         presets: vec![],

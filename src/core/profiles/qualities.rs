@@ -51,6 +51,27 @@ pub enum Quality {
 }
 
 impl Quality {
+    /// Get a human-readable display name matching the serde rename values
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Quality::Unknown => "Unknown",
+            Quality::SDTV => "SDTV",
+            Quality::Dvd => "DVD",
+            Quality::WebDl480p => "WEBDL-480p",
+            Quality::Hdtv720p => "HDTV-720p",
+            Quality::WebDl720p => "WEBDL-720p",
+            Quality::Bluray720p => "Bluray-720p",
+            Quality::Hdtv1080p => "HDTV-1080p",
+            Quality::WebDl1080p => "WEBDL-1080p",
+            Quality::Bluray1080p => "Bluray-1080p",
+            Quality::Bluray1080pRemux => "Bluray-1080p Remux",
+            Quality::WebDl2160p => "WEBDL-2160p",
+            Quality::Hdtv2160p => "HDTV-2160p",
+            Quality::Bluray2160p => "Bluray-2160p",
+            Quality::Bluray2160pRemux => "Bluray-2160p Remux",
+        }
+    }
+
     /// Get the resolution width for this quality
     pub fn resolution_width(&self) -> i32 {
         match self {

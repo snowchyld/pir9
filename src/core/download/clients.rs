@@ -9,6 +9,77 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
+/// Extract the info_hash from a magnet URI (`xt=urn:btih:<hash>`).
+///
+/// qBittorrent identifies torrents by their info_hash, so we need to
+/// extract it from the magnet link when adding torrents to use as the
+/// download_id for tracking.
+pub fn extract_btih_from_magnet(magnet: &str) -> Option<String> {
+    let query = magnet.strip_prefix("magnet:?").unwrap_or(magnet);
+    for param in query.split('&') {
+        if let Some(hash) = param.strip_prefix("xt=urn:btih:") {
+            let hash = hash.trim();
+            if !hash.is_empty() {
+                return Some(hash.to_lowercase());
+            }
+        }
+    }
+    None
+}
+
+/// Compute the info_hash from raw .torrent file bytes by SHA-1 hashing
+/// the bencoded `info` dictionary. Returns lowercase hex string.
+fn compute_info_hash_from_torrent(data: &[u8]) -> Option<String> {
+    use sha1::Digest;
+
+    let info_key = b"4:info";
+    let info_pos = data.windows(info_key.len()).position(|w| w == info_key)?;
+    let info_start = info_pos + info_key.len();
+
+    if data.get(info_start) != Some(&b'd') {
+        return None;
+    }
+
+    let info_end = bencode_end(data, info_start)?;
+    let hash = sha1::Sha1::digest(&data[info_start..info_end]);
+    Some(hex::encode(hash))
+}
+
+/// Find the end offset of a bencoded value starting at `pos`.
+fn bencode_end(data: &[u8], pos: usize) -> Option<usize> {
+    if pos >= data.len() {
+        return None;
+    }
+    match data[pos] {
+        b'i' => {
+            let end = data[pos..].iter().position(|&b| b == b'e')?;
+            Some(pos + end + 1)
+        }
+        b'l' => {
+            let mut cursor = pos + 1;
+            while cursor < data.len() && data[cursor] != b'e' {
+                cursor = bencode_end(data, cursor)?;
+            }
+            Some(cursor + 1)
+        }
+        b'd' => {
+            let mut cursor = pos + 1;
+            while cursor < data.len() && data[cursor] != b'e' {
+                cursor = bencode_end(data, cursor)?;
+                cursor = bencode_end(data, cursor)?;
+            }
+            Some(cursor + 1)
+        }
+        b'0'..=b'9' => {
+            let colon = data[pos..].iter().position(|&b| b == b':')?;
+            let len_str = std::str::from_utf8(&data[pos..pos + colon]).ok()?;
+            let len: usize = len_str.parse().ok()?;
+            Some(pos + colon + 1 + len)
+        }
+        _ => None,
+    }
+}
+
 /// Download client trait
 #[async_trait::async_trait]
 pub trait DownloadClient: Send + Sync {
@@ -197,12 +268,23 @@ impl QBittorrentClient {
     async fn ensure_session(&self) -> Result<()> {
         // Try a simple API call to check if session is valid
         let url = format!("{}/api/v2/app/version", self.base_url);
+        tracing::debug!("qBittorrent: checking session via {}", url);
         let response = self.http_client.get(&url).send().await;
 
         match response {
-            Ok(r) if r.status().is_success() => Ok(()),
-            _ => {
-                // Need to login
+            Ok(r) if r.status().is_success() => {
+                tracing::debug!("qBittorrent: existing session valid");
+                Ok(())
+            }
+            Ok(r) => {
+                tracing::debug!(
+                    "qBittorrent: session check returned HTTP {}, re-logging in",
+                    r.status()
+                );
+                self.login().await
+            }
+            Err(e) => {
+                tracing::debug!("qBittorrent: session check failed: {}, re-logging in", e);
                 self.login().await
             }
         }
@@ -213,6 +295,7 @@ impl QBittorrentClient {
         self.ensure_session().await?;
 
         let url = format!("{}{}", self.base_url, endpoint);
+        tracing::debug!("qBittorrent GET {}", url);
         let response = self
             .http_client
             .get(&url)
@@ -220,8 +303,11 @@ impl QBittorrentClient {
             .await
             .context("qBittorrent request failed")?;
 
-        if response.status() == reqwest::StatusCode::FORBIDDEN {
-            // Session expired, try re-login
+        let status = response.status();
+        tracing::debug!("qBittorrent GET {} -> HTTP {}", endpoint, status);
+
+        if status == reqwest::StatusCode::FORBIDDEN {
+            tracing::debug!("qBittorrent: 403 on GET {}, re-logging in", endpoint);
             self.login().await?;
             let response = self
                 .http_client
@@ -229,11 +315,28 @@ impl QBittorrentClient {
                 .send()
                 .await
                 .context("qBittorrent request failed after re-login")?;
-            Ok(response.text().await?)
-        } else if response.status().is_success() {
-            Ok(response.text().await?)
+            let retry_status = response.status();
+            let body = response.text().await?;
+            tracing::debug!(
+                "qBittorrent GET {} (retry) -> HTTP {} ({} bytes)",
+                endpoint,
+                retry_status,
+                body.len()
+            );
+            Ok(body)
+        } else if status.is_success() {
+            let body = response.text().await?;
+            tracing::debug!("qBittorrent GET {} -> {} bytes", endpoint, body.len());
+            Ok(body)
         } else {
-            anyhow::bail!("qBittorrent API error: {}", response.status())
+            let body = response.text().await.unwrap_or_default();
+            tracing::debug!(
+                "qBittorrent GET {} -> HTTP {} body={}",
+                endpoint,
+                status,
+                &body[..body.len().min(500)]
+            );
+            anyhow::bail!("qBittorrent API error: {}", status)
         }
     }
 
@@ -242,6 +345,7 @@ impl QBittorrentClient {
         self.ensure_session().await?;
 
         let url = format!("{}{}", self.base_url, endpoint);
+        tracing::debug!("qBittorrent POST {} params={:?}", endpoint, params);
         let response = self
             .http_client
             .post(&url)
@@ -250,7 +354,11 @@ impl QBittorrentClient {
             .await
             .context("qBittorrent request failed")?;
 
-        if response.status() == reqwest::StatusCode::FORBIDDEN {
+        let status = response.status();
+        tracing::debug!("qBittorrent POST {} -> HTTP {}", endpoint, status);
+
+        if status == reqwest::StatusCode::FORBIDDEN {
+            tracing::debug!("qBittorrent: 403 on POST {}, re-logging in", endpoint);
             self.login().await?;
             let response = self
                 .http_client
@@ -260,10 +368,17 @@ impl QBittorrentClient {
                 .await
                 .context("qBittorrent request failed after re-login")?;
             Ok(response.text().await?)
-        } else if response.status().is_success() {
+        } else if status.is_success() {
             Ok(response.text().await?)
         } else {
-            anyhow::bail!("qBittorrent API error: {}", response.status())
+            let body = response.text().await.unwrap_or_default();
+            tracing::debug!(
+                "qBittorrent POST {} -> HTTP {} body={}",
+                endpoint,
+                status,
+                &body[..body.len().min(500)]
+            );
+            anyhow::bail!("qBittorrent API error: {}", status)
         }
     }
 }
@@ -281,6 +396,7 @@ struct QBTorrentInfo {
     state: String,
     category: Option<String>,
     save_path: Option<String>,
+    content_path: Option<String>,
     #[serde(default)]
     amount_left: i64,
 }
@@ -326,7 +442,7 @@ impl QBTorrentInfo {
                 None
             },
             error_message: None,
-            output_path: self.save_path.clone(),
+            output_path: self.content_path.clone().or_else(|| self.save_path.clone()),
             category: self.category.clone(),
         }
     }
@@ -343,17 +459,27 @@ impl DownloadClient for QBittorrentClient {
     }
 
     async fn test(&self) -> Result<()> {
+        tracing::debug!("qBittorrent: testing connection to {}", self.base_url);
         self.login().await?;
-        self.get_version().await?;
+        let version = self.get_version().await?;
+        tracing::debug!("qBittorrent: test successful, version={}", version);
         Ok(())
     }
 
     async fn get_version(&self) -> Result<String> {
         let version = self.get("/api/v2/app/version").await?;
-        Ok(version.trim().to_string())
+        let version = version.trim().to_string();
+        tracing::debug!("qBittorrent: version={}", version);
+        Ok(version)
     }
 
     async fn add_from_url(&self, url: &str, options: DownloadOptions) -> Result<String> {
+        tracing::debug!(
+            "qBittorrent: adding torrent url={} category={:?} dir={:?}",
+            &url[..url.len().min(100)],
+            options.category,
+            options.download_dir
+        );
         self.ensure_session().await?;
 
         let api_url = format!("{}/api/v2/torrents/add", self.base_url);
@@ -375,18 +501,48 @@ impl DownloadClient for QBittorrentClient {
             .await
             .context("Failed to add torrent")?;
 
-        if response.status().is_success() {
-            // qBittorrent doesn't return the hash, we need to query for it
-            // For now, return a placeholder - in real usage, we'd need to extract from magnet/URL
-            Ok("added".to_string())
+        let status = response.status();
+        if status.is_success() {
+            // qBittorrent returns "Ok." with no hash; generate a unique ID
+            let download_id = format!("qbt-{}", uuid::Uuid::new_v4());
+            tracing::debug!(
+                "qBittorrent: torrent added successfully (HTTP {}), id={}",
+                status,
+                download_id
+            );
+            Ok(download_id)
         } else {
-            anyhow::bail!("Failed to add torrent: {}", response.status())
+            let body = response.text().await.unwrap_or_default();
+            tracing::debug!(
+                "qBittorrent: add torrent failed HTTP {} body={}",
+                status,
+                body
+            );
+            anyhow::bail!("Failed to add torrent: {}", status)
         }
     }
 
     async fn add_from_magnet(&self, magnet: &str, options: DownloadOptions) -> Result<String> {
-        // Magnet links are added the same way as URLs in qBittorrent
-        self.add_from_url(magnet, options).await
+        // Extract the real info_hash from the magnet URI so we can track
+        // the torrent by the same ID that qBittorrent uses internally.
+        let info_hash = extract_btih_from_magnet(magnet);
+
+        // Add to qBittorrent via the URL endpoint (magnet URIs are valid URLs for qBT)
+        self.add_from_url(magnet, options).await?;
+
+        // Return the real info_hash instead of the generated UUID
+        match info_hash {
+            Some(hash) => {
+                tracing::debug!("qBittorrent: using info_hash from magnet: {}", hash);
+                Ok(hash)
+            }
+            None => {
+                tracing::warn!(
+                    "qBittorrent: could not extract info_hash from magnet URI, falling back to UUID"
+                );
+                Ok(format!("qbt-{}", uuid::Uuid::new_v4()))
+            }
+        }
     }
 
     async fn add_from_file(
@@ -395,6 +551,13 @@ impl DownloadClient for QBittorrentClient {
         filename: &str,
         options: DownloadOptions,
     ) -> Result<String> {
+        tracing::debug!(
+            "qBittorrent: adding torrent file={} size={} category={:?} dir={:?}",
+            filename,
+            file_data.len(),
+            options.category,
+            options.download_dir
+        );
         self.ensure_session().await?;
 
         let api_url = format!("{}/api/v2/torrents/add", self.base_url);
@@ -420,10 +583,29 @@ impl DownloadClient for QBittorrentClient {
             .await
             .context("Failed to add torrent file")?;
 
-        if response.status().is_success() {
-            Ok("added".to_string())
+        let status = response.status();
+        if status.is_success() {
+            // Compute info_hash from the torrent file by SHA-1 hashing the
+            // bencoded `info` dictionary — same approach as torrent_bytes_to_magnet().
+            let download_id = compute_info_hash_from_torrent(file_data)
+                .unwrap_or_else(|| {
+                    tracing::warn!("qBittorrent: could not extract info_hash from torrent file, falling back to UUID");
+                    format!("qbt-{}", uuid::Uuid::new_v4())
+                });
+            tracing::debug!(
+                "qBittorrent: torrent file added successfully (HTTP {}), id={}",
+                status,
+                download_id
+            );
+            Ok(download_id)
         } else {
-            anyhow::bail!("Failed to add torrent: {}", response.status())
+            let body = response.text().await.unwrap_or_default();
+            tracing::debug!(
+                "qBittorrent: add torrent file failed HTTP {} body={}",
+                status,
+                body
+            );
+            anyhow::bail!("Failed to add torrent: {}", status)
         }
     }
 
@@ -432,20 +614,48 @@ impl DownloadClient for QBittorrentClient {
         let torrents: Vec<QBTorrentInfo> =
             serde_json::from_str(&body).context("Failed to parse qBittorrent response")?;
 
+        tracing::debug!(
+            "qBittorrent: get_downloads returned {} torrents",
+            torrents.len()
+        );
+        for t in &torrents {
+            tracing::debug!(
+                "qBittorrent:   {} state={} progress={:.1}% size={} left={} category={:?}",
+                &t.hash[..t.hash.len().min(8)],
+                t.state,
+                t.progress * 100.0,
+                t.size,
+                t.amount_left,
+                t.category
+            );
+        }
+
         Ok(torrents.iter().map(|t| t.to_download_status()).collect())
     }
 
     async fn get_download(&self, id: &str) -> Result<Option<DownloadStatus>> {
+        tracing::debug!("qBittorrent: get_download hash={}", id);
         let body = self
             .get(&format!("/api/v2/torrents/info?hashes={}", id))
             .await?;
         let torrents: Vec<QBTorrentInfo> =
             serde_json::from_str(&body).context("Failed to parse qBittorrent response")?;
 
-        Ok(torrents.first().map(|t| t.to_download_status()))
+        let result = torrents.first().map(|t| t.to_download_status());
+        tracing::debug!(
+            "qBittorrent: get_download hash={} found={}",
+            id,
+            result.is_some()
+        );
+        Ok(result)
     }
 
     async fn remove(&self, id: &str, delete_files: bool) -> Result<()> {
+        tracing::debug!(
+            "qBittorrent: removing hash={} delete_files={}",
+            id,
+            delete_files
+        );
         let delete_files_str = if delete_files { "true" } else { "false" };
         self.post_form(
             "/api/v2/torrents/delete",
@@ -456,6 +666,7 @@ impl DownloadClient for QBittorrentClient {
     }
 
     async fn pause(&self, id: &str) -> Result<()> {
+        tracing::debug!("qBittorrent: pausing hash={}", id);
         self.post_form("/api/v2/torrents/pause", &[("hashes", id)])
             .await?;
         Ok(())
@@ -1039,7 +1250,7 @@ impl DownloadClient for NzbgetClient {
     }
 
     async fn add_from_url(&self, url: &str, options: DownloadOptions) -> Result<String> {
-        let category = options.category.unwrap_or_else(|| "tv-sonarr".to_string());
+        let category = options.category.unwrap_or_else(|| "sonarr".to_string());
 
         // NZBGet append params: (NZBFilename, NZBContent, Category, Priority, DupeKey, DupeScore, DupeMode, PPParameters)
         // When NZBContent is empty string and NZBFilename is a URL, NZBGet downloads from the URL
@@ -1081,7 +1292,7 @@ impl DownloadClient for NzbgetClient {
     ) -> Result<String> {
         use base64::{engine::general_purpose, Engine as _};
 
-        let category = options.category.unwrap_or_else(|| "tv-sonarr".to_string());
+        let category = options.category.unwrap_or_else(|| "sonarr".to_string());
         let encoded = general_purpose::STANDARD.encode(file_data);
 
         let result = self

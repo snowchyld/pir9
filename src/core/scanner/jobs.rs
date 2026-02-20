@@ -428,7 +428,9 @@ impl JobTrackerService {
         use crate::core::datastore::repositories::{
             EpisodeFileRepository, EpisodeRepository, SeriesRepository,
         };
-        use crate::core::mediafiles::MediaAnalyzer;
+        use crate::core::mediafiles::{
+            compute_file_hash, derive_quality_from_media, MediaAnalyzer,
+        };
         use crate::core::scanner;
         use chrono::Utc;
         use std::path::Path;
@@ -470,19 +472,26 @@ impl JobTrackerService {
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|_| file.filename.clone());
 
-                let quality_json = serde_json::json!({
-                    "quality": {
-                        "id": 4,
-                        "name": "HDTV-720p",
-                        "source": "television",
-                        "resolution": 720
-                    },
-                    "revision": {"version": 1, "real": 0, "isRepack": false}
-                });
-
                 let languages_json = serde_json::json!([{"id": 1, "name": "English"}]);
 
-                let media_info = MediaAnalyzer::analyze_to_json(Path::new(&file_path_str)).await;
+                // Real media analysis via FFmpeg probe
+                let media_info_result = MediaAnalyzer::analyze(Path::new(&file_path_str)).await;
+                let media_info = media_info_result
+                    .as_ref()
+                    .ok()
+                    .and_then(|info| serde_json::to_string(info).ok());
+
+                // Quality derived from actual resolution
+                let quality_json = match &media_info_result {
+                    Ok(info) => derive_quality_from_media(info, &file.filename),
+                    Err(_) => serde_json::json!({
+                        "quality": {"id": 1, "name": "SDTV", "source": "unknown", "resolution": 0},
+                        "revision": {"version": 1, "real": 0, "isRepack": false}
+                    }),
+                };
+
+                // BLAKE3 content hash
+                let file_hash = compute_file_hash(Path::new(&file_path_str)).await.ok();
 
                 let episode_file = EpisodeFileDbModel {
                     id: 0,
@@ -498,6 +507,7 @@ impl JobTrackerService {
                     languages: languages_json.to_string(),
                     media_info,
                     original_file_path: Some(file_path_str.clone()),
+                    file_hash,
                 };
 
                 let file_id = episode_file_repo.insert(&episode_file).await?;

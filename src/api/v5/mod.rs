@@ -2,7 +2,7 @@
 //! Latest version of the pir9 API
 
 use crate::web::AppState;
-use axum::{http::StatusCode, response::IntoResponse, Json, Router};
+use axum::{http::StatusCode, response::IntoResponse, routing::get, Json, Router};
 use std::sync::Arc;
 
 pub mod blocklist;
@@ -99,6 +99,11 @@ pub fn routes() -> Router<Arc<AppState>> {
         .nest("/remotePathMapping", remotepathmapping::routes())
         .nest("/remotepathmapping", remotepathmapping::routes()) // lowercase alias
         .nest("/blocklist", blocklist::routes())
+        // Rename (top-level for Sonarr compat, also available under /episodefile/rename)
+        .route(
+            "/rename",
+            get(episodefile::get_rename_preview).put(episodefile::execute_rename),
+        )
         // Fallback for unknown API endpoints - return JSON 404, not HTML
         .fallback(api_not_found)
 }

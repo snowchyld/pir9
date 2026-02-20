@@ -157,6 +157,7 @@ pub async fn create_command(
         let event_bus = state.event_bus.clone();
         let metadata_service = state.metadata_service.clone();
         let imdb_client = state.imdb_client.clone();
+        let media_config = state.config.read().media.clone();
         let cmd_id = id;
         let cmd_name = name.to_string();
         let cmd_body = body.clone();
@@ -184,6 +185,7 @@ pub async fn create_command(
                 metadata_service: Some(metadata_service),
                 imdb_client: Some(imdb_client),
                 cancel_token: None,
+                media_config: Some(media_config),
             };
             let result = crate::api::v5::command::execute_command_with_options(
                 &cmd_name, &cmd_body, &db, &event_bus, options,

@@ -33,6 +33,21 @@ export class QueuePage extends BaseComponent {
     },
   });
 
+  private importItemMutation = createMutation({
+    mutationFn: (id: number) => http.post<{ success: boolean }>(`/queue/${id}/import`),
+    onSuccess: (result: { success: boolean }) => {
+      if (result.success) {
+        invalidateQueries(['/queue']);
+        showSuccess('Download imported to library');
+      } else {
+        showError('Import failed — could not match series or episodes');
+      }
+    },
+    onError: () => {
+      showError('Failed to import download');
+    },
+  });
+
   protected onInit(): void {
     this.watch(this.queueQuery.data);
     this.watch(this.queueQuery.isLoading);
@@ -212,6 +227,7 @@ export class QueuePage extends BaseComponent {
         .status-icon.downloading { color: var(--color-primary); }
         .status-icon.paused { color: var(--color-warning); }
         .status-icon.queued { color: var(--text-color-muted); }
+        .status-icon.completed { color: var(--color-success, #2ecc71); }
         .status-icon.error { color: var(--color-danger); }
 
         /* Progress */
@@ -277,6 +293,21 @@ export class QueuePage extends BaseComponent {
 
         .action-btn.danger:hover {
           color: var(--color-danger);
+        }
+
+        .action-btn.import {
+          color: var(--color-success, #2ecc71);
+        }
+
+        .action-btn.import:hover {
+          color: var(--color-white, #fff);
+          background-color: var(--color-success, #2ecc71);
+        }
+
+        .action-buttons {
+          display: flex;
+          gap: 0.25rem;
+          justify-content: flex-end;
         }
 
         .title-cell,
@@ -379,6 +410,10 @@ export class QueuePage extends BaseComponent {
     `;
   }
 
+  private isImportable(item: QueueItem): boolean {
+    return item.status === 'completed' || item.trackedDownloadState === 'importPending';
+  }
+
   private renderRow(item: QueueItem): string {
     const progress = item.size > 0 ? ((item.size - item.sizeleft) / item.size) * 100 : 0;
     const statusIcon = this.getStatusIcon(item.status);
@@ -387,13 +422,14 @@ export class QueuePage extends BaseComponent {
     const episodeLabel = item.episode
       ? `S${String(item.episode.seasonNumber).padStart(2, '0')}E${String(item.episode.episodeNumber).padStart(2, '0')}${item.episode.title ? ` - ${item.episode.title}` : ''}`
       : '-';
+    const importable = this.isImportable(item);
 
     return html`
       <tr>
         <td>
           <div class="status-cell">
             ${safeHtml(statusIcon)}
-            <span>${escapeHtml(item.status)}</span>
+            <span>${importable ? 'ready to import' : escapeHtml(item.status)}</span>
           </div>
         </td>
         <td class="title-cell">
@@ -420,16 +456,33 @@ export class QueuePage extends BaseComponent {
         </td>
         <td>${item.timeleft ?? '-'}</td>
         <td>
-          <button
-            class="action-btn danger"
-            onclick="this.closest('queue-page').handleRemove(${item.id})"
-            title="Remove from queue"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="3 6 5 6 21 6"></polyline>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-            </svg>
-          </button>
+          <div class="action-buttons">
+            ${
+              importable
+                ? `<button
+                    class="action-btn import"
+                    onclick="this.closest('queue-page').handleImport(${item.id})"
+                    title="Import to library"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                      <polyline points="7 10 12 15 17 10"></polyline>
+                      <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                  </button>`
+                : ''
+            }
+            <button
+              class="action-btn danger"
+              onclick="this.closest('queue-page').handleRemove(${item.id})"
+              title="Remove from queue"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              </svg>
+            </button>
+          </div>
         </td>
       </tr>
     `;
@@ -502,6 +555,8 @@ export class QueuePage extends BaseComponent {
         '<svg class="status-icon paused" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>',
       queued:
         '<svg class="status-icon queued" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
+      completed:
+        '<svg class="status-icon completed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="9 12 12 15 16 10"></polyline></svg>',
       error:
         '<svg class="status-icon error" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
     };
@@ -526,6 +581,10 @@ export class QueuePage extends BaseComponent {
 
   handleSeriesClick(titleSlug: string): void {
     navigate(`/series/${titleSlug}`);
+  }
+
+  handleImport(id: number): void {
+    this.importItemMutation.mutate(id);
   }
 
   handleRemove(id: number): void {

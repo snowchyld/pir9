@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::core::datastore::models::EpisodeDbModel;
-use crate::core::datastore::repositories::{EpisodeRepository, SeriesRepository};
+use crate::core::datastore::repositories::{
+    EpisodeRepository, SeriesRepository, TrackedDownloadRepository,
+};
 use crate::web::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -102,10 +104,20 @@ pub async fn get_wanted_missing(
         .clone()
         .unwrap_or("descending".to_string());
     let monitored_only = query.monitored.unwrap_or(true);
-    let include_series = query.include_series.unwrap_or(false);
+    let include_series = query.include_series.unwrap_or(true);
 
     let episode_repo = EpisodeRepository::new(state.db.clone());
     let series_repo = SeriesRepository::new(state.db.clone());
+    let tracked_repo = TrackedDownloadRepository::new(state.db.clone());
+
+    // Get episode IDs that are actively downloading so we can exclude them
+    let downloading_episode_ids: std::collections::HashSet<i64> = tracked_repo
+        .get_all_active()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|d| serde_json::from_str::<Vec<i64>>(&d.episode_ids).unwrap_or_default())
+        .collect();
 
     // Fetch missing episodes
     let (episodes, total) = match episode_repo
@@ -125,6 +137,14 @@ pub async fn get_wanted_missing(
             });
         }
     };
+
+    // Filter out episodes that are currently downloading
+    let filtered_count = episodes.len();
+    let episodes: Vec<_> = episodes
+        .into_iter()
+        .filter(|ep| !downloading_episode_ids.contains(&ep.id))
+        .collect();
+    let total = total - (filtered_count - episodes.len()) as i64;
 
     // Optionally include series data
     let mut records = Vec::new();
@@ -171,7 +191,7 @@ pub async fn get_wanted_cutoff(
         .sort_direction
         .clone()
         .unwrap_or("descending".to_string());
-    let include_series = query.include_series.unwrap_or(false);
+    let include_series = query.include_series.unwrap_or(true);
 
     let episode_repo = EpisodeRepository::new(state.db.clone());
     let series_repo = SeriesRepository::new(state.db.clone());

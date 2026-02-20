@@ -117,7 +117,7 @@ pub async fn get_tasks() -> Json<Vec<ScheduledTaskResource>> {
 pub async fn get_status(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Json<SystemResource> {
-    let db_type = state.config.database.database_type.clone();
+    let db_type = state.config.read().database.database_type.clone();
     let is_docker = std::path::Path::new("/.dockerenv").exists() || std::env::var("DOCKER").is_ok();
     let (os_name, os_version) = get_os_info();
 

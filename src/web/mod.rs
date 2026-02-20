@@ -29,7 +29,7 @@ use crate::core::{
 /// Application state shared across handlers
 #[derive(Debug)]
 pub struct AppState {
-    pub config: AppConfig,
+    pub config: parking_lot::RwLock<AppConfig>,
     pub db: Database,
     pub scheduler: JobScheduler,
     /// IMDB microservice client
@@ -54,7 +54,7 @@ impl AppState {
         let imdb_client = ImdbClient::from_env();
         let metadata_service = MetadataService::new(imdb_client.clone());
         Ok(Arc::new(Self {
-            config,
+            config: parking_lot::RwLock::new(config),
             db,
             scheduler,
             imdb_client,
@@ -91,7 +91,7 @@ impl AppState {
         let imdb_client = ImdbClient::from_env();
         let metadata_service = MetadataService::new(imdb_client.clone());
         Ok(Arc::new(Self {
-            config,
+            config: parking_lot::RwLock::new(config),
             db,
             scheduler,
             imdb_client,
@@ -227,7 +227,14 @@ pub struct InitializeResponse {
 pub async fn initialize_json(State(state): State<Arc<AppState>>) -> Json<InitializeResponse> {
     Json(InitializeResponse {
         api_root: "/api/v3".to_string(),
-        api_key: state.config.security.secret_key.chars().take(32).collect(),
+        api_key: state
+            .config
+            .read()
+            .security
+            .secret_key
+            .chars()
+            .take(32)
+            .collect(),
         release: "develop".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         instance_name: "pir9".to_string(),

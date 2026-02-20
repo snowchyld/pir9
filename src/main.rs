@@ -157,6 +157,7 @@ async fn run_server_mode(args: &Args) -> Result<()> {
         let imdb_client = crate::core::imdb::ImdbClient::from_env();
         let metadata_service = crate::core::metadata::MetadataService::new(imdb_client);
         scheduler.set_metadata_service(metadata_service);
+        scheduler.set_media_config(config.media.clone());
     }
 
     // Create application state (with Redis event bus if in server mode)

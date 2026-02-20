@@ -26,9 +26,10 @@ static ALT_SEASON_EPISODE_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)(?:^|[.\s_-])(\d{1,2})x(\d{1,3})(?:[\.\s_-]?(\d{1,3}))?").unwrap()
 });
 
-// Full season: S01, Season 1
+// Full season: S01, Season 1 — only tried after SEASON_EPISODE_REGEX fails,
+// so S01E02 is already filtered out. Accepts S01/Season 1 followed by any separator.
 static FULL_SEASON_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:S|Season[\.\s_-]?)(\d{1,2})(?:[.\s_-](?:Complete|Full)|$|[.\s_-](?:720|1080|2160|HDTV|WEB|BluRay))").unwrap()
+    Regex::new(r"(?i)(?:^|[.\s_-])(?:Season[\.\s_-]?|S)(\d{1,2})(?:[.\s_-]|$)").unwrap()
 });
 
 // Daily show format: Show.2024.01.15 or Show.2024-01-15

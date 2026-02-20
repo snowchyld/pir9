@@ -30,15 +30,17 @@ async fn get_host_config(State(state): State<Arc<AppState>>) -> Json<HostConfigR
     let mut result = config.clone();
 
     // Only set defaults from AppState if not already configured
+    let app_cfg = state.config.read();
     if result.port == 0 {
-        result.port = state.config.server.port;
+        result.port = app_cfg.server.port;
     }
     if result.bind_address.is_empty() || result.bind_address == "*" {
-        result.bind_address = state.config.server.bind_address.clone();
+        result.bind_address = app_cfg.server.bind_address.clone();
     }
     if result.api_key.is_empty() || result.api_key == "pir9-api-key" {
-        result.api_key = state.config.security.secret_key.chars().take(32).collect();
+        result.api_key = app_cfg.security.secret_key.chars().take(32).collect();
     }
+    drop(app_cfg);
 
     // Force authentication disabled
     result.authentication_method = "none".to_string();
@@ -68,16 +70,18 @@ async fn update_host_config(
         *stored_config = config.clone();
     }
 
-    // Persist relevant fields to the config file (read-modify-write)
+    // Persist to config file and update in-memory config
     let config_path = crate::core::configuration::AppConfig::config_file_path();
-    let mut app_config = state.config.clone();
-    app_config.server.port = config.port;
-    if !config.bind_address.is_empty() && config.bind_address != "*" {
-        app_config.server.bind_address = config.bind_address.clone();
-    }
-    app_config.server.enable_ssl = config.enable_ssl;
-    if let Err(e) = app_config.save(&config_path) {
-        tracing::warn!("Failed to persist config to {:?}: {}", config_path, e);
+    {
+        let mut app_config = state.config.write();
+        app_config.server.port = config.port;
+        if !config.bind_address.is_empty() && config.bind_address != "*" {
+            app_config.server.bind_address = config.bind_address.clone();
+        }
+        app_config.server.enable_ssl = config.enable_ssl;
+        if let Err(e) = app_config.save(&config_path) {
+            tracing::warn!("Failed to persist config to {:?}: {}", config_path, e);
+        }
     }
 
     // Clear sensitive fields in response
@@ -87,12 +91,72 @@ async fn update_host_config(
     Json(config)
 }
 
-async fn get_naming_config() -> Json<NamingConfig> {
-    Json(NamingConfig::default())
+async fn get_naming_config(State(state): State<Arc<AppState>>) -> Json<NamingConfig> {
+    let media = &state.config.read().media.clone();
+    Json(NamingConfig {
+        id: 1,
+        rename_episodes: media.rename_episodes,
+        replace_illegal_characters: media.replace_illegal_chars,
+        colon_replacement_format: colon_format_to_int(&media.colon_replacement_format),
+        multi_episode_style: media.multi_episode_style,
+        standard_episode_format: media.episode_naming_pattern.clone(),
+        daily_episode_format: media.daily_episode_format.clone(),
+        anime_episode_format: media.anime_episode_format.clone(),
+        series_folder_format: "{Series Title}".to_string(),
+        season_folder_format: media.season_folder_format.clone(),
+        specials_folder_format: media.specials_folder_format.clone(),
+    })
 }
 
-async fn update_naming_config(Json(config): Json<NamingConfig>) -> Json<NamingConfig> {
+async fn update_naming_config(
+    State(state): State<Arc<AppState>>,
+    Json(config): Json<NamingConfig>,
+) -> Json<NamingConfig> {
+    // Persist to config file and update in-memory config
+    let config_path = crate::core::configuration::AppConfig::config_file_path();
+    {
+        let mut app_config = state.config.write();
+        app_config.media.rename_episodes = config.rename_episodes;
+        app_config.media.replace_illegal_chars = config.replace_illegal_characters;
+        app_config.media.colon_replacement_format =
+            colon_format_from_int(config.colon_replacement_format);
+        app_config.media.multi_episode_style = config.multi_episode_style;
+        app_config.media.episode_naming_pattern = config.standard_episode_format.clone();
+        app_config.media.daily_episode_format = config.daily_episode_format.clone();
+        app_config.media.anime_episode_format = config.anime_episode_format.clone();
+        app_config.media.season_folder_format = config.season_folder_format.clone();
+        app_config.media.specials_folder_format = config.specials_folder_format.clone();
+
+        if let Err(e) = app_config.save(&config_path) {
+            tracing::warn!(
+                "Failed to persist naming config to {:?}: {}",
+                config_path,
+                e
+            );
+        }
+    }
+
     Json(config)
+}
+
+/// Convert config string to Sonarr API int for colon replacement
+fn colon_format_to_int(s: &str) -> i32 {
+    match s {
+        "delete" => 0,
+        "dash" => 4,
+        "space" | "spaceDash" => 1,
+        _ => 4, // default to dash
+    }
+}
+
+/// Convert Sonarr API int to config string for colon replacement
+fn colon_format_from_int(i: i32) -> String {
+    match i {
+        0 => "delete".to_string(),
+        1 => "space".to_string(),
+        4 => "dash".to_string(),
+        _ => "dash".to_string(),
+    }
 }
 
 async fn get_media_management_config() -> Json<MediaManagementConfig> {

@@ -386,6 +386,7 @@ export interface QueueItem {
   title: string;
   status: string;
   trackedDownloadStatus: string;
+  trackedDownloadState?: string;
   statusMessages: { title: string; messages: string[] }[];
   downloadId: string;
   protocol: 'usenet' | 'torrent';

@@ -131,6 +131,84 @@ export class MediaManagementSettings extends BaseComponent {
         </div>
 
         <div class="form-group">
+          <label class="form-label">Daily Episode Format</label>
+          <input
+            type="text"
+            class="form-input"
+            value="${escapeHtml(naming?.dailyEpisodeFormat ?? '')}"
+            onchange="this.closest('media-management-settings').handleNamingChange('dailyEpisodeFormat', this.value)"
+          />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Anime Episode Format</label>
+          <input
+            type="text"
+            class="form-input"
+            value="${escapeHtml(naming?.animeEpisodeFormat ?? '')}"
+            onchange="this.closest('media-management-settings').handleNamingChange('animeEpisodeFormat', this.value)"
+          />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Specials Folder Format</label>
+          <input
+            type="text"
+            class="form-input"
+            value="${escapeHtml(naming?.specialsFolderFormat ?? '')}"
+            onchange="this.closest('media-management-settings').handleNamingChange('specialsFolderFormat', this.value)"
+          />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Multi-Episode Style</label>
+          <select
+            class="form-input"
+            onchange="this.closest('media-management-settings').handleNamingChange('multiEpisodeStyle', parseInt(this.value))"
+          >
+            <option value="0" ${naming?.multiEpisodeStyle === 0 ? 'selected' : ''}>Extend (S01E01-E02-E03)</option>
+            <option value="4" ${naming?.multiEpisodeStyle === 4 ? 'selected' : ''}>Range (S01E01-E03)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Colon Replacement</label>
+          <select
+            class="form-input"
+            onchange="this.closest('media-management-settings').handleNamingChange('colonReplacementFormat', parseInt(this.value))"
+          >
+            <option value="0" ${naming?.colonReplacementFormat === 0 ? 'selected' : ''}>Delete</option>
+            <option value="1" ${naming?.colonReplacementFormat === 1 ? 'selected' : ''}>Replace with Space</option>
+            <option value="4" ${naming?.colonReplacementFormat === 4 ? 'selected' : ''}>Replace with Dash</option>
+          </select>
+        </div>
+
+        <details class="token-legend">
+          <summary class="token-legend-toggle">Available Tokens</summary>
+          <div class="token-legend-content">
+            <table class="token-table">
+              <thead>
+                <tr><th>Token</th><th>Description</th><th>Example</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>{Series Title}</code></td><td>Series name</td><td>The Flash</td></tr>
+                <tr><td><code>{Series CleanTitle}</code></td><td>Lowercase, no punctuation</td><td>theflash</td></tr>
+                <tr><td><code>{Series TitleYear}</code></td><td>Name with year</td><td>The Flash (2014)</td></tr>
+                <tr><td><code>{season:00}</code></td><td>Season number (padded)</td><td>01</td></tr>
+                <tr><td><code>{episode:00}</code></td><td>Episode number (padded)</td><td>05</td></tr>
+                <tr><td><code>{Episode Title}</code></td><td>Episode name</td><td>Pilot</td></tr>
+                <tr><td><code>{Quality Full}</code></td><td>Quality with Proper/Repack</td><td>WEBDL-1080p Proper</td></tr>
+                <tr><td><code>{Quality Title}</code></td><td>Quality name only</td><td>WEBDL-1080p</td></tr>
+                <tr><td><code>{Air-Date}</code></td><td>Original air date</td><td>2024-01-15</td></tr>
+                <tr><td><code>{absolute:000}</code></td><td>Absolute episode number</td><td>015</td></tr>
+                <tr><td><code>{Release Group}</code></td><td>Release group name</td><td>EVOLVE</td></tr>
+              </tbody>
+            </table>
+            <p class="token-hint">Padding: <code>:00</code> = 2 digits, <code>:000</code> = 3 digits. Empty <code>[{Release Group}]</code> auto-removes the brackets.</p>
+          </div>
+        </details>
+
+        <div class="form-group">
           <label class="form-label">Series Folder Format</label>
           <input
             type="text"
@@ -358,6 +436,74 @@ export class MediaManagementSettings extends BaseComponent {
 
         .save-btn:hover {
           background-color: var(--btn-primary-bg-hover);
+        }
+
+        .token-legend {
+          margin-bottom: 1.25rem;
+          border: 1px solid var(--border-color);
+          border-radius: 0.25rem;
+        }
+
+        .token-legend-toggle {
+          padding: 0.5rem 0.75rem;
+          font-size: 0.8125rem;
+          font-weight: 500;
+          color: var(--text-color-muted);
+          cursor: pointer;
+          user-select: none;
+        }
+
+        .token-legend-toggle:hover {
+          color: var(--text-color);
+        }
+
+        .token-legend-content {
+          padding: 0.75rem;
+          border-top: 1px solid var(--border-color);
+        }
+
+        .token-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 0.8125rem;
+        }
+
+        .token-table th {
+          text-align: left;
+          font-weight: 600;
+          padding: 0.375rem 0.5rem;
+          border-bottom: 1px solid var(--border-color);
+          color: var(--text-color-muted);
+        }
+
+        .token-table td {
+          padding: 0.375rem 0.5rem;
+          border-bottom: 1px solid var(--border-color);
+        }
+
+        .token-table tr:last-child td {
+          border-bottom: none;
+        }
+
+        .token-table code {
+          background-color: var(--bg-input);
+          padding: 0.125rem 0.375rem;
+          border-radius: 0.1875rem;
+          font-size: 0.75rem;
+          white-space: nowrap;
+        }
+
+        .token-hint {
+          font-size: 0.75rem;
+          color: var(--text-color-muted);
+          margin: 0.5rem 0 0 0;
+        }
+
+        .token-hint code {
+          background-color: var(--bg-input);
+          padding: 0.0625rem 0.25rem;
+          border-radius: 0.125rem;
+          font-size: 0.6875rem;
         }
       </style>
     `;

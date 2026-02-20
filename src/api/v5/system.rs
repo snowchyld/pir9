@@ -28,7 +28,7 @@ pub fn routes() -> Router<Arc<AppState>> {
 async fn get_status(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Json<SystemStatus> {
-    let db_type = state.config.database.database_type.clone();
+    let db_type = state.config.read().database.database_type.clone();
     let is_docker = std::path::Path::new("/.dockerenv").exists() || std::env::var("DOCKER").is_ok();
 
     // Read OS pretty name from /etc/os-release (Linux), fall back to std::env::consts::OS
@@ -149,10 +149,10 @@ fn get_statvfs_info(path: &str) -> Option<FsStats> {
 async fn list_backups(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Json<Vec<Backup>> {
-    let backup_dir = &state.config.paths.backup_dir;
+    let backup_dir = state.config.read().paths.backup_dir.clone();
     let mut backups = Vec::new();
 
-    if let Ok(entries) = std::fs::read_dir(backup_dir) {
+    if let Ok(entries) = std::fs::read_dir(&backup_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("zip")
@@ -181,16 +181,22 @@ async fn list_backups(
 async fn create_backup(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Json<Backup> {
-    let backup_dir = &state.config.paths.backup_dir;
+    let (backup_dir, conn) = {
+        let cfg = state.config.read();
+        (
+            cfg.paths.backup_dir.clone(),
+            cfg.database.connection_string.clone(),
+        )
+    };
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
     let filename = format!("pir9_backup_{}.sql", timestamp);
     let filepath = backup_dir.join(&filename);
 
     // Ensure backup directory exists
-    let _ = std::fs::create_dir_all(backup_dir);
+    let _ = std::fs::create_dir_all(&backup_dir);
 
     // Run pg_dump if database connection string is available
-    let conn = &state.config.database.connection_string;
+    let conn = &conn;
     let result = tokio::process::Command::new("pg_dump")
         .arg(conn)
         .arg("--no-owner")

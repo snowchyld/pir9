@@ -15,7 +15,7 @@ use crate::core::datastore::repositories::{
     EpisodeFileRepository, EpisodeRepository, SeriesRepository,
 };
 use crate::core::datastore::Database;
-use crate::core::mediafiles::MediaAnalyzer;
+use crate::core::mediafiles::{compute_file_hash, derive_quality_from_media, MediaAnalyzer};
 use crate::core::messaging::{HybridEventBus, Message, ScannedFile};
 
 /// Tracks pending scan jobs and their results
@@ -133,8 +133,19 @@ impl ScanResultConsumer {
             );
         }
 
+        // If worker returned 0 files, try local fallback scan (server may have
+        // updated parser patterns that the worker doesn't have yet)
+        let files_to_process = if files_found.is_empty() {
+            self.try_local_fallback_scan(series_id).await
+        } else {
+            files_found
+        };
+
         // Process the files
-        if let Err(e) = self.process_scanned_files(series_id, files_found).await {
+        if let Err(e) = self
+            .process_scanned_files(series_id, files_to_process)
+            .await
+        {
             error!(
                 "Failed to process scanned files for series {}: {}",
                 series_id, e
@@ -149,6 +160,31 @@ impl ScanResultConsumer {
                 debug!("Job {} received result {}", job_id, job.results_received);
             }
         }
+    }
+
+    /// When the worker returns 0 files, check if the path is accessible locally
+    /// and re-scan with the server's (potentially newer) scanner code.
+    async fn try_local_fallback_scan(&self, series_id: i64) -> Vec<ScannedFile> {
+        let series_repo = SeriesRepository::new(self.db.clone());
+        let series = match series_repo.get_by_id(series_id).await {
+            Ok(Some(s)) => s,
+            _ => return Vec::new(),
+        };
+
+        let series_path = std::path::Path::new(&series.path);
+        if !series_path.exists() {
+            return Vec::new();
+        }
+
+        let files = super::scan_series_directory(series_path);
+        if !files.is_empty() {
+            info!(
+                "Local fallback scan found {} files for '{}' (worker returned 0)",
+                files.len(),
+                series.title
+            );
+        }
+        files
     }
 
     /// Process scanned files and update the database
@@ -205,28 +241,38 @@ impl ScanResultConsumer {
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|_| file.filename.clone());
 
-                // Create quality JSON (default to HDTV-720p)
-                let quality_json = serde_json::json!({
-                    "quality": {
-                        "id": 4,
-                        "name": "HDTV-720p",
-                        "source": "television",
-                        "resolution": 720
-                    },
-                    "revision": {
-                        "version": 1,
-                        "real": 0,
-                        "isRepack": false
-                    }
-                });
-
                 let languages_json = serde_json::json!([{
                     "id": 1,
                     "name": "English"
                 }]);
 
-                let media_info =
-                    MediaAnalyzer::analyze_to_json(std::path::Path::new(&file_path_str)).await;
+                // Real media analysis via FFmpeg probe
+                let media_info_result =
+                    MediaAnalyzer::analyze(std::path::Path::new(&file_path_str)).await;
+                let media_info = media_info_result
+                    .as_ref()
+                    .ok()
+                    .and_then(|info| serde_json::to_string(info).ok());
+
+                // Quality derived from actual resolution (falls back to SDTV if probe fails)
+                let quality_json = match &media_info_result {
+                    Ok(info) => derive_quality_from_media(info, &file.filename),
+                    Err(e) => {
+                        debug!(
+                            "Media probe failed for {}, using SDTV default: {}",
+                            file_path_str, e
+                        );
+                        serde_json::json!({
+                            "quality": {"id": 1, "name": "SDTV", "source": "unknown", "resolution": 0},
+                            "revision": {"version": 1, "real": 0, "isRepack": false}
+                        })
+                    }
+                };
+
+                // BLAKE3 content hash
+                let file_hash = compute_file_hash(std::path::Path::new(&file_path_str))
+                    .await
+                    .ok();
 
                 let episode_file = EpisodeFileDbModel {
                     id: 0,
@@ -242,6 +288,7 @@ impl ScanResultConsumer {
                     languages: languages_json.to_string(),
                     media_info,
                     original_file_path: Some(file_path_str.clone()),
+                    file_hash,
                 };
 
                 match episode_file_repo.insert(&episode_file).await {

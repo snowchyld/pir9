@@ -1,11 +1,17 @@
 #![allow(dead_code, unused_imports)]
 //! Download import service
 //! Processes completed downloads and imports them into the library
+//!
+//! Handles both single-file downloads and multi-file season/multi-season packs.
+//! For season packs, each video file is individually matched to its episode(s)
+//! via filename parsing, creating separate episode_file records per file.
 
 use anyhow::{Context, Result};
 use chrono::Utc;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::core::configuration::MediaConfig;
 use crate::core::datastore::models::{
     EpisodeDbModel, EpisodeFileDbModel, HistoryDbModel, SeriesDbModel,
 };
@@ -15,22 +21,42 @@ use crate::core::datastore::repositories::{
 };
 use crate::core::datastore::Database;
 use crate::core::download::clients::{create_client_from_model, DownloadState, DownloadStatus};
-use crate::core::mediafiles::MediaAnalyzer;
+use crate::core::mediafiles::{compute_file_hash, derive_quality_from_media, MediaAnalyzer};
+use crate::core::naming::{self, EpisodeNamingContext};
 use crate::core::parser::{best_series_match, parse_title, ParsedEpisodeInfo};
+use crate::core::scanner::{match_special_by_title, parse_episodes_from_filename};
 
 /// Result of an import operation
 #[derive(Debug, Clone)]
 pub struct ImportResult {
     /// Whether the import was successful
     pub success: bool,
-    /// The episode file ID if created
-    pub episode_file_id: Option<i64>,
-    /// Episodes that were linked to the file
+    /// Episode file IDs created during import
+    pub episode_file_ids: Vec<i64>,
+    /// Episodes that were linked to files
     pub episode_ids: Vec<i64>,
     /// Error message if import failed
     pub error_message: Option<String>,
-    /// Path where the file was imported
-    pub import_path: Option<PathBuf>,
+    /// Paths where files were imported
+    pub import_paths: Vec<PathBuf>,
+    /// Number of files successfully imported
+    pub files_imported: usize,
+    /// Number of files skipped (unmatched extras, samples)
+    pub files_skipped: usize,
+}
+
+impl ImportResult {
+    fn failure(msg: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            episode_file_ids: vec![],
+            episode_ids: vec![],
+            error_message: Some(msg.into()),
+            import_paths: vec![],
+            files_imported: 0,
+            files_skipped: 0,
+        }
+    }
 }
 
 /// Pending import item from a completed download
@@ -54,14 +80,22 @@ pub struct PendingImport {
     pub episodes: Vec<EpisodeDbModel>,
 }
 
+/// Result of importing a single file
+struct SingleFileResult {
+    file_id: i64,
+    episode_ids: Vec<i64>,
+    dest_path: PathBuf,
+}
+
 /// Import service for processing completed downloads
 pub struct ImportService {
     db: Database,
+    media_config: MediaConfig,
 }
 
 impl ImportService {
-    pub fn new(db: Database) -> Self {
-        Self { db }
+    pub fn new(db: Database, media_config: MediaConfig) -> Self {
+        Self { db, media_config }
     }
 
     /// Check all download clients for completed downloads ready to import
@@ -171,6 +205,12 @@ impl ImportService {
         let episode_repo = EpisodeRepository::new(self.db.clone());
         let mut matched_episodes = Vec::new();
 
+        // Handle multi-season full packs — return all series episodes so the
+        // per-file parser can match each file to its correct season+episode
+        if info.full_season && info.is_multi_season {
+            return episode_repo.get_by_series_id(series.id).await;
+        }
+
         // Handle full season
         if info.full_season {
             if let Some(season) = info.season_number {
@@ -222,71 +262,351 @@ impl ImportService {
         Ok(matched_episodes)
     }
 
-    /// Import a completed download into the library
+    /// Import a completed download into the library.
+    ///
+    /// Detects multi-file downloads (season packs) and imports each file
+    /// individually, matching it to the correct episode(s) via filename parsing.
     pub async fn import(&self, pending: &PendingImport) -> Result<ImportResult> {
         // Validate we have necessary info
         let series = match &pending.series {
             Some(s) => s,
-            None => {
-                return Ok(ImportResult {
-                    success: false,
-                    episode_file_id: None,
-                    episode_ids: vec![],
-                    error_message: Some("No matching series found".to_string()),
-                    import_path: None,
-                });
-            }
+            None => return Ok(ImportResult::failure("No matching series found")),
         };
 
         if pending.episodes.is_empty() {
-            return Ok(ImportResult {
-                success: false,
-                episode_file_id: None,
-                episode_ids: vec![],
-                error_message: Some("No matching episodes found".to_string()),
-                import_path: None,
-            });
+            return Ok(ImportResult::failure("No matching episodes found"));
         }
 
         let parsed_info = match &pending.parsed_info {
             Some(i) => i,
-            None => {
-                return Ok(ImportResult {
-                    success: false,
-                    episode_file_id: None,
-                    episode_ids: vec![],
-                    error_message: Some("Could not parse release title".to_string()),
-                    import_path: None,
-                });
-            }
+            None => return Ok(ImportResult::failure("Could not parse release title")),
         };
 
         // Find video files in the download path
         let video_files = self.find_video_files(&pending.output_path)?;
 
         if video_files.is_empty() {
-            return Ok(ImportResult {
-                success: false,
-                episode_file_id: None,
-                episode_ids: vec![],
-                error_message: Some("No video files found".to_string()),
-                import_path: None,
-            });
+            return Ok(ImportResult::failure("No video files found"));
         }
 
-        // For now, take the largest video file
-        let source_file = video_files
-            .iter()
-            .max_by_key(|f| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0))
-            .unwrap();
+        // Single file → link all matched episodes to it (original behavior)
+        // Multi-file → per-file episode matching (season pack import)
+        if video_files.len() <= 1 {
+            self.import_single_download(
+                &video_files[0],
+                series,
+                &pending.episodes,
+                parsed_info,
+                &pending.download_id,
+                &pending.title,
+            )
+            .await
+        } else {
+            self.import_season_pack(
+                &video_files,
+                series,
+                &pending.episodes,
+                parsed_info,
+                &pending.download_id,
+                &pending.title,
+            )
+            .await
+        }
+    }
 
-        // Build destination path
-        let season_number = pending
-            .episodes
-            .first()
-            .map(|e| e.season_number)
-            .unwrap_or(1);
-        let dest_path = self.build_destination_path(series, season_number, source_file)?;
+    /// Import a single-file download, linking all matched episodes to one file.
+    async fn import_single_download(
+        &self,
+        source_file: &Path,
+        series: &SeriesDbModel,
+        episodes: &[EpisodeDbModel],
+        parsed_info: &ParsedEpisodeInfo,
+        download_id: &str,
+        download_title: &str,
+    ) -> Result<ImportResult> {
+        let season_number = episodes.first().map(|e| e.season_number).unwrap_or(1);
+
+        let result = self
+            .import_single_file(
+                source_file,
+                series,
+                episodes,
+                season_number,
+                parsed_info,
+                download_id,
+                download_title,
+            )
+            .await?;
+
+        crate::core::logging::log_info(
+            "DownloadImported",
+            &format!(
+                "Imported '{}' -> '{}' ({} episodes)",
+                download_title,
+                result.dest_path.display(),
+                result.episode_ids.len()
+            ),
+        )
+        .await;
+
+        Ok(ImportResult {
+            success: true,
+            episode_file_ids: vec![result.file_id],
+            episode_ids: result.episode_ids,
+            error_message: None,
+            import_paths: vec![result.dest_path],
+            files_imported: 1,
+            files_skipped: 0,
+        })
+    }
+
+    /// Import a multi-file season pack by matching each file to its episode(s).
+    ///
+    /// For each video file, parses the filename to extract season/episode numbers,
+    /// matches against candidate episodes, then imports each file individually.
+    /// Unmatched files (samples, extras) are skipped.
+    /// If two files claim the same episode, the larger file wins.
+    async fn import_season_pack(
+        &self,
+        video_files: &[PathBuf],
+        series: &SeriesDbModel,
+        all_episodes: &[EpisodeDbModel],
+        parsed_info: &ParsedEpisodeInfo,
+        download_id: &str,
+        download_title: &str,
+    ) -> Result<ImportResult> {
+        // Build episode lookup: (season, episode_number) -> EpisodeDbModel
+        let mut episode_map: HashMap<(i32, i32), &EpisodeDbModel> = HashMap::new();
+        for ep in all_episodes {
+            episode_map.insert((ep.season_number, ep.episode_number), ep);
+        }
+
+        // Phase 1: Match each file to episodes, resolving duplicates by file size
+        // Key: episode DB id -> (file path, file size, all matched episodes for that file)
+        let mut file_assignments: HashMap<PathBuf, (Vec<&EpisodeDbModel>, u64)> = HashMap::new();
+        // Track which episode is claimed by which file (for duplicate resolution)
+        let mut episode_claims: HashMap<i64, (PathBuf, u64)> = HashMap::new();
+
+        let mut files_skipped = 0;
+
+        for video_file in video_files {
+            let filename = match video_file.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name,
+                None => {
+                    files_skipped += 1;
+                    continue;
+                }
+            };
+
+            let parsed_eps = parse_episodes_from_filename(filename);
+
+            // Fallback: try title-based matching against season 0 specials
+            let parsed_eps = if parsed_eps.is_empty() {
+                let specials: Vec<(i32, &str)> = all_episodes
+                    .iter()
+                    .filter(|e| e.season_number == 0)
+                    .map(|e| (e.episode_number, e.title.as_str()))
+                    .collect();
+                if !specials.is_empty() {
+                    match match_special_by_title(filename, &series.title, &specials) {
+                        Some(pair) => {
+                            tracing::info!(
+                                "Season pack import: matched '{}' to special S00E{:02} by title",
+                                filename,
+                                pair.1
+                            );
+                            vec![pair]
+                        }
+                        None => {
+                            tracing::debug!(
+                                "Season pack import: skipping unmatched file '{}'",
+                                filename
+                            );
+                            files_skipped += 1;
+                            continue;
+                        }
+                    }
+                } else {
+                    tracing::debug!("Season pack import: skipping unmatched file '{}'", filename);
+                    files_skipped += 1;
+                    continue;
+                }
+            } else {
+                parsed_eps
+            };
+
+            let file_size = std::fs::metadata(video_file).map(|m| m.len()).unwrap_or(0);
+
+            // Find matching episodes from our candidate set
+            let mut matched: Vec<&EpisodeDbModel> = Vec::new();
+            for (season, ep_num) in &parsed_eps {
+                if let Some(ep) = episode_map.get(&(*season, *ep_num)) {
+                    matched.push(ep);
+                }
+            }
+
+            if matched.is_empty() {
+                tracing::debug!(
+                    "Season pack import: no episode match for '{}' (parsed {:?})",
+                    filename,
+                    parsed_eps
+                );
+                files_skipped += 1;
+                continue;
+            }
+
+            // Duplicate resolution: if another file already claimed an episode,
+            // the larger file wins
+            let mut dominated = false;
+            for ep in &matched {
+                if let Some((existing_path, existing_size)) = episode_claims.get(&ep.id) {
+                    if *existing_size >= file_size {
+                        // Existing file is larger or equal — this file loses
+                        tracing::debug!(
+                            "Season pack import: '{}' loses S{:02}E{:02} to '{}' (larger)",
+                            filename,
+                            ep.season_number,
+                            ep.episode_number,
+                            existing_path.display()
+                        );
+                        dominated = true;
+                        break;
+                    }
+                    // This file is larger — evict the existing claim
+                    tracing::debug!(
+                        "Season pack import: '{}' takes S{:02}E{:02} from '{}' (larger)",
+                        filename,
+                        ep.season_number,
+                        ep.episode_number,
+                        existing_path.display()
+                    );
+                    // Remove episode from previous file's assignment
+                    if let Some((eps, _)) = file_assignments.get_mut(existing_path) {
+                        eps.retain(|e| e.id != ep.id);
+                    }
+                }
+            }
+
+            if dominated {
+                files_skipped += 1;
+                continue;
+            }
+
+            // Register claims
+            for ep in &matched {
+                episode_claims.insert(ep.id, (video_file.clone(), file_size));
+            }
+
+            file_assignments.insert(video_file.clone(), (matched, file_size));
+        }
+
+        // Remove file assignments that lost all their episodes to larger files
+        file_assignments.retain(|path, (eps, _)| {
+            if eps.is_empty() {
+                tracing::debug!(
+                    "Season pack import: dropping '{}' (all episodes reassigned)",
+                    path.display()
+                );
+                false
+            } else {
+                true
+            }
+        });
+
+        if file_assignments.is_empty() {
+            return Ok(ImportResult::failure(
+                "No video files could be matched to episodes",
+            ));
+        }
+
+        // Phase 2: Import each matched file
+        let mut result = ImportResult {
+            success: true,
+            episode_file_ids: Vec::new(),
+            episode_ids: Vec::new(),
+            error_message: None,
+            import_paths: Vec::new(),
+            files_imported: 0,
+            files_skipped,
+        };
+
+        // Sort by path for deterministic import order
+        let mut sorted_files: Vec<_> = file_assignments.into_iter().collect();
+        sorted_files.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        for (video_file, (matched_episodes, _)) in &sorted_files {
+            // Use first matched episode's season for destination path
+            let season_number = matched_episodes
+                .first()
+                .map(|e| e.season_number)
+                .unwrap_or(1);
+
+            let episodes_owned: Vec<EpisodeDbModel> =
+                matched_episodes.iter().map(|e| (*e).clone()).collect();
+
+            match self
+                .import_single_file(
+                    video_file,
+                    series,
+                    &episodes_owned,
+                    season_number,
+                    parsed_info,
+                    download_id,
+                    download_title,
+                )
+                .await
+            {
+                Ok(single) => {
+                    result.episode_file_ids.push(single.file_id);
+                    result.episode_ids.extend(single.episode_ids);
+                    result.import_paths.push(single.dest_path);
+                    result.files_imported += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Season pack import: failed to import '{}': {}",
+                        video_file.display(),
+                        e
+                    );
+                    result.files_skipped += 1;
+                }
+            }
+        }
+
+        if result.files_imported == 0 {
+            result.success = false;
+            result.error_message = Some("All file imports failed".to_string());
+        }
+
+        crate::core::logging::log_info(
+            "DownloadImported",
+            &format!(
+                "Season pack '{}': imported {} files, skipped {}, {} episodes",
+                download_title,
+                result.files_imported,
+                result.files_skipped,
+                result.episode_ids.len()
+            ),
+        )
+        .await;
+
+        Ok(result)
+    }
+
+    /// Import a single video file: move to library, probe media, hash, insert DB record,
+    /// link episodes, and record history.
+    async fn import_single_file(
+        &self,
+        source_file: &Path,
+        series: &SeriesDbModel,
+        episodes: &[EpisodeDbModel],
+        season_number: i32,
+        parsed_info: &ParsedEpisodeInfo,
+        download_id: &str,
+        download_title: &str,
+    ) -> Result<SingleFileResult> {
+        let dest_path =
+            self.build_destination_path(series, season_number, source_file, episodes, parsed_info)?;
 
         // Create destination directory
         if let Some(parent) = dest_path.parent() {
@@ -312,7 +632,24 @@ impl ImportService {
             .to_string_lossy()
             .to_string();
 
-        let media_info = MediaAnalyzer::analyze_to_json(&dest_path).await;
+        // Real media analysis via FFmpeg probe
+        let media_info_result = MediaAnalyzer::analyze(&dest_path).await;
+        let media_info = media_info_result
+            .as_ref()
+            .ok()
+            .and_then(|info| serde_json::to_string(info).ok());
+
+        // Derive quality from actual resolution when available, fallback to parsed
+        let quality_str = match &media_info_result {
+            Ok(info) => {
+                let quality = derive_quality_from_media(info, &dest_path.to_string_lossy());
+                serde_json::to_string(&quality).unwrap_or_default()
+            }
+            Err(_) => serde_json::to_string(&parsed_info.quality).unwrap_or_default(),
+        };
+
+        // BLAKE3 file hash
+        let file_hash = compute_file_hash(&dest_path).await.ok();
 
         let episode_file = EpisodeFileDbModel {
             id: 0, // Will be set by insert
@@ -322,12 +659,13 @@ impl ImportService {
             path: dest_path.to_string_lossy().to_string(),
             size: file_size,
             date_added: Utc::now(),
-            scene_name: Some(pending.title.clone()),
+            scene_name: Some(download_title.to_string()),
             release_group: parsed_info.release_group.clone(),
-            quality: serde_json::to_string(&parsed_info.quality).unwrap_or_default(),
+            quality: quality_str,
             languages: serde_json::to_string(&parsed_info.languages).unwrap_or_default(),
             media_info,
             original_file_path: Some(source_file.to_string_lossy().to_string()),
+            file_hash,
         };
 
         let file_repo = EpisodeFileRepository::new(self.db.clone());
@@ -337,7 +675,7 @@ impl ImportService {
         let episode_repo = EpisodeRepository::new(self.db.clone());
         let mut episode_ids = Vec::new();
 
-        for episode in &pending.episodes {
+        for episode in episodes {
             let mut updated_episode = episode.clone();
             updated_episode.episode_file_id = Some(file_id);
             updated_episode.has_file = true;
@@ -349,25 +687,16 @@ impl ImportService {
         self.record_history(
             series.id,
             &episode_ids,
-            &pending.title,
+            download_title,
             &parsed_info.quality,
-            &pending.download_id,
+            download_id,
         )
         .await?;
 
-        // Log the import
-        crate::core::logging::log_info(
-            "DownloadImported",
-            &format!("Imported '{}' -> '{}'", pending.title, dest_path.display()),
-        )
-        .await;
-
-        Ok(ImportResult {
-            success: true,
-            episode_file_id: Some(file_id),
+        Ok(SingleFileResult {
+            file_id,
             episode_ids,
-            error_message: None,
-            import_path: Some(dest_path),
+            dest_path,
         })
     }
 
@@ -407,37 +736,52 @@ impl ImportService {
         Ok(video_files)
     }
 
-    /// Build the destination path for an imported file
+    /// Build the destination path for an imported file.
+    ///
+    /// When `rename_episodes` is enabled, uses the naming template engine to
+    /// generate a properly formatted filename. Otherwise keeps the original name.
     fn build_destination_path(
         &self,
         series: &SeriesDbModel,
         season_number: i32,
         source_file: &Path,
+        episodes: &[EpisodeDbModel],
+        parsed_info: &ParsedEpisodeInfo,
     ) -> Result<PathBuf> {
         let ext = source_file
             .extension()
             .map(|e| e.to_string_lossy().to_string())
             .unwrap_or_else(|| "mkv".to_string());
 
-        let source_name = source_file
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "video".to_string());
-
         let mut dest = PathBuf::from(&series.path);
 
         // Add season folder if enabled
         if series.season_folder {
-            if season_number == 0 {
-                dest.push("Specials");
-            } else {
-                dest.push(format!("Season {:02}", season_number));
-            }
+            dest.push(naming::build_season_folder(
+                &self.media_config,
+                season_number,
+            ));
         }
 
-        // Use the original filename for now
-        dest.push(format!("{}.{}", source_name, ext));
+        // Build filename: use naming template if enabled, otherwise keep original
+        let filename = if self.media_config.rename_episodes && !episodes.is_empty() {
+            let ctx = EpisodeNamingContext {
+                series,
+                episodes,
+                quality: &parsed_info.quality,
+                release_group: parsed_info.release_group.as_deref(),
+            };
+            let named = naming::build_episode_filename(&self.media_config, &ctx);
+            format!("{}.{}", named, ext)
+        } else {
+            let source_name = source_file
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "video".to_string());
+            format!("{}.{}", source_name, ext)
+        };
 
+        dest.push(filename);
         Ok(dest)
     }
 

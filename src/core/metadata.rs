@@ -214,6 +214,9 @@ impl MetadataService {
     ///
     /// Strategy: IMDB wins for ratings, genres, runtime, year.
     /// Skyhook wins for overview, images, episodes, network, status, certification.
+    /// Title is normalized: trailing ` (YYYY)` is stripped when it matches the year,
+    /// since pir9 stores year as a separate field and reconstructs "Title (Year)"
+    /// via the `{Series TitleYear}` naming token.
     fn merge_metadata(
         skyhook: SkyhookShowResponse,
         imdb: Option<crate::core::imdb::ImdbSeries>,
@@ -245,6 +248,21 @@ impl MetadataService {
             _ => skyhook.year,
         };
 
+        // Strip trailing " (YYYY)" from title when it matches the resolved year.
+        // Skyhook sometimes returns disambiguation years baked into the title
+        // (e.g., "Saving Grace (2007)"), but pir9 stores year separately.
+        // The `{Series TitleYear}` naming token reconstructs it when needed.
+        let title = if let Some(y) = year {
+            let suffix = format!(" ({})", y);
+            if skyhook.title.ends_with(&suffix) {
+                skyhook.title[..skyhook.title.len() - suffix.len()].to_string()
+            } else {
+                skyhook.title
+            }
+        } else {
+            skyhook.title
+        };
+
         // Skyhook ratings as fallback
         let skyhook_rating = skyhook.rating.as_ref().or(skyhook.ratings.as_ref());
         let (skyhook_rating_value, skyhook_rating_votes) = match skyhook_rating {
@@ -254,7 +272,7 @@ impl MetadataService {
 
         MergedSeriesMetadata {
             tvdb_id: skyhook.tvdb_id,
-            title: skyhook.title,
+            title,
             overview: skyhook.overview,
             status: skyhook.status,
             year,
