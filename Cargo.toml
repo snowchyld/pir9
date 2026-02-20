@@ -1,6 +1,6 @@
 [package]
 name = "pir9"
-version = "0.17.1"
+version = "0.18.0"
 edition = "2021"
 rust-version = "1.93"
 authors = ["pir9 Team"]
@@ -137,9 +137,6 @@ librqbit = { version = "5.3", optional = true }
 
 # Usenet/NNTP
 # nntp-client = { version = "0.1", optional = true }
-
-# Email/SMTP
-lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "pool", "hostname", "tokio1", "tokio1-rustls-tls"] }
 
 # Internationalization
 rust-embed = { version = "8.5", features = ["interpolate-folder-path"] }

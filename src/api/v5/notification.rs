@@ -193,46 +193,6 @@ fn resource_to_model(resource: &NotificationResource) -> NotificationDbModel {
 /// Build field resources from settings
 fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec<FieldResource> {
     match implementation {
-        "Discord" => vec![
-            FieldResource {
-                order: 0,
-                name: "webHookUrl".to_string(),
-                label: "Webhook URL".to_string(),
-                value: settings.get("webHookUrl").cloned(),
-                field_type: "textbox".to_string(),
-                advanced: false,
-                help_text: Some("Discord webhook URL".to_string()),
-                help_link: Some(
-                    "https://support.discord.com/hc/en-us/articles/228383668".to_string(),
-                ),
-                privacy: "apiKey".to_string(),
-                is_float: false,
-            },
-            FieldResource {
-                order: 1,
-                name: "username".to_string(),
-                label: "Username".to_string(),
-                value: settings.get("username").cloned(),
-                field_type: "textbox".to_string(),
-                advanced: true,
-                help_text: Some("Override the default webhook username".to_string()),
-                help_link: None,
-                privacy: "normal".to_string(),
-                is_float: false,
-            },
-            FieldResource {
-                order: 2,
-                name: "avatar".to_string(),
-                label: "Avatar".to_string(),
-                value: settings.get("avatar").cloned(),
-                field_type: "textbox".to_string(),
-                advanced: true,
-                help_text: Some("Override the default webhook avatar URL".to_string()),
-                help_link: None,
-                privacy: "normal".to_string(),
-                is_float: false,
-            },
-        ],
         "Webhook" => vec![
             FieldResource {
                 order: 0,
@@ -262,30 +222,27 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
                 is_float: false,
             },
         ],
-        "Email" => vec![
+        "Slack" => vec![
             FieldResource {
                 order: 0,
-                name: "server".to_string(),
-                label: "SMTP Server".to_string(),
-                value: settings.get("server").cloned(),
+                name: "webHookUrl".to_string(),
+                label: "Webhook URL".to_string(),
+                value: settings.get("webHookUrl").cloned(),
                 field_type: "textbox".to_string(),
                 advanced: false,
-                help_text: Some("SMTP server hostname".to_string()),
-                help_link: None,
-                privacy: "normal".to_string(),
+                help_text: Some("Slack incoming webhook URL".to_string()),
+                help_link: Some("https://api.slack.com/messaging/webhooks".to_string()),
+                privacy: "apiKey".to_string(),
                 is_float: false,
             },
             FieldResource {
                 order: 1,
-                name: "port".to_string(),
-                label: "Port".to_string(),
-                value: settings
-                    .get("port")
-                    .cloned()
-                    .or(Some(serde_json::json!(587))),
-                field_type: "number".to_string(),
+                name: "channel".to_string(),
+                label: "Channel".to_string(),
+                value: settings.get("channel").cloned(),
+                field_type: "textbox".to_string(),
                 advanced: false,
-                help_text: Some("SMTP port".to_string()),
+                help_text: Some("Override the default webhook channel".to_string()),
                 help_link: None,
                 privacy: "normal".to_string(),
                 is_float: false,
@@ -296,44 +253,8 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
                 label: "Username".to_string(),
                 value: settings.get("username").cloned(),
                 field_type: "textbox".to_string(),
-                advanced: false,
-                help_text: Some("SMTP username".to_string()),
-                help_link: None,
-                privacy: "normal".to_string(),
-                is_float: false,
-            },
-            FieldResource {
-                order: 3,
-                name: "password".to_string(),
-                label: "Password".to_string(),
-                value: None, // Never expose password
-                field_type: "password".to_string(),
-                advanced: false,
-                help_text: Some("SMTP password".to_string()),
-                help_link: None,
-                privacy: "password".to_string(),
-                is_float: false,
-            },
-            FieldResource {
-                order: 4,
-                name: "from".to_string(),
-                label: "From Address".to_string(),
-                value: settings.get("from").cloned(),
-                field_type: "textbox".to_string(),
-                advanced: false,
-                help_text: Some("Email address to send from".to_string()),
-                help_link: None,
-                privacy: "normal".to_string(),
-                is_float: false,
-            },
-            FieldResource {
-                order: 5,
-                name: "to".to_string(),
-                label: "To Addresses".to_string(),
-                value: settings.get("to").cloned(),
-                field_type: "tag".to_string(),
-                advanced: false,
-                help_text: Some("Email addresses to send to".to_string()),
+                advanced: true,
+                help_text: Some("Override the default webhook username".to_string()),
                 help_link: None,
                 privacy: "normal".to_string(),
                 is_float: false,
@@ -356,7 +277,7 @@ fn fields_to_settings(fields: &[FieldResource]) -> String {
 
 /// Whether this implementation supports notification events
 fn supports_all_events(implementation: &str) -> bool {
-    matches!(implementation, "Discord" | "Webhook" | "Email")
+    matches!(implementation, "Webhook" | "Slack")
 }
 
 pub async fn get_notifications(

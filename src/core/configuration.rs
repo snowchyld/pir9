@@ -193,26 +193,8 @@ pub struct NotificationConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NotificationProvider {
-    Webhook {
-        url: String,
-        method: String,
-    },
-    Email {
-        smtp_server: String,
-        port: u16,
-        username: String,
-        password: String,
-    },
-    Discord {
-        webhook_url: String,
-    },
-    Slack {
-        webhook_url: String,
-    },
-    Telegram {
-        bot_token: String,
-        chat_id: String,
-    },
+    Webhook { url: String, method: String },
+    Slack { webhook_url: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
