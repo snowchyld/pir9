@@ -198,7 +198,7 @@ This project uses semver. **Every commit MUST bump the version.**
    - Blank line, then body explaining what changed and why
    - End with `Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>`
 
-### Current version: 0.11.0
+### Current version: 0.11.1
 
 ### Commit types
 - `feat:` — new feature or capability
@@ -226,6 +226,40 @@ Biome enforces:
 - No implicit `any` types (warning)
 - No implicit return values in `forEach` callbacks — use block body `{ }`
 - Consistent formatting (2-space indent, single quotes, trailing commas)
+
+## Pre-commit Hooks
+
+Pre-commit runs 10 hooks on every commit (`.pre-commit-config.yaml`):
+
+| Tier | Hook | Trigger | Purpose |
+|------|------|---------|---------|
+| Fast | gitleaks | all files | Secret detection |
+| Fast | cargo fmt | `*.rs` | Rust formatting |
+| Fast | cargo clippy | `*.rs` | Rust linting (`-D warnings`) |
+| Fast | biome check | `frontend/src/**` | TS lint + format |
+| Fast | ruff + ruff-format | `*.py` | Python lint (if Python files exist) |
+| Security | cargo audit | `Cargo.{toml,lock}` | CVEs in Rust dependencies |
+| Security | semgrep | all files | SAST (auto registry rules) |
+| Security | grype | lockfiles | CVE scan across all ecosystems |
+| Security | ubs | all files | Rust + JS deep bug scanning |
+| SBOM | syft | lockfiles | CycloneDX SBOM → `sbom.cdx.json` |
+
+```bash
+pre-commit install                       # Install hooks (one-time)
+pre-commit run --all-files               # Run all hooks manually
+pre-commit run <hook-id> --all-files     # Run a specific hook
+```
+
+## Claude Code Hooks
+
+PostToolUse hooks in `.claude/hooks/` run after every Edit/Write and feed context back:
+
+| Hook | Scope | Output |
+|------|-------|--------|
+| `check-biome.sh` | `frontend/src/*.ts` | Biome lint findings |
+| `check-security.sh` | all files | Semgrep findings + cargo audit (on `Cargo.toml`) |
+
+Hooks produce **zero output on clean files** — findings only, capped at 20 lines.
 
 ## Do NOT
 
