@@ -1527,7 +1527,7 @@ async fn search_skyhook_by_title_year(
 }
 
 /// Auto-refresh a series: fetch episodes from IMDB + Skyhook
-async fn auto_refresh_series(
+pub async fn auto_refresh_series(
     series_id: i64,
     db: &crate::core::datastore::Database,
     metadata_service: &crate::core::metadata::MetadataService,
@@ -1727,7 +1727,7 @@ async fn auto_refresh_series(
 }
 
 /// Auto-scan a series: scan disk for existing episode files
-async fn auto_scan_series(
+pub async fn auto_scan_series(
     series_id: i64,
     db: &crate::core::datastore::Database,
 ) -> Result<(), String> {

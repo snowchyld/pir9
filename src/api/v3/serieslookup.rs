@@ -146,41 +146,71 @@ fn generate_slug(title: &str) -> String {
 pub async fn lookup_series(
     Query(query): Query<SeriesLookupQuery>,
 ) -> Json<Vec<SeriesLookupResource>> {
-    let term = match &query.term {
-        Some(t) => t.clone(),
-        None => return Json(vec![]),
-    };
-
-    // Query Sonarr's Skyhook service
-    let url = format!(
-        "http://skyhook.sonarr.tv/v1/tvdb/search/en/?term={}",
-        urlencoding::encode(&term)
-    );
-
     let client = reqwest::Client::new();
-    let response = match client
-        .get(&url)
-        .header("User-Agent", "pir9/0.1.0")
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("Failed to query Skyhook: {}", e);
+
+    // Determine lookup mode: tvdb_id param, "tvdb:NNNNN" in term, or text search
+    let tvdb_id = query.tvdb_id.or_else(|| {
+        query.term.as_ref().and_then(|t| {
+            t.strip_prefix("tvdb:").and_then(|id| id.trim().parse::<i32>().ok())
+        })
+    });
+
+    let skyhook_results: Vec<SkyhookSearchResult> = if let Some(id) = tvdb_id {
+        // Direct TVDB ID lookup — Skyhook returns a single show object
+        let url = format!("http://skyhook.sonarr.tv/v1/tvdb/shows/en/{}", id);
+        tracing::info!("Skyhook TVDB lookup: {}", url);
+
+        match client.get(&url).header("User-Agent", "pir9").send().await {
+            Ok(r) if r.status().is_success() => {
+                match r.json::<SkyhookSearchResult>().await {
+                    Ok(show) => vec![show],
+                    Err(e) => {
+                        tracing::error!("Failed to parse Skyhook show response: {}", e);
+                        return Json(vec![]);
+                    }
+                }
+            }
+            Ok(r) => {
+                tracing::error!("Skyhook TVDB lookup returned status: {}", r.status());
+                return Json(vec![]);
+            }
+            Err(e) => {
+                tracing::error!("Failed to query Skyhook by TVDB ID: {}", e);
+                return Json(vec![]);
+            }
+        }
+    } else {
+        // Text search
+        let term = match &query.term {
+            Some(t) => t.clone(),
+            None => return Json(vec![]),
+        };
+
+        let url = format!(
+            "http://skyhook.sonarr.tv/v1/tvdb/search/en/?term={}",
+            urlencoding::encode(&term)
+        );
+        tracing::info!("Skyhook text search: {}", url);
+
+        let response = match client.get(&url).header("User-Agent", "pir9").send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("Failed to query Skyhook: {}", e);
+                return Json(vec![]);
+            }
+        };
+
+        if !response.status().is_success() {
+            tracing::error!("Skyhook returned status: {}", response.status());
             return Json(vec![]);
         }
-    };
 
-    if !response.status().is_success() {
-        tracing::error!("Skyhook returned status: {}", response.status());
-        return Json(vec![]);
-    }
-
-    let skyhook_results: Vec<SkyhookSearchResult> = match response.json().await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("Failed to parse Skyhook response: {}", e);
-            return Json(vec![]);
+        match response.json().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("Failed to parse Skyhook response: {}", e);
+                return Json(vec![]);
+            }
         }
     };
 

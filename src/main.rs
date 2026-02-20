@@ -16,8 +16,9 @@ use clap::Parser;
 use tokio::signal;
 use tower_http::{
     compression::CompressionLayer, cors::CorsLayer, normalize_path::NormalizePathLayer,
-    trace::TraceLayer,
+    trace::{DefaultOnResponse, TraceLayer},
 };
+use tracing::Level;
 use tracing::{info, warn};
 
 mod api;
@@ -291,8 +292,22 @@ fn create_router(state: Arc<AppState>) -> Router {
                 tower_http::services::ServeFile::new("frontend/dist/index.html"),
             ),
         )
-        // Add middleware
-        .layer(TraceLayer::new_for_http())
+        // Add middleware — log all API requests at INFO level with method, path, status
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &axum::http::Request<_>| {
+                    let path = request.uri().path();
+                    let method = request.method().as_str();
+                    // Log API requests at INFO, everything else at DEBUG
+                    if path.starts_with("/api/") {
+                        tracing::info_span!("request", %method, %path,
+                            query = request.uri().query().unwrap_or(""))
+                    } else {
+                        tracing::debug_span!("request", %method, %path)
+                    }
+                })
+                .on_response(DefaultOnResponse::new().level(Level::INFO))
+        )
         .layer(CompressionLayer::new())
         .layer(CorsLayer::permissive())
         .layer(NormalizePathLayer::trim_trailing_slash())
