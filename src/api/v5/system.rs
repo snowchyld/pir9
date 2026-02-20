@@ -117,20 +117,24 @@ async fn get_running_tasks(
                 crate::core::messaging::ScanType::RescanMusic => "Scan Music".to_string(),
             };
             let total = job.entity_ids.len();
+            let has_worker = job.worker_id.is_some();
+            let status = if has_worker { "started" } else { "queued" };
             let detail = if job.results_received > 0 {
                 if total > 1 {
                     Some(format!("{}/{} done", job.results_received, total))
                 } else {
                     Some("Processing...".to_string())
                 }
-            } else {
+            } else if has_worker {
                 Some("Scanning...".to_string())
+            } else {
+                Some("Waiting for worker...".to_string())
             };
             tasks.push(RunningTask {
                 id: job.job_id,
                 task_type: "scan".to_string(),
                 name,
-                status: "started".to_string(),
+                status: status.to_string(),
                 started: job.started_at,
                 message: None,
                 detail,
