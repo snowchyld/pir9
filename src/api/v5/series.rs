@@ -262,20 +262,22 @@ async fn import_series(
     let mut results = Vec::with_capacity(series_list.len());
 
     for import_req in series_list {
+        // Extract folder name and year from path
+        let folder_name = import_req.path.as_ref()
+            .and_then(|p| p.rsplit('/').next())
+            .unwrap_or("")
+            .to_string();
+
+        let folder_year = extract_year_from_folder(&folder_name);
+
         // Get the title to use for lookup (from title field or extract from path)
         let lookup_title = import_req.title.clone().unwrap_or_else(|| {
-            // Extract folder name from path
-            import_req.path.as_ref()
-                .and_then(|p| p.rsplit('/').next())
-                .map(|s| {
-                    // Remove year suffix like " (2020)" if present
-                    if let Some(idx) = s.rfind(" (") {
-                        s[..idx].to_string()
-                    } else {
-                        s.to_string()
-                    }
-                })
-                .unwrap_or_default()
+            // Strip year suffix like " (2020)" from folder name
+            if let Some(idx) = folder_name.rfind(" (") {
+                folder_name[..idx].to_string()
+            } else {
+                folder_name.clone()
+            }
         });
 
         if lookup_title.is_empty() {
@@ -285,10 +287,10 @@ async fn import_series(
 
         // If tvdbId is not provided or is 0, lookup the series
         let tvdb_id = if import_req.tvdb_id.unwrap_or(0) <= 0 {
-            tracing::info!("Looking up series for import: {}", lookup_title);
-            match lookup_series_by_title(&lookup_title).await {
+            tracing::info!("Looking up series for import: {} (year={:?})", lookup_title, folder_year);
+            match lookup_series_by_title_and_year(&lookup_title, folder_year, &state.imdb_client).await {
                 Ok(Some(result)) => {
-                    tracing::info!("Found series: {} (tvdbId={})", result.title, result.tvdb_id);
+                    tracing::info!("Found series: {} (tvdbId={}, year={:?})", result.title, result.tvdb_id, result.year);
                     result.tvdb_id
                 }
                 Ok(None) => {
@@ -919,8 +921,98 @@ fn generate_slug(title: &str) -> String {
         .to_string()
 }
 
-/// Lookup a series by title using Skyhook, returning the first match
-async fn lookup_series_by_title(title: &str) -> Result<Option<SkyhookSearchResult>, String> {
+/// Extract a year (1900-2099) from a folder name like "The Flash (2014)" or "The.Flash.2014"
+fn extract_year_from_folder(folder: &str) -> Option<i32> {
+    static FOLDER_YEAR_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+        regex::Regex::new(r"[\s.\(_-]((?:19|20)\d{2})[\s.\)_-]?$").expect("valid regex")
+    });
+    // Also try parenthesized year anywhere: "Show (2014)"
+    static PAREN_YEAR_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+        regex::Regex::new(r"\((\d{4})\)").expect("valid regex")
+    });
+
+    if let Some(caps) = PAREN_YEAR_RE.captures(folder) {
+        if let Ok(y) = caps[1].parse::<i32>() {
+            if (1900..2100).contains(&y) {
+                return Some(y);
+            }
+        }
+    }
+    if let Some(caps) = FOLDER_YEAR_RE.captures(folder) {
+        if let Ok(y) = caps[1].parse::<i32>() {
+            if (1900..2100).contains(&y) {
+                return Some(y);
+            }
+        }
+    }
+    None
+}
+
+/// Lookup a series by title (and optional year) using IMDB-first, Skyhook-fallback strategy.
+///
+/// 1. If IMDB is enabled, search IMDB and filter by year for the best match.
+///    If an IMDB match is found, search Skyhook by the IMDB title+year to get the tvdb_id.
+/// 2. Fall back to Skyhook search, sorting results by year proximity instead of
+///    blindly taking the first result.
+async fn lookup_series_by_title_and_year(
+    title: &str,
+    year: Option<i32>,
+    imdb_client: &crate::core::imdb::ImdbClient,
+) -> Result<Option<SkyhookSearchResult>, String> {
+    // --- IMDB-first path ---
+    if imdb_client.is_enabled() {
+        if let Ok(imdb_results) = imdb_client.search_series(title, 10).await {
+            if !imdb_results.is_empty() {
+                // Pick the IMDB result whose start_year best matches
+                let best = if let Some(yr) = year {
+                    imdb_results.iter()
+                        .filter(|s| s.start_year.is_some())
+                        .min_by_key(|s| (s.start_year.unwrap_or(0) - yr).unsigned_abs())
+                        .or(imdb_results.first())
+                } else {
+                    imdb_results.first()
+                };
+
+                if let Some(imdb_match) = best {
+                    // Validate year if we have one
+                    let year_ok = match (year, imdb_match.start_year) {
+                        (Some(y), Some(sy)) => (y - sy).abs() <= 1,
+                        _ => true,
+                    };
+
+                    if year_ok {
+                        tracing::info!(
+                            "IMDB match: {} ({}) [{}]",
+                            imdb_match.title,
+                            imdb_match.start_year.unwrap_or(0),
+                            imdb_match.imdb_id,
+                        );
+
+                        // Now find the corresponding Skyhook entry using refined search
+                        let skyhook_term = if let Some(sy) = imdb_match.start_year {
+                            format!("{} {}", imdb_match.title, sy)
+                        } else {
+                            imdb_match.title.clone()
+                        };
+
+                        if let Ok(Some(skyhook)) = search_skyhook_by_title_year(&skyhook_term, imdb_match.start_year).await {
+                            return Ok(Some(skyhook));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Skyhook fallback ---
+    search_skyhook_by_title_year(title, year).await
+}
+
+/// Search Skyhook and pick the result whose year best matches the expected year.
+async fn search_skyhook_by_title_year(
+    title: &str,
+    year: Option<i32>,
+) -> Result<Option<SkyhookSearchResult>, String> {
     let url = format!(
         "http://skyhook.sonarr.tv/v1/tvdb/search/en/?term={}",
         urlencoding::encode(title)
@@ -943,7 +1035,27 @@ async fn lookup_series_by_title(title: &str) -> Result<Option<SkyhookSearchResul
         .await
         .map_err(|e| format!("Failed to parse Skyhook response: {}", e))?;
 
-    Ok(results.into_iter().next())
+    if results.is_empty() {
+        return Ok(None);
+    }
+
+    // If we have a year, sort by year proximity; otherwise take the first result
+    match year {
+        Some(yr) => {
+            let best = results.into_iter()
+                .min_by_key(|s| {
+                    let s_year = s.year.unwrap_or(0);
+                    if s_year == 0 {
+                        // No year info — deprioritize but don't eliminate
+                        1000i32
+                    } else {
+                        (s_year - yr).abs()
+                    }
+                });
+            Ok(best)
+        }
+        None => Ok(results.into_iter().next()),
+    }
 }
 
 /// Auto-refresh a series: fetch episodes from IMDB + Skyhook
@@ -1273,8 +1385,8 @@ fn parse_release_group(filename: &str) -> Option<String> {
 
 /// Parse season and episode numbers from filename
 fn parse_season_episode(filename: &str) -> Option<(i32, i32)> {
-    // Try S01E01 format
-    let re_sxxexx = regex::Regex::new(r"[Ss](\d{1,2})[Ee](\d{1,2})").ok()?;
+    // Try S01E01 format (allows optional separator between S##/E##: "S02 E01", "S02.E01", "S02E01")
+    let re_sxxexx = regex::Regex::new(r"[Ss](\d{1,2})[\s._-]*[Ee](\d{1,3})").ok()?;
     if let Some(caps) = re_sxxexx.captures(filename) {
         let season: i32 = caps.get(1)?.as_str().parse().ok()?;
         let episode: i32 = caps.get(2)?.as_str().parse().ok()?;

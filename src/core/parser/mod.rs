@@ -40,7 +40,7 @@ static ABSOLUTE_EPISODE_REGEX: Lazy<Regex> = Lazy::new(|| {
 
 // Year in title: Show (2020) or Show.2020
 static YEAR_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"[\.\s_\(\[-]*((?:19|20)\d{2})[\.\s_\)\]-]").unwrap()
+    Regex::new(r"[\.\s_\(\[-]*((?:19|20)\d{2})(?:[\.\s_\)\]-]|$)").unwrap()
 });
 
 // Release group: -GROUP or [GROUP]
@@ -407,6 +407,106 @@ pub fn title_matches_series(info: &ParsedEpisodeInfo, series_title: &str) -> boo
     false
 }
 
+/// Match a parsed title against a series name, considering year for disambiguation.
+///
+/// If both the parsed info and the series have a year, the match requires
+/// years to be within ±1 tolerance (for off-by-one in metadata sources).
+/// If either side has no year, falls back to title-only matching.
+pub fn title_matches_series_with_year(
+    info: &ParsedEpisodeInfo,
+    series_title: &str,
+    series_year: i32,
+) -> bool {
+    if !title_matches_series(info, series_title) {
+        return false;
+    }
+    let parsed_year = info.series_title_info.year;
+    // If both sides have a year, they must be close
+    if parsed_year > 0 && series_year > 0 {
+        return (parsed_year - series_year).abs() <= 1;
+    }
+    // One or both sides missing year — accept title-only match
+    true
+}
+
+/// Score a candidate series match. Higher is better.
+///
+/// - 100: exact title + exact year
+/// -  90: exact title + year within ±1
+/// -  50: exact title + no year info on either side
+/// -  40: partial title match + matching year
+/// -  30: partial title match + no year info
+/// -   0: no match
+fn score_series_match(
+    info: &ParsedEpisodeInfo,
+    series_title: &str,
+    series_year: i32,
+) -> u32 {
+    if info.series_title.is_empty() {
+        return 0;
+    }
+
+    let normalized_parsed = normalize_title(&info.series_title);
+    let normalized_series = normalize_title(series_title);
+    let parsed_year = info.series_title_info.year;
+    let both_have_year = parsed_year > 0 && series_year > 0;
+
+    let is_exact = normalized_parsed == normalized_series;
+    let is_partial = !is_exact
+        && (normalized_parsed.contains(&normalized_series)
+            || normalized_series.contains(&normalized_parsed));
+
+    if is_exact {
+        if both_have_year {
+            if parsed_year == series_year {
+                100
+            } else if (parsed_year - series_year).abs() <= 1 {
+                90
+            } else {
+                // Exact title but wrong year — weak match, better than nothing
+                10
+            }
+        } else {
+            50
+        }
+    } else if is_partial {
+        if both_have_year && (parsed_year - series_year).abs() <= 1 {
+            40
+        } else if !both_have_year {
+            30
+        } else {
+            5
+        }
+    } else {
+        0
+    }
+}
+
+/// Pick the best series match from a list of candidates using title + year scoring.
+///
+/// Returns the index of the best match, or `None` if no candidate matches at all.
+/// Considers both the series `title` and `clean_title` fields.
+pub fn best_series_match(
+    info: &ParsedEpisodeInfo,
+    candidates: &[crate::core::datastore::models::SeriesDbModel],
+) -> Option<usize> {
+    let mut best_idx = None;
+    let mut best_score = 0u32;
+
+    for (i, series) in candidates.iter().enumerate() {
+        let score_title = score_series_match(info, &series.title, series.year);
+        let score_clean = score_series_match(info, &series.clean_title, series.year);
+        let score = score_title.max(score_clean);
+
+        if score > best_score {
+            best_score = score;
+            best_idx = Some(i);
+        }
+    }
+
+    best_idx
+}
+
 /// Parse series and episode info from file path
 pub fn parse_path(path: &std::path::Path) -> Option<ParsedEpisodeInfo> {
     let file_name = path.file_stem()?.to_str()?;
@@ -434,6 +534,15 @@ mod tests {
         assert_eq!(parsed.episode_numbers, vec![2]);
         assert_eq!(parsed.quality.quality, Quality::WebDl720p);
         assert_eq!(parsed.release_group, Some("GROUP".to_string()));
+    }
+
+    #[test]
+    fn test_parse_spaced_season_episode() {
+        // Amazon Web-DL naming: "SMALLVILLE - S02 E01 - Vortex (720p - AMZN Web-DL)"
+        let parsed = parse_title("SMALLVILLE - S02 E01 - Vortex (720p - AMZN Web-DL)").unwrap();
+        assert_eq!(parsed.series_title, "SMALLVILLE");
+        assert_eq!(parsed.season_number, Some(2));
+        assert_eq!(parsed.episode_numbers, vec![1]);
     }
 
     #[test]
@@ -474,5 +583,97 @@ mod tests {
         let parsed = parse_title("Show.S01E01.REPACK.1080p.WEB-DL").unwrap();
         assert!(parsed.is_repack);
         assert!(parsed.quality.revision.is_repack);
+    }
+
+    #[test]
+    fn test_title_matches_series_with_year_exact() {
+        let parsed = parse_title("The.Flash.2014.S01E01.720p.HDTV").unwrap();
+        assert!(title_matches_series_with_year(&parsed, "The Flash", 2014));
+        assert!(!title_matches_series_with_year(&parsed, "The Flash", 1990));
+    }
+
+    #[test]
+    fn test_title_matches_series_with_year_tolerance() {
+        // Off-by-one tolerance: metadata sometimes says 2013, folder says 2014
+        let parsed = parse_title("The.Flash.2014.S01E01.720p.HDTV").unwrap();
+        assert!(title_matches_series_with_year(&parsed, "The Flash", 2013));
+        assert!(!title_matches_series_with_year(&parsed, "The Flash", 2012));
+    }
+
+    #[test]
+    fn test_title_matches_series_with_year_no_year() {
+        // If no year in parsed title, fall back to title-only match
+        let parsed = parse_title("The.Flash.S01E01.720p.HDTV").unwrap();
+        assert!(title_matches_series_with_year(&parsed, "The Flash", 2014));
+        assert!(title_matches_series_with_year(&parsed, "The Flash", 1990));
+    }
+
+    #[test]
+    fn test_score_series_match_exact_year() {
+        let parsed = parse_title("The.Flash.2014.S01E01.720p.HDTV").unwrap();
+        assert_eq!(score_series_match(&parsed, "The Flash", 2014), 100);
+    }
+
+    #[test]
+    fn test_score_series_match_wrong_year() {
+        let parsed = parse_title("The.Flash.2014.S01E01.720p.HDTV").unwrap();
+        // Exact title but wildly wrong year
+        assert_eq!(score_series_match(&parsed, "The Flash", 1990), 10);
+    }
+
+    #[test]
+    fn test_score_series_match_no_year() {
+        let parsed = parse_title("The.Flash.S01E01.720p.HDTV").unwrap();
+        assert_eq!(score_series_match(&parsed, "The Flash", 2014), 50);
+    }
+
+    #[test]
+    fn test_best_series_match_disambiguates_by_year() {
+        use crate::core::datastore::models::SeriesDbModel;
+        use chrono::Utc;
+
+        let parsed = parse_title("The.Flash.2014.S01E01.720p.HDTV").unwrap();
+
+        let make_series = |id, year: i32| SeriesDbModel {
+            id,
+            tvdb_id: 0,
+            tv_rage_id: 0,
+            tv_maze_id: 0,
+            imdb_id: None,
+            tmdb_id: 0,
+            title: "The Flash".to_string(),
+            clean_title: "the flash".to_string(),
+            sort_title: "the flash".to_string(),
+            status: 0,
+            overview: None,
+            monitored: true,
+            monitor_new_items: 0,
+            quality_profile_id: 1,
+            language_profile_id: None,
+            season_folder: true,
+            series_type: 0,
+            title_slug: "the-flash".to_string(),
+            path: format!("/tv/The Flash ({})", year),
+            root_folder_path: "/tv".to_string(),
+            year,
+            first_aired: None,
+            last_aired: None,
+            runtime: 42,
+            network: None,
+            certification: None,
+            use_scene_numbering: false,
+            added: Utc::now(),
+            last_info_sync: None,
+            imdb_rating: None,
+            imdb_votes: None,
+        };
+
+        let candidates = vec![
+            make_series(1, 1990),
+            make_series(2, 2014),
+        ];
+
+        // Should pick the 2014 version (index 1), not the 1990 version
+        assert_eq!(best_series_match(&parsed, &candidates), Some(1));
     }
 }

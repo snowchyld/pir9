@@ -106,11 +106,10 @@ pub async fn get_manual_import(
             .map(|p| serde_json::to_value(&p.quality).unwrap_or_default())
             .unwrap_or(serde_json::json!({}));
 
-        // Try to match to a series
+        // Try to match to a series (year-aware scoring picks the best candidate)
         let matched_series = parsed.as_ref().and_then(|info| {
-            all_series
-                .iter()
-                .find(|s| parser::title_matches_series(info, &s.title))
+            parser::best_series_match(info, &all_series)
+                .map(|idx| &all_series[idx])
         });
 
         let series_json = matched_series.map(|s| {

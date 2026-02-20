@@ -15,7 +15,7 @@ use crate::core::datastore::repositories::{
 };
 use crate::core::datastore::Database;
 use crate::core::download::clients::{create_client_from_model, DownloadState, DownloadStatus};
-use crate::core::parser::{parse_title, title_matches_series, ParsedEpisodeInfo};
+use crate::core::parser::{parse_title, best_series_match, ParsedEpisodeInfo};
 
 /// Result of an import operation
 #[derive(Debug, Clone)]
@@ -155,23 +155,15 @@ impl ImportService {
         Some(pending)
     }
 
-    /// Try to match parsed info to a series in the database
+    /// Try to match parsed info to a series in the database (year-aware).
+    ///
+    /// Uses scoring to pick the best candidate, considering both title and year
+    /// when the release title contains a year (e.g., "The Flash 2014 S01E01").
     pub async fn match_series(&self, info: &ParsedEpisodeInfo) -> Result<Option<SeriesDbModel>> {
         let series_repo = SeriesRepository::new(self.db.clone());
         let all_series = series_repo.get_all().await?;
 
-        for series in all_series {
-            if title_matches_series(info, &series.title) {
-                return Ok(Some(series));
-            }
-
-            // Also try clean title
-            if title_matches_series(info, &series.clean_title) {
-                return Ok(Some(series));
-            }
-        }
-
-        Ok(None)
+        Ok(best_series_match(info, &all_series).map(|idx| all_series.into_iter().nth(idx).unwrap()))
     }
 
     /// Match episodes for a series based on parsed info
