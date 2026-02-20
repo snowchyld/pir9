@@ -1242,16 +1242,18 @@ async fn execute_rescan_series_distributed(
 
     let series_repo = SeriesRepository::new(db.clone());
 
-    // Collect series paths for the scan request
+    // Collect series paths for the scan request, keeping series_ids and paths aligned
+    let mut valid_series_ids = Vec::new();
     let mut paths = Vec::new();
     for series_id in series_ids {
         match series_repo.get_by_id(*series_id).await {
             Ok(Some(series)) => {
+                valid_series_ids.push(series.id);
                 paths.push(series.path.clone());
                 tracing::debug!("Adding path for scan: {} ({})", series.title, series.path);
             }
             _ => {
-                tracing::warn!("Series {} not found", series_id);
+                tracing::warn!("Series {} not found, skipping", series_id);
             }
         }
     }
@@ -1260,13 +1262,13 @@ async fn execute_rescan_series_distributed(
         return Ok("No valid series paths to scan".to_string());
     }
 
-    // Create and publish the scan request
-    let (job_id, message) = create_scan_request(series_ids.to_vec(), paths.clone());
+    // Create and publish the scan request (series_ids and paths are 1:1 aligned)
+    let (job_id, message) = create_scan_request(valid_series_ids.clone(), paths.clone());
 
     tracing::info!(
         "Publishing scan request: job_id={}, series={:?}, paths={}",
         job_id,
-        series_ids,
+        valid_series_ids,
         paths.len()
     );
 

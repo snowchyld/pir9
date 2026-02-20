@@ -309,7 +309,7 @@ impl TrackedDownloadService {
                 };
 
             // Get first episode info for display
-            let (season_number, episode_numbers) = if !episode_ids.is_empty() {
+            let (resolved_episode_id, season_number, episode_numbers) = if !episode_ids.is_empty() {
                 if let Ok(Some(ep)) = episode_repo.get_by_id(episode_ids[0]).await {
                     let mut ep_nums: Vec<i32> = vec![ep.episode_number];
                     for &ep_id in episode_ids.iter().skip(1) {
@@ -317,17 +317,45 @@ impl TrackedDownloadService {
                             ep_nums.push(other_ep.episode_number);
                         }
                     }
-                    (ep.season_number, ep_nums)
+                    (episode_ids[0], ep.season_number, ep_nums)
                 } else {
-                    (0, vec![])
+                    (0, 0, vec![])
                 }
             } else {
-                (0, vec![])
+                // Fallback: parse title to extract episode info when episode_ids is empty
+                let mut fallback = (0i64, 0i32, vec![]);
+                if td.series_id > 0 {
+                    if let Some(info) = parse_title(&td.title) {
+                        // Standard S01E02 matching
+                        if let Some(season) = info.season_number {
+                            if !info.episode_numbers.is_empty() {
+                                let ep_num = info.episode_numbers[0];
+                                if let Ok(Some(ep)) = episode_repo
+                                    .get_by_series_season_episode(td.series_id, season, ep_num)
+                                    .await
+                                {
+                                    fallback = (ep.id, ep.season_number, vec![ep.episode_number]);
+                                }
+                            }
+                        }
+                        // Anime absolute episode matching
+                        if fallback.0 == 0 && !info.absolute_episode_numbers.is_empty() {
+                            let abs_num = info.absolute_episode_numbers[0];
+                            if let Ok(Some(ep)) = episode_repo
+                                .get_by_series_and_absolute(td.series_id, abs_num)
+                                .await
+                            {
+                                fallback = (ep.id, ep.season_number, vec![ep.episode_number]);
+                            }
+                        }
+                    }
+                }
+                fallback
             };
 
             // Get episode has file status
-            let episode_has_file = if !episode_ids.is_empty() {
-                if let Ok(Some(ep)) = episode_repo.get_by_id(episode_ids[0]).await {
+            let episode_has_file = if resolved_episode_id > 0 {
+                if let Ok(Some(ep)) = episode_repo.get_by_id(resolved_episode_id).await {
                     ep.has_file
                 } else {
                     false
@@ -350,7 +378,7 @@ impl TrackedDownloadService {
             queue_items.push(QueueItem {
                 id: td.id,
                 series_id: td.series_id,
-                episode_id: episode_ids.first().copied().unwrap_or(0),
+                episode_id: resolved_episode_id,
                 season_number,
                 episode_numbers,
                 title: td.title,

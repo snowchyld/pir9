@@ -1070,6 +1070,22 @@ impl EpisodeRepository {
         Ok(row)
     }
 
+    pub async fn get_by_series_and_absolute(
+        &self,
+        series_id: i64,
+        absolute_episode_number: i32,
+    ) -> Result<Option<super::models::EpisodeDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::EpisodeDbModel>(
+            "SELECT * FROM episodes WHERE series_id = $1 AND absolute_episode_number = $2",
+        )
+        .bind(series_id)
+        .bind(absolute_episode_number)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
     pub async fn get_by_tvdb_id(
         &self,
         tvdb_id: i64,

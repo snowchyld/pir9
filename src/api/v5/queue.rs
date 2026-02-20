@@ -428,6 +428,7 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                     {
                                         matched_series_id = Some(series.id);
 
+                                        // Standard S01E02 matching
                                         if let Some(season) = info.season_number {
                                             if !info.episode_numbers.is_empty() {
                                                 let ep_num = info.episode_numbers[0];
@@ -441,6 +442,35 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                                 }
                                             }
                                         }
+
+                                        // Anime absolute episode matching (e.g. "- 23")
+                                        if matched_episode_id.is_none()
+                                            && !info.absolute_episode_numbers.is_empty()
+                                        {
+                                            let abs_num = info.absolute_episode_numbers[0];
+                                            if let Ok(Some(ep)) = episode_repo
+                                                .get_by_series_and_absolute(series.id, abs_num)
+                                                .await
+                                            {
+                                                matched_episode_id = Some(ep.id);
+                                            }
+                                        }
+
+                                        // Bare episode number without season (e.g. "E10")
+                                        if matched_episode_id.is_none()
+                                            && info.season_number.is_none()
+                                            && !info.episode_numbers.is_empty()
+                                        {
+                                            let ep_num = info.episode_numbers[0];
+                                            // Try as absolute episode number first
+                                            if let Ok(Some(ep)) = episode_repo
+                                                .get_by_series_and_absolute(series.id, ep_num)
+                                                .await
+                                            {
+                                                matched_episode_id = Some(ep.id);
+                                            }
+                                        }
+
                                         break;
                                     }
                                 }
@@ -562,6 +592,24 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                     } else {
                                         None
                                     }
+                                } else if !info.absolute_episode_numbers.is_empty() {
+                                    // Anime absolute numbering (e.g. "- 23")
+                                    Some(QueueEpisodeResource {
+                                        id: 0,
+                                        season_number: 1,
+                                        episode_number: info.absolute_episode_numbers[0],
+                                        title: String::new(),
+                                        air_date_utc: None,
+                                    })
+                                } else if !info.episode_numbers.is_empty() {
+                                    // Bare episode number without season (e.g. "E10")
+                                    Some(QueueEpisodeResource {
+                                        id: 0,
+                                        season_number: 0,
+                                        episode_number: info.episode_numbers[0],
+                                        title: String::new(),
+                                        air_date_utc: None,
+                                    })
                                 } else {
                                     None
                                 }

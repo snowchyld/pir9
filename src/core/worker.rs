@@ -258,19 +258,21 @@ impl WorkerRunner {
                     job_id, scan_type, series_ids
                 );
 
-                // Check if this request is for paths we handle
-                let relevant_paths: Vec<&String> =
-                    paths.iter().filter(|p| self.handles_path(p)).collect();
+                // Pair series_ids with paths (1:1 aligned) and filter to paths we handle
+                let relevant: Vec<(i64, &String)> = series_ids
+                    .iter()
+                    .zip(paths.iter())
+                    .filter(|(_, p)| self.handles_path(p))
+                    .map(|(&sid, p)| (sid, p))
+                    .collect();
 
-                if relevant_paths.is_empty() {
+                if relevant.is_empty() {
                     debug!("Scan request not for our paths, ignoring");
                     return;
                 }
 
                 // Execute the scan
-                let result = self
-                    .execute_scan(job_id, scan_type, series_ids, &relevant_paths)
-                    .await;
+                let result = self.execute_scan(job_id, scan_type, &relevant).await;
 
                 // Publish results
                 for scan_result in result {
@@ -318,26 +320,28 @@ impl WorkerRunner {
     }
 
     /// Execute a scan request and return results
+    ///
+    /// Each entry in `series_paths` is a `(series_id, path)` pair — the dispatcher
+    /// keeps these aligned so the worker can tag each result with the correct series.
     async fn execute_scan(
         &self,
         job_id: &str,
         scan_type: &ScanType,
-        series_ids: &[i64],
-        paths: &[&String],
+        series_paths: &[(i64, &String)],
     ) -> Vec<Message> {
         let mut results = Vec::new();
         let mut total_files_found: u64 = 0;
 
         match scan_type {
             ScanType::RescanSeries => {
-                for path_str in paths {
+                for &(series_id, path_str) in series_paths {
                     let path = PathBuf::from(path_str);
 
                     if !path.exists() {
                         warn!("Scan path does not exist: {}", path_str);
                         results.push(Message::ScanResult {
                             job_id: job_id.to_string(),
-                            series_id: 0, // Unknown series
+                            series_id,
                             worker_id: self.worker_id.clone(),
                             files_found: vec![],
                             errors: vec![format!("Path does not exist: {}", path_str)],
@@ -345,15 +349,11 @@ impl WorkerRunner {
                         continue;
                     }
 
-                    info!("Scanning path: {}", path_str);
+                    info!("Scanning path: {} (series_id={})", path_str, series_id);
                     let files = scanner::scan_series_directory(&path);
                     total_files_found += files.len() as u64;
 
                     info!("Found {} video files in {}", files.len(), path_str);
-
-                    // For now, use series_id 0 since we don't have series mapping
-                    // The server will need to match paths to series IDs
-                    let series_id = series_ids.first().copied().unwrap_or(0);
 
                     results.push(Message::ScanResult {
                         job_id: job_id.to_string(),
@@ -366,7 +366,7 @@ impl WorkerRunner {
             }
             ScanType::DownloadedEpisodesScan => {
                 // For download scanning, we scan the download directories
-                for path_str in paths {
+                for &(series_id, path_str) in series_paths {
                     let path = PathBuf::from(path_str);
 
                     if !path.exists() {
@@ -379,7 +379,7 @@ impl WorkerRunner {
 
                     results.push(Message::ScanResult {
                         job_id: job_id.to_string(),
-                        series_id: 0,
+                        series_id,
                         worker_id: self.worker_id.clone(),
                         files_found: files,
                         errors: vec![],
