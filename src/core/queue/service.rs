@@ -527,6 +527,22 @@ impl TrackedDownloadService {
                     if current_state == TrackedDownloadState::Downloading {
                         info!("Download completed: {} ({})", td.title, td.download_id);
 
+                        // Check if the target already has files (imported via another
+                        // path like RescanSeries/RescanMovie or manual import). If so,
+                        // skip ImportPending entirely and remove the tracked record.
+                        let already_imported = self
+                            .check_already_imported(&td)
+                            .await;
+
+                        if already_imported {
+                            info!(
+                                "Download '{}' already imported, removing from tracking",
+                                td.title
+                            );
+                            let _ = repo.delete(td.id).await;
+                            continue;
+                        }
+
                         // Update to ImportPending
                         repo.update_status(
                             td.id,
@@ -535,14 +551,6 @@ impl TrackedDownloadService {
                             None,
                         )
                         .await?;
-
-                        // TODO: Trigger import process
-                        // This would:
-                        // 1. Parse files in output_path
-                        // 2. Match to episodes
-                        // 3. Rename and move to series folder
-                        // 4. Update episode records
-                        // 5. Mark as Imported or Failed
                     }
                 }
                 DownloadState::Failed => {
@@ -573,6 +581,40 @@ impl TrackedDownloadService {
         }
 
         Ok(())
+    }
+
+    /// Check if the target movie/episode already has imported files.
+    ///
+    /// Returns true if the media is already in the library, meaning the tracked
+    /// download can be cleaned up without going through ImportPending.
+    async fn check_already_imported(&self, td: &TrackedDownloadDbModel) -> bool {
+        use crate::core::datastore::repositories::{MovieFileRepository, EpisodeRepository as EpRepo};
+
+        // Movie check
+        if let Some(movie_id) = td.movie_id {
+            let movie_file_repo = MovieFileRepository::new(self.db.clone());
+            if let Ok(Some(_)) = movie_file_repo.get_by_movie_id(movie_id).await {
+                return true;
+            }
+        }
+
+        // Episode check
+        if td.series_id > 0 {
+            let episode_ids: Vec<i64> =
+                serde_json::from_str(&td.episode_ids).unwrap_or_default();
+            if !episode_ids.is_empty() {
+                let ep_repo = EpRepo::new(self.db.clone());
+                for &ep_id in &episode_ids {
+                    match ep_repo.get_by_id(ep_id).await {
+                        Ok(Some(ep)) if ep.has_file => {}
+                        _ => return false,
+                    }
+                }
+                return true;
+            }
+        }
+
+        false
     }
 
     /// Auto-remove tracked downloads whose target media has been fully imported.
@@ -618,39 +660,60 @@ impl TrackedDownloadService {
                     Ok(Some(f)) => f,
                     _ => continue,
                 };
-                let dest_hash = match dest_file.file_hash.as_deref() {
-                    Some(h) if !h.is_empty() => h.to_string(),
-                    _ => continue,
-                };
 
-                // Find the largest video file at the source (same logic as scan_movie_folder)
-                let source_path = find_largest_video_file(output_path).await;
-                let source_file = match source_path {
-                    Some(p) => p,
-                    None => continue,
-                };
+                // Movie already has an imported file — try hash verification first,
+                // but fall back to has_file if hash is unavailable (pre-v0.21.0 imports
+                // or failed FFmpeg probes).
+                let dest_hash = dest_file
+                    .file_hash
+                    .as_deref()
+                    .filter(|h| !h.is_empty())
+                    .map(|h| h.to_string());
 
-                match crate::core::mediafiles::compute_file_hash(&source_file).await {
-                    Ok(source_hash) if source_hash == dest_hash => {
-                        info!(
-                            "Auto-clean: movie download '{}' verified (hash match), removing from tracking",
-                            td.title
-                        );
-                        let _ = repo.delete(td.id).await;
-                        cleaned += 1;
+                if let Some(ref dest_hash) = dest_hash {
+                    // Hash available — try source verification
+                    if let Some(source_file) = find_largest_video_file(output_path).await {
+                        match crate::core::mediafiles::compute_file_hash(&source_file).await {
+                            Ok(source_hash) if source_hash == *dest_hash => {
+                                info!(
+                                    "Auto-clean: movie download '{}' verified (hash match), removing from tracking",
+                                    td.title
+                                );
+                                let _ = repo.delete(td.id).await;
+                                cleaned += 1;
+                                continue;
+                            }
+                            Ok(_) => {
+                                debug!(
+                                    "Auto-clean: hash mismatch for movie '{}', keeping tracked",
+                                    td.title
+                                );
+                                continue;
+                            }
+                            Err(e) => {
+                                debug!(
+                                    "Auto-clean: could not hash source for '{}': {}, falling back to has_file check",
+                                    td.title, e
+                                );
+                                // Fall through to has_file check below
+                            }
+                        }
                     }
-                    Ok(_) => {
-                        debug!(
-                            "Auto-clean: hash mismatch for movie '{}', keeping tracked",
-                            td.title
-                        );
-                    }
-                    Err(e) => {
-                        debug!(
-                            "Auto-clean: could not hash source for '{}': {}",
-                            td.title, e
-                        );
-                    }
+                    // Source file gone but dest hash exists — movie is imported, clean up
+                    info!(
+                        "Auto-clean: movie download '{}' — file imported (source gone or unreadable), removing from tracking",
+                        td.title
+                    );
+                    let _ = repo.delete(td.id).await;
+                    cleaned += 1;
+                } else {
+                    // No hash available but movie has a file — import succeeded, clean up
+                    info!(
+                        "Auto-clean: movie download '{}' — file exists in library (no hash to verify), removing from tracking",
+                        td.title
+                    );
+                    let _ = repo.delete(td.id).await;
+                    cleaned += 1;
                 }
                 continue;
             }
@@ -663,83 +726,102 @@ impl TrackedDownloadService {
                     continue;
                 }
 
-                // Check all matched episodes have files with hashes
-                let mut all_verified = true;
+                // Check all matched episodes have files — track hash availability
+                // separately so we can still clean up when hashes are missing.
+                let mut all_have_files = true;
+                let mut all_have_hashes = true;
+                let mut single_ep_hash: Option<(i64, String)> = None; // (file_id, hash)
+
                 for &ep_id in &episode_ids {
                     let ep = match episode_repo.get_by_id(ep_id).await {
                         Ok(Some(e)) => e,
                         _ => {
-                            all_verified = false;
+                            all_have_files = false;
                             break;
                         }
                     };
                     if !ep.has_file {
-                        all_verified = false;
+                        all_have_files = false;
                         break;
                     }
-                    // Verify via file hash if episode_file_id is set
                     if let Some(file_id) = ep.episode_file_id {
                         match episode_file_repo.get_by_id(file_id).await {
-                            Ok(Some(ef)) if ef.file_hash.as_deref().is_some_and(|h| !h.is_empty()) => {
-                                // Destination file has a verified hash — import succeeded
+                            Ok(Some(ef))
+                                if ef
+                                    .file_hash
+                                    .as_deref()
+                                    .is_some_and(|h| !h.is_empty()) =>
+                            {
+                                // Track hash for single-episode source verification
+                                if episode_ids.len() == 1 {
+                                    single_ep_hash = Some((
+                                        file_id,
+                                        ef.file_hash.unwrap().clone(),
+                                    ));
+                                }
                             }
                             _ => {
-                                all_verified = false;
-                                break;
+                                all_have_hashes = false;
                             }
                         }
                     } else {
-                        all_verified = false;
-                        break;
+                        all_have_hashes = false;
                     }
                 }
 
-                if all_verified {
-                    // For single-file downloads, also verify source hash against dest
-                    let do_source_hash_check = episode_ids.len() == 1;
-                    if do_source_hash_check {
-                        let ep = episode_repo.get_by_id(episode_ids[0]).await?.unwrap();
-                        let ef = episode_file_repo
-                            .get_by_id(ep.episode_file_id.unwrap())
-                            .await?
-                            .unwrap();
-                        let dest_hash = ef.file_hash.as_deref().unwrap();
-
+                if all_have_files && all_have_hashes {
+                    // All episodes have files with hashes — try source hash verification
+                    if let Some((_, ref dest_hash)) = single_ep_hash {
                         if let Some(source_file) = find_largest_video_file(output_path).await {
                             match crate::core::mediafiles::compute_file_hash(&source_file).await {
-                                Ok(source_hash) if source_hash == dest_hash => {
+                                Ok(source_hash) if source_hash == *dest_hash => {
                                     info!(
                                         "Auto-clean: episode download '{}' verified (hash match), removing from tracking",
                                         td.title
                                     );
                                     let _ = repo.delete(td.id).await;
                                     cleaned += 1;
+                                    continue;
                                 }
                                 Ok(_) => {
                                     debug!(
                                         "Auto-clean: hash mismatch for '{}', keeping tracked",
                                         td.title
                                     );
+                                    continue;
                                 }
                                 Err(e) => {
                                     debug!(
-                                        "Auto-clean: could not hash source for '{}': {}",
+                                        "Auto-clean: could not hash source for '{}': {}, falling back",
                                         td.title, e
                                     );
+                                    // Fall through to has_file cleanup
                                 }
                             }
                         }
                     } else {
-                        // Season pack: all episodes have verified files — clean without
-                        // individual source hash check (too many files to match 1:1)
+                        // Season pack: all episodes have verified files + hashes
                         info!(
-                            "Auto-clean: season pack '{}' — all {} episodes imported, removing from tracking",
+                            "Auto-clean: season pack '{}' — all {} episodes imported (hash-verified), removing from tracking",
                             td.title,
                             episode_ids.len()
                         );
                         let _ = repo.delete(td.id).await;
                         cleaned += 1;
+                        continue;
                     }
+                }
+
+                // Fallback: all episodes have files but some/all lack hashes.
+                // has_file=true is sufficient evidence that the import succeeded.
+                if all_have_files {
+                    info!(
+                        "Auto-clean: download '{}' — all {} episodes have files (no hash to verify), removing from tracking",
+                        td.title,
+                        episode_ids.len()
+                    );
+                    let _ = repo.delete(td.id).await;
+                    cleaned += 1;
                 }
             }
         }

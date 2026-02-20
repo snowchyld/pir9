@@ -266,9 +266,11 @@ Character-by-character template scanner (no regex). O(n) single-pass.
 ### 6.10 Scanner (`core/scanner/`)
 
 - `mod.rs` — Core scanning logic (directory walk, video extension filter). **Canonical `VIDEO_EXTENSIONS` constant** (16 formats: mkv, mp4, avi, wmv, m4v, ts, webm, mov, flv, mpg, mpeg, vob, ogm, divx, m2ts, mts) — all other modules reference this single list
-- `jobs.rs` — JobTrackerService (timeout, retries)
+- `jobs.rs` — JobTrackerService (timeout, retries). **NOTE**: Jobs are not currently registered with the tracker — dispatch is fire-and-forget. Fallback relies on path-accessibility check in `execute_rescan_series` (v0.39.2)
 - `consumer.rs` — ScanResultConsumer (imports results from workers)
 - `registry.rs` — WorkerRegistryService (tracks online workers, heartbeats)
+
+**Scan dispatch logic** (v0.39.2): `execute_rescan_series` checks `Path::new(&path).exists()` for each series. Locally-accessible paths scan directly (server-side FFmpeg + BLAKE3 + DB insert). Only paths not mounted on the server are dispatched to Redis workers. This avoids the fire-and-forget gap where worker scans silently fail.
 
 ### 6.11 Notifications (`core/notifications/`)
 - **Structure**: `mod.rs`, `providers.rs`, `service.rs`
