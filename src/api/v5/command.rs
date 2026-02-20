@@ -712,44 +712,78 @@ async fn execute_refresh_series(
                             );
 
                             let pool = db.pool();
-
-                            // Two-phase update within a transaction to avoid unique constraint violations
-                            // Phase A: set season/episode to negative sentinel values
-                            // Phase B: set to final ordering values
                             let mut tx = pool
                                 .begin()
                                 .await
                                 .map_err(|e| format!("Failed to begin transaction: {}", e))?;
 
-                            // Phase A: clear to sentinel values and back up originals to scene_* fields
-                            for &(id, _, _, old_season, old_ep) in &remap_plan {
-                                let sentinel_season = -(1000 + id as i32);
-                                let sentinel_ep = -(1000 + id as i32);
+                            // Phase A: sentinel ALL episodes for this series to avoid unique constraint
+                            // collisions between remapped targets and non-remapped originals
+                            sqlx::query(
+                                "UPDATE episodes SET season_number = -(1000 + id::int), episode_number = -(1000 + id::int) WHERE series_id = $1"
+                            )
+                            .bind(series_id)
+                            .execute(&mut *tx)
+                            .await
+                            .map_err(|e| format!("Remap phase A (sentinel) failed: {}", e))?;
+
+                            // Build set of positions claimed by the DVD ordering
+                            let remapped_ids: std::collections::HashSet<i64> =
+                                remap_plan.iter().map(|r| r.0).collect();
+                            let mut claimed: std::collections::HashSet<(i32, i32)> =
+                                std::collections::HashSet::new();
+
+                            // Phase B1: set remapped episodes to DVD positions + backup scene_*
+                            for &(id, new_season, new_ep, old_season, old_ep) in &remap_plan {
                                 sqlx::query(
-                                    "UPDATE episodes SET season_number = $1, episode_number = $2, scene_season_number = $3, scene_episode_number = $4 WHERE id = $5"
+                                    "UPDATE episodes SET season_number = $1, episode_number = $2, \
+                                     scene_season_number = $3, scene_episode_number = $4 WHERE id = $5"
                                 )
-                                .bind(sentinel_season)
-                                .bind(sentinel_ep)
+                                .bind(new_season)
+                                .bind(new_ep)
                                 .bind(Some(old_season))
                                 .bind(Some(old_ep))
                                 .bind(id)
                                 .execute(&mut *tx)
                                 .await
-                                .map_err(|e| format!("Remap phase A failed: {}", e))?;
+                                .map_err(|e| format!("Remap phase B1 failed: {}", e))?;
+                                claimed.insert((new_season, new_ep));
+                                remap_count += 1;
                             }
 
-                            // Phase B: set final ordering values
-                            for &(id, new_season, new_ep, _, _) in &remap_plan {
+                            // Phase B2: restore non-remapped episodes to their original positions.
+                            // If a position is already claimed by a DVD-remapped episode, bump to
+                            // the next available slot in the same season.
+                            for ep in &current_episodes {
+                                if remapped_ids.contains(&ep.id) {
+                                    continue;
+                                }
+                                let (final_season, final_ep) =
+                                    if !claimed.contains(&(ep.season_number, ep.episode_number)) {
+                                        (ep.season_number, ep.episode_number)
+                                    } else {
+                                        // Position stolen by DVD ordering — find next available
+                                        let mut bump = ep.episode_number + 1;
+                                        while claimed.contains(&(ep.season_number, bump)) {
+                                            bump += 1;
+                                        }
+                                        tracing::debug!(
+                                            "Episode id={} displaced from S{:02}E{:02} to S{:02}E{:02} (position taken by {} ordering)",
+                                            ep.id, ep.season_number, ep.episode_number,
+                                            ep.season_number, bump, series.episode_ordering,
+                                        );
+                                        (ep.season_number, bump)
+                                    };
                                 sqlx::query(
                                     "UPDATE episodes SET season_number = $1, episode_number = $2 WHERE id = $3"
                                 )
-                                .bind(new_season)
-                                .bind(new_ep)
-                                .bind(id)
+                                .bind(final_season)
+                                .bind(final_ep)
+                                .bind(ep.id)
                                 .execute(&mut *tx)
                                 .await
-                                .map_err(|e| format!("Remap phase B failed: {}", e))?;
-                                remap_count += 1;
+                                .map_err(|e| format!("Remap phase B2 (restore) failed: {}", e))?;
+                                claimed.insert((final_season, final_ep));
                             }
 
                             tx.commit()
