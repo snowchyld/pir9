@@ -17,7 +17,7 @@ use crate::core::datastore::models::{
 };
 use crate::core::datastore::repositories::{
     DownloadClientRepository, EpisodeFileRepository, EpisodeRepository, HistoryRepository,
-    SeriesRepository,
+    SeriesRepository, TrackedDownloadRepository,
 };
 use crate::core::datastore::Database;
 use crate::core::download::clients::{create_client_from_model, DownloadState, DownloadStatus};
@@ -952,32 +952,10 @@ impl ImportService {
         Ok(())
     }
 
-    /// Clean up a download from the download client after successful import
-    pub async fn cleanup_download(
-        &self,
-        pending: &PendingImport,
-        delete_files: bool,
-    ) -> Result<()> {
-        let client_repo = DownloadClientRepository::new(self.db.clone());
-
-        if let Some(client_model) = client_repo.get_by_id(pending.download_client_id).await? {
-            let client = create_client_from_model(&client_model)?;
-            client.remove(&pending.download_id, delete_files).await?;
-
-            tracing::info!(
-                "Removed completed download '{}' from {}",
-                pending.title,
-                client_model.name
-            );
-        }
-
-        Ok(())
-    }
-
     /// Process all completed downloads (check, import, cleanup)
     pub async fn process_completed_downloads(
         &self,
-        remove_from_client: bool,
+        mark_imported: bool,
     ) -> Result<Vec<ImportResult>> {
         let pending = self.check_for_completed_downloads().await?;
         let mut results = Vec::new();
@@ -985,16 +963,37 @@ impl ImportService {
         for item in pending {
             let result = self.import(&item).await?;
 
-            if result.success && remove_from_client {
-                // Clean up from download client
-                if let Err(e) = self.cleanup_download(&item, false).await {
-                    tracing::warn!("Failed to cleanup download '{}': {}", item.title, e);
-                }
+            if result.success && mark_imported {
+                // Mark tracked download as Imported so it disappears from queue.
+                // Never remove from the download client — user controls seeding.
+                self.mark_tracked_imported(&item).await;
             }
 
             results.push(result);
         }
 
         Ok(results)
+    }
+
+    /// Mark the tracked download as Imported (state 4) after successful import
+    pub async fn mark_tracked_imported(&self, pending: &PendingImport) {
+        use crate::core::queue::TrackedDownloadState;
+
+        let repo = TrackedDownloadRepository::new(self.db.clone());
+        if let Ok(Some(td)) = repo
+            .get_by_download_id(pending.download_client_id, &pending.download_id)
+            .await
+        {
+            if let Err(e) = repo
+                .update_status(td.id, TrackedDownloadState::Imported as i32, "[]", None)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to mark tracked download as imported for '{}': {}",
+                    pending.title,
+                    e
+                );
+            }
+        }
     }
 }

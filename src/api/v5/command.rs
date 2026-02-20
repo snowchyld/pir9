@@ -1642,14 +1642,8 @@ async fn execute_process_downloads(
                 );
                 imported += 1;
 
-                // Cleanup from download client
-                if let Err(e) = import_service.cleanup_download(&item, false).await {
-                    tracing::warn!(
-                        "ProcessMonitoredDownloads: cleanup failed for '{}': {}",
-                        item.title,
-                        e
-                    );
-                }
+                // Mark tracked download as Imported (never remove from client)
+                import_service.mark_tracked_imported(&item).await;
             }
             Ok(result) => {
                 tracing::warn!(

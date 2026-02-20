@@ -989,30 +989,30 @@ impl ScanResultConsumer {
             tracker.download_title, tracker.files_imported, tracker.episodes_linked
         );
 
-        // Clean up download from download client
+        // Mark the tracked download as Imported so it disappears from the queue.
+        // We never remove the download from the client — the user controls seeding.
         if tracker.files_imported > 0 && tracker.download_client_id > 0 {
-            use crate::core::datastore::repositories::DownloadClientRepository;
-            use crate::core::download::clients::create_client_from_model;
+            use crate::core::datastore::repositories::TrackedDownloadRepository;
+            use crate::core::queue::TrackedDownloadState;
 
-            let client_repo = DownloadClientRepository::new(self.db.clone());
-            if let Ok(Some(client_model)) =
-                client_repo.get_by_id(tracker.download_client_id).await
+            let repo = TrackedDownloadRepository::new(self.db.clone());
+            if let Ok(Some(td)) = repo
+                .get_by_download_id(tracker.download_client_id, &tracker.download_id)
+                .await
             {
-                if let Ok(client) = create_client_from_model(&client_model) {
-                    match client.remove(&tracker.download_id, false).await {
-                        Ok(()) => {
-                            info!(
-                                "Download import: cleaned up '{}' from {}",
-                                tracker.download_title, client_model.name
-                            );
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Download import: cleanup failed for '{}': {}",
-                                tracker.download_title, e
-                            );
-                        }
-                    }
+                if let Err(e) = repo
+                    .update_status(
+                        td.id,
+                        TrackedDownloadState::Imported as i32,
+                        "[]",
+                        None,
+                    )
+                    .await
+                {
+                    warn!(
+                        "Failed to mark tracked download as imported for '{}': {}",
+                        tracker.download_title, e
+                    );
                 }
             }
         }
