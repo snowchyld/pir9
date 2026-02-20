@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! TV domain events
 //! Events related to series and episodes
 

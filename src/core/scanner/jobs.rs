@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Scan job tracking with timeout and retry support
 //!
 //! Tracks pending scan jobs and handles:

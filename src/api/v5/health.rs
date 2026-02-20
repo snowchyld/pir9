@@ -13,6 +13,7 @@ use crate::web::AppState;
 /// Health check result types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[allow(dead_code)]
 pub enum HealthCheckType {
     Ok,
     Notice,

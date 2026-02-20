@@ -1,14 +1,17 @@
 //! Custom Format API endpoints
 
 use axum::{
-    extract::Path,
-    response::Json,
-    routing::{delete, get, post, put},
+    extract::{Path, State},
+    http::StatusCode,
+    response::{IntoResponse, Json},
+    routing::get,
     Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::core::datastore::models::CustomFormatDbModel;
+use crate::core::datastore::repositories::CustomFormatRepository;
 use crate::web::AppState;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -81,38 +84,87 @@ pub struct SelectOption {
     pub hint: Option<String>,
 }
 
+fn db_to_resource(model: &CustomFormatDbModel) -> CustomFormatResource {
+    let specifications: Vec<CustomFormatSpecificationResource> =
+        serde_json::from_str(&model.specifications).unwrap_or_default();
+    CustomFormatResource {
+        id: model.id as i32,
+        name: model.name.clone(),
+        include_custom_format_when_renaming: model.include_custom_format_when_renaming,
+        specifications,
+    }
+}
+
+fn resource_to_db(resource: &CustomFormatResource, id: Option<i64>) -> CustomFormatDbModel {
+    CustomFormatDbModel {
+        id: id.unwrap_or(0),
+        name: resource.name.clone(),
+        include_custom_format_when_renaming: resource.include_custom_format_when_renaming,
+        specifications: serde_json::to_string(&resource.specifications)
+            .unwrap_or_else(|_| "[]".to_string()),
+    }
+}
+
 /// GET /api/v3/customformat
-pub async fn get_custom_formats() -> Json<Vec<CustomFormatResource>> {
-    Json(vec![])
+pub async fn get_custom_formats(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<CustomFormatResource>>, StatusCode> {
+    let repo = CustomFormatRepository::new(state.db.clone());
+    let items = repo.get_all().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(items.iter().map(db_to_resource).collect()))
 }
 
 /// GET /api/v3/customformat/:id
-pub async fn get_custom_format(Path(id): Path<i32>) -> Json<Option<CustomFormatResource>> {
-    let _ = id;
-    Json(None)
+pub async fn get_custom_format(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<CustomFormatResource>, StatusCode> {
+    let repo = CustomFormatRepository::new(state.db.clone());
+    let item = repo.get_by_id(id).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(db_to_resource(&item)))
 }
 
 /// POST /api/v3/customformat
 pub async fn create_custom_format(
-    Json(mut body): Json<CustomFormatResource>,
-) -> Json<CustomFormatResource> {
-    body.id = 1; // Mock ID
-    Json(body)
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CustomFormatResource>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let repo = CustomFormatRepository::new(state.db.clone());
+    let model = resource_to_db(&body, None);
+    let id = repo.insert(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let created = repo.get_by_id(id).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok((StatusCode::CREATED, Json(db_to_resource(&created))))
 }
 
 /// PUT /api/v3/customformat/:id
 pub async fn update_custom_format(
-    Path(id): Path<i32>,
-    Json(mut body): Json<CustomFormatResource>,
-) -> Json<CustomFormatResource> {
-    body.id = id;
-    Json(body)
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(body): Json<CustomFormatResource>,
+) -> Result<Json<CustomFormatResource>, StatusCode> {
+    let repo = CustomFormatRepository::new(state.db.clone());
+    let _existing = repo.get_by_id(id).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let model = resource_to_db(&body, Some(id));
+    repo.update(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(db_to_resource(&model)))
 }
 
 /// DELETE /api/v3/customformat/:id
-pub async fn delete_custom_format(Path(id): Path<i32>) -> Json<serde_json::Value> {
-    let _ = id;
-    Json(serde_json::json!({}))
+pub async fn delete_custom_format(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> StatusCode {
+    let repo = CustomFormatRepository::new(state.db.clone());
+    match repo.delete(id).await {
+        Ok(()) => StatusCode::OK,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 /// GET /api/v3/customformat/schema

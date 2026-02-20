@@ -8,6 +8,7 @@ use crate::web::AppState;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct ParseQuery {
     pub title: Option<String>,
     pub path: Option<String>,

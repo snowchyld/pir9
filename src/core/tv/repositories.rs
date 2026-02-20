@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! TV Show data repositories
 //! Database access layer for Series and Episode entities
 
@@ -6,7 +7,7 @@ use sqlx::Row;
 use std::collections::HashSet;
 
 use crate::core::datastore::Database;
-use crate::core::tv::models::{Episode, EpisodeFile, Series};
+use crate::core::tv::models::{Episode, Series};
 use crate::core::tv::{NewItemMonitorType, SeriesStatusType, SeriesType};
 
 /// Repository for Series entities

@@ -1,5 +1,5 @@
 //! API v5 routes
-//! Latest version of the Pir9 API
+//! Latest version of the pir9 API
 
 use axum::{
     Router,

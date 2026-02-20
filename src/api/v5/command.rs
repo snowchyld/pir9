@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     response::{IntoResponse, Json},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::get,
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -985,6 +985,7 @@ fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
 /// Skyhook show response for command execution
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct SkyhookShowResponse {
     tvdb_id: i64,
     title: String,

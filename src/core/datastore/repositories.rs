@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Database repositories
 //! Repository pattern implementations for database access
 
@@ -243,6 +244,92 @@ pub struct HistoryRepository {
 impl HistoryRepository {
     pub fn new(db: Database) -> Self {
         Self { db }
+    }
+
+    pub async fn get_paged(
+        &self,
+        page: i32,
+        page_size: i32,
+        sort_key: &str,
+        sort_direction: &str,
+        event_type: Option<i32>,
+    ) -> Result<(Vec<super::models::HistoryDbModel>, i64)> {
+        let offset = (page - 1) * page_size;
+        let order = if sort_direction.to_lowercase() == "ascending" { "ASC" } else { "DESC" };
+        let sort_column = match sort_key {
+            "date" => "date",
+            "series.sortTitle" | "seriesTitle" => "series_id",
+            "sourceTitle" => "source_title",
+            "eventType" => "event_type",
+            _ => "date",
+        };
+
+        let pool = self.db.pool();
+
+        if let Some(evt) = event_type {
+            let query = format!(
+                "SELECT * FROM history WHERE event_type = $1 ORDER BY {} {} LIMIT $2 OFFSET $3",
+                sort_column, order
+            );
+            let rows = sqlx::query_as::<_, super::models::HistoryDbModel>(&query)
+                .bind(evt)
+                .bind(page_size)
+                .bind(offset)
+                .fetch_all(pool)
+                .await?;
+            let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM history WHERE event_type = $1")
+                .bind(evt)
+                .fetch_one(pool)
+                .await?;
+            Ok((rows, count.0))
+        } else {
+            let query = format!(
+                "SELECT * FROM history ORDER BY {} {} LIMIT $1 OFFSET $2",
+                sort_column, order
+            );
+            let rows = sqlx::query_as::<_, super::models::HistoryDbModel>(&query)
+                .bind(page_size)
+                .bind(offset)
+                .fetch_all(pool)
+                .await?;
+            let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM history")
+                .fetch_one(pool)
+                .await?;
+            Ok((rows, count.0))
+        }
+    }
+
+    pub async fn get_since(&self, date: chrono::DateTime<chrono::Utc>) -> Result<Vec<super::models::HistoryDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::HistoryDbModel>(
+            "SELECT * FROM history WHERE date >= $1 ORDER BY date DESC"
+        )
+        .bind(date)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_series_id(&self, series_id: i64) -> Result<Vec<super::models::HistoryDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::HistoryDbModel>(
+            "SELECT * FROM history WHERE series_id = $1 ORDER BY date DESC"
+        )
+        .bind(series_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_episode_id(&self, episode_id: i64) -> Result<Vec<super::models::HistoryDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::HistoryDbModel>(
+            "SELECT * FROM history WHERE episode_id = $1 ORDER BY date DESC"
+        )
+        .bind(episode_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
     }
 
     pub async fn get_for_series(&self, series_id: i64, limit: i32) -> Result<Vec<super::models::HistoryDbModel>> {
@@ -1586,6 +1673,526 @@ impl IndexerRepository {
     pub async fn delete(&self, id: i64) -> Result<()> {
         let pool = self.db.pool();
         sqlx::query("DELETE FROM indexers WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for blocklist entries
+pub struct BlocklistRepository {
+    db: Database,
+}
+
+impl BlocklistRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_all(&self) -> Result<Vec<super::models::BlocklistDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::BlocklistDbModel>(
+            "SELECT * FROM blocklist ORDER BY date DESC"
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_paged(
+        &self,
+        page: i32,
+        page_size: i32,
+        sort_key: &str,
+        sort_direction: &str,
+    ) -> Result<(Vec<super::models::BlocklistDbModel>, i64)> {
+        let offset = (page - 1) * page_size;
+        let order = if sort_direction.to_lowercase() == "ascending" { "ASC" } else { "DESC" };
+        let sort_column = match sort_key {
+            "date" => "date",
+            "sourceTitle" => "source_title",
+            "indexer" => "indexer",
+            _ => "date",
+        };
+
+        let pool = self.db.pool();
+        let query = format!(
+            "SELECT * FROM blocklist ORDER BY {} {} LIMIT $1 OFFSET $2",
+            sort_column, order
+        );
+        let rows = sqlx::query_as::<_, super::models::BlocklistDbModel>(&query)
+            .bind(page_size)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?;
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM blocklist")
+            .fetch_one(pool)
+            .await?;
+
+        Ok((rows, count.0))
+    }
+
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::BlocklistDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::BlocklistDbModel>(
+            "SELECT * FROM blocklist WHERE id = $1"
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn count(&self) -> Result<i64> {
+        let pool = self.db.pool();
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM blocklist")
+            .fetch_one(pool)
+            .await?;
+        Ok(count.0)
+    }
+
+    pub async fn insert(&self, item: &super::models::BlocklistDbModel) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO blocklist (
+                series_id, episode_ids, source_title, quality, languages,
+                custom_formats, custom_format_score, protocol, indexer, message, date
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            RETURNING id
+            "#
+        )
+        .bind(item.series_id)
+        .bind(&item.episode_ids)
+        .bind(&item.source_title)
+        .bind(&item.quality)
+        .bind(&item.languages)
+        .bind(&item.custom_formats)
+        .bind(item.custom_format_score)
+        .bind(item.protocol)
+        .bind(&item.indexer)
+        .bind(&item.message)
+        .bind(item.date)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM blocklist WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn delete_bulk(&self, ids: &[i64]) -> Result<u64> {
+        let pool = self.db.pool();
+        let mut total = 0u64;
+        for id in ids {
+            let result = sqlx::query("DELETE FROM blocklist WHERE id = $1")
+                .bind(id)
+                .execute(pool)
+                .await?;
+            total += result.rows_affected();
+        }
+        Ok(total)
+    }
+}
+
+/// Repository for custom formats
+pub struct CustomFormatRepository {
+    db: Database,
+}
+
+impl CustomFormatRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_all(&self) -> Result<Vec<super::models::CustomFormatDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::CustomFormatDbModel>(
+            "SELECT * FROM custom_formats ORDER BY name"
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::CustomFormatDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::CustomFormatDbModel>(
+            "SELECT * FROM custom_formats WHERE id = $1"
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn insert(&self, item: &super::models::CustomFormatDbModel) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO custom_formats (name, include_custom_format_when_renaming, specifications)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#
+        )
+        .bind(&item.name)
+        .bind(item.include_custom_format_when_renaming)
+        .bind(&item.specifications)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn update(&self, item: &super::models::CustomFormatDbModel) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            r#"
+            UPDATE custom_formats SET
+                name = $1, include_custom_format_when_renaming = $2, specifications = $3
+            WHERE id = $4
+            "#
+        )
+        .bind(&item.name)
+        .bind(item.include_custom_format_when_renaming)
+        .bind(&item.specifications)
+        .bind(item.id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM custom_formats WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for custom filters
+pub struct CustomFilterRepository {
+    db: Database,
+}
+
+impl CustomFilterRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_all(&self) -> Result<Vec<super::models::CustomFilterDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::CustomFilterDbModel>(
+            "SELECT * FROM custom_filters ORDER BY label"
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::CustomFilterDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::CustomFilterDbModel>(
+            "SELECT * FROM custom_filters WHERE id = $1"
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn insert(&self, item: &super::models::CustomFilterDbModel) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO custom_filters (filter_type, label, filters)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#
+        )
+        .bind(&item.filter_type)
+        .bind(&item.label)
+        .bind(&item.filters)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn update(&self, item: &super::models::CustomFilterDbModel) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            r#"
+            UPDATE custom_filters SET
+                filter_type = $1, label = $2, filters = $3
+            WHERE id = $4
+            "#
+        )
+        .bind(&item.filter_type)
+        .bind(&item.label)
+        .bind(&item.filters)
+        .bind(item.id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM custom_filters WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for remote path mappings
+pub struct RemotePathMappingRepository {
+    db: Database,
+}
+
+impl RemotePathMappingRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_all(&self) -> Result<Vec<super::models::RemotePathMappingDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::RemotePathMappingDbModel>(
+            "SELECT * FROM remote_path_mappings ORDER BY host"
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::RemotePathMappingDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::RemotePathMappingDbModel>(
+            "SELECT * FROM remote_path_mappings WHERE id = $1"
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn insert(&self, item: &super::models::RemotePathMappingDbModel) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO remote_path_mappings (host, remote_path, local_path)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#
+        )
+        .bind(&item.host)
+        .bind(&item.remote_path)
+        .bind(&item.local_path)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn update(&self, item: &super::models::RemotePathMappingDbModel) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            r#"
+            UPDATE remote_path_mappings SET
+                host = $1, remote_path = $2, local_path = $3
+            WHERE id = $4
+            "#
+        )
+        .bind(&item.host)
+        .bind(&item.remote_path)
+        .bind(&item.local_path)
+        .bind(item.id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM remote_path_mappings WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for delay profiles
+pub struct DelayProfileRepository {
+    db: Database,
+}
+
+impl DelayProfileRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_all(&self) -> Result<Vec<super::models::DelayProfileDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::DelayProfileDbModel>(
+            "SELECT * FROM delay_profiles ORDER BY id"
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::DelayProfileDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::DelayProfileDbModel>(
+            "SELECT * FROM delay_profiles WHERE id = $1"
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn insert(&self, item: &super::models::DelayProfileDbModel) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO delay_profiles (
+                enable_usenet, enable_torrent, preferred_protocol,
+                usenet_delay, torrent_delay, bypass_if_highest_quality,
+                bypass_if_above_custom_format_score, tags
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id
+            "#
+        )
+        .bind(item.enable_usenet)
+        .bind(item.enable_torrent)
+        .bind(item.preferred_protocol)
+        .bind(item.usenet_delay)
+        .bind(item.torrent_delay)
+        .bind(item.bypass_if_highest_quality)
+        .bind(item.bypass_if_above_custom_format_score)
+        .bind(&item.tags)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn update(&self, item: &super::models::DelayProfileDbModel) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            r#"
+            UPDATE delay_profiles SET
+                enable_usenet = $1, enable_torrent = $2, preferred_protocol = $3,
+                usenet_delay = $4, torrent_delay = $5, bypass_if_highest_quality = $6,
+                bypass_if_above_custom_format_score = $7, tags = $8
+            WHERE id = $9
+            "#
+        )
+        .bind(item.enable_usenet)
+        .bind(item.enable_torrent)
+        .bind(item.preferred_protocol)
+        .bind(item.usenet_delay)
+        .bind(item.torrent_delay)
+        .bind(item.bypass_if_highest_quality)
+        .bind(item.bypass_if_above_custom_format_score)
+        .bind(&item.tags)
+        .bind(item.id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM delay_profiles WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for language profiles
+pub struct LanguageProfileRepository {
+    db: Database,
+}
+
+impl LanguageProfileRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_all(&self) -> Result<Vec<super::models::LanguageProfileDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::LanguageProfileDbModel>(
+            "SELECT * FROM language_profiles ORDER BY name"
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::LanguageProfileDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::LanguageProfileDbModel>(
+            "SELECT * FROM language_profiles WHERE id = $1"
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn insert(&self, item: &super::models::LanguageProfileDbModel) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO language_profiles (name, upgrade_allowed, cutoff, languages)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#
+        )
+        .bind(&item.name)
+        .bind(item.upgrade_allowed)
+        .bind(item.cutoff)
+        .bind(&item.languages)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn update(&self, item: &super::models::LanguageProfileDbModel) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            r#"
+            UPDATE language_profiles SET
+                name = $1, upgrade_allowed = $2, cutoff = $3, languages = $4
+            WHERE id = $5
+            "#
+        )
+        .bind(&item.name)
+        .bind(item.upgrade_allowed)
+        .bind(item.cutoff)
+        .bind(&item.languages)
+        .bind(item.id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM language_profiles WHERE id = $1")
             .bind(id)
             .execute(pool)
             .await?;

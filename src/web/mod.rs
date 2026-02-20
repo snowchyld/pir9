@@ -1,10 +1,11 @@
+#![allow(dead_code, unused_imports)]
 //! Web module
 //! WebSocket handlers and static file serving
 
 use axum::{
     extract::{ws::{WebSocket, Message as WsMessage}, WebSocketUpgrade, State},
-    response::{Response, IntoResponse, Json},
-    http::{StatusCode, Request, Uri},
+    response::{Response, Json},
+    http::{Request, Uri},
     body::Body,
 };
 use std::sync::Arc;
@@ -145,7 +146,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     info!("WebSocket connection closed");
 }
 
-async fn handle_client_message(msg: ClientMessage, state: &AppState) {
+async fn handle_client_message(msg: ClientMessage, _state: &AppState) {
     match msg {
         ClientMessage::Ping => {
             // Respond with pong

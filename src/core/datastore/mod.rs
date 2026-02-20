@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Data persistence layer
 //! Handles database connections, migrations, and query execution
 //! PostgreSQL-only implementation

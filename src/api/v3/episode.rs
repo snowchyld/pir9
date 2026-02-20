@@ -15,6 +15,7 @@ use crate::web::AppState;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct EpisodeQuery {
     pub series_id: Option<i32>,
     pub season_number: Option<i32>,

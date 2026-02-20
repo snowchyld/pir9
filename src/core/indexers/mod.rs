@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Indexer module
 //! RSS feed and search integration with Usenet/BitTorrent indexers
 
@@ -6,7 +7,7 @@ pub mod definitions;
 pub mod search;
 pub mod rss;
 
-pub use clients::{IndexerClient, SearchQuery, IndexerCapabilities, create_client_from_model};
+pub use clients::{IndexerClient, create_client_from_model};
 
 use serde::{Deserialize, Serialize};
 

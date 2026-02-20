@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Download client implementations
 //! qBittorrent, SABnzbd, and other download client integrations
 

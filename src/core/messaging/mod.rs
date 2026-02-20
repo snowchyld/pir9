@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Messaging and event bus module
 //! For inter-component communication and real-time updates
 
@@ -7,9 +8,7 @@ use tokio::sync::broadcast;
 use serde::{Serialize, Deserialize};
 use std::path::PathBuf;
 
-pub use redis_bus::{HybridEventBus, EventBusBackend};
-#[cfg(feature = "redis-events")]
-pub use redis_bus::RedisEventBus;
+pub use redis_bus::HybridEventBus;
 
 // ============================================================================
 // Distributed Scanner Types

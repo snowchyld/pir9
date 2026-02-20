@@ -1,7 +1,12 @@
+#![allow(dead_code)]
 //! Download history tracking
 
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+use crate::core::datastore::models::HistoryDbModel;
+use crate::core::datastore::repositories::HistoryRepository;
+use crate::core::datastore::Database;
 
 /// Download history entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,22 +40,136 @@ pub enum HistoryEventType {
     FileRenamed,
 }
 
-/// History service
-pub struct HistoryService;
+impl HistoryEventType {
+    pub fn to_db_int(self) -> i32 {
+        match self {
+            Self::Unknown => 0,
+            Self::Grabbed => 1,
+            Self::DownloadFailed => 2,
+            Self::DownloadFolderImported => 3,
+            Self::FileDeleted => 4,
+            Self::FileRenamed => 5,
+            Self::DownloadIgnored => 6,
+            Self::FileImported => 3,
+        }
+    }
+}
+
+/// History service — records events in the history table via `HistoryRepository`
+pub struct HistoryService {
+    db: Database,
+}
 
 impl HistoryService {
-    /// Record a grab event
-    pub async fn record_grab(&self, series_id: i64, episode_ids: Vec<i64>, release: &super::super::indexers::ReleaseInfo) -> anyhow::Result<()> {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    /// Record a grab event (event_type = 1)
+    pub async fn record_grab(
+        &self,
+        series_id: i64,
+        episode_ids: Vec<i64>,
+        release: &super::super::indexers::ReleaseInfo,
+    ) -> anyhow::Result<()> {
+        let repo = HistoryRepository::new(self.db.clone());
+        let quality_json =
+            serde_json::to_string(&release.quality).unwrap_or_else(|_| "{}".to_string());
+        let languages_json =
+            serde_json::to_string(&release.languages).unwrap_or_else(|_| "[]".to_string());
+        let data = serde_json::json!({
+            "indexer": release.indexer,
+            "releaseGroup": release.release_group,
+            "size": release.size,
+            "downloadUrl": release.download_url,
+            "guid": release.guid,
+        });
+
+        for &episode_id in &episode_ids {
+            let model = HistoryDbModel {
+                id: 0,
+                series_id,
+                episode_id,
+                source_title: release.title.clone(),
+                quality: quality_json.clone(),
+                languages: languages_json.clone(),
+                custom_formats: "[]".to_string(),
+                custom_format_score: 0,
+                quality_cutoff_not_met: false,
+                date: Utc::now(),
+                download_id: release.download_url.clone(),
+                event_type: HistoryEventType::Grabbed.to_db_int(),
+                data: data.to_string(),
+            };
+            repo.insert(&model).await?;
+        }
         Ok(())
     }
-    
-    /// Record a download failure
-    pub async fn record_download_failed(&self, series_id: i64, episode_ids: Vec<i64>, download_id: &str, message: &str) -> anyhow::Result<()> {
+
+    /// Record a download failure (event_type = 2)
+    pub async fn record_download_failed(
+        &self,
+        series_id: i64,
+        episode_ids: Vec<i64>,
+        download_id: &str,
+        message: &str,
+    ) -> anyhow::Result<()> {
+        let repo = HistoryRepository::new(self.db.clone());
+        let data = serde_json::json!({ "message": message });
+
+        for &episode_id in &episode_ids {
+            let model = HistoryDbModel {
+                id: 0,
+                series_id,
+                episode_id,
+                source_title: String::new(),
+                quality: "{}".to_string(),
+                languages: "[]".to_string(),
+                custom_formats: "[]".to_string(),
+                custom_format_score: 0,
+                quality_cutoff_not_met: false,
+                date: Utc::now(),
+                download_id: Some(download_id.to_string()),
+                event_type: HistoryEventType::DownloadFailed.to_db_int(),
+                data: data.to_string(),
+            };
+            repo.insert(&model).await?;
+        }
         Ok(())
     }
-    
-    /// Record a successful import
-    pub async fn record_import(&self, series_id: i64, episode_ids: Vec<i64>, episode_file_id: i64, is_upgrade: bool) -> anyhow::Result<()> {
+
+    /// Record a successful import (event_type = 3)
+    pub async fn record_import(
+        &self,
+        series_id: i64,
+        episode_ids: Vec<i64>,
+        episode_file_id: i64,
+        is_upgrade: bool,
+    ) -> anyhow::Result<()> {
+        let repo = HistoryRepository::new(self.db.clone());
+        let data = serde_json::json!({
+            "episodeFileId": episode_file_id,
+            "isUpgrade": is_upgrade,
+        });
+
+        for &episode_id in &episode_ids {
+            let model = HistoryDbModel {
+                id: 0,
+                series_id,
+                episode_id,
+                source_title: String::new(),
+                quality: "{}".to_string(),
+                languages: "[]".to_string(),
+                custom_formats: "[]".to_string(),
+                custom_format_score: 0,
+                quality_cutoff_not_met: false,
+                date: Utc::now(),
+                download_id: None,
+                event_type: HistoryEventType::DownloadFolderImported.to_db_int(),
+                data: data.to_string(),
+            };
+            repo.insert(&model).await?;
+        }
         Ok(())
     }
 }

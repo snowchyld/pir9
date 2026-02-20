@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Language profile definitions
 
 use serde::{Deserialize, Serialize};

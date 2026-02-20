@@ -1,7 +1,7 @@
+#![allow(dead_code)]
 //! Application event logging service
 //! Logs significant application events to the database for the Events page
 
-use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::core::datastore::Database;

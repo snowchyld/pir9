@@ -1,6 +1,6 @@
 //! Configuration API endpoints
 
-use axum::{response::Json, routing::{get, put}, Router};
+use axum::{response::Json, routing::get, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -158,7 +158,7 @@ pub async fn get_host_config() -> Json<HostConfigResource> {
         ssl_cert_path: None,
         ssl_cert_password: None,
         url_base: "".to_string(),
-        instance_name: "Pir9".to_string(),
+        instance_name: "pir9".to_string(),
         application_url: None,
         update_automatically: false,
         update_mechanism: "builtIn".to_string(),

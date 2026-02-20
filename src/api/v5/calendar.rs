@@ -16,6 +16,7 @@ use crate::web::AppState;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct CalendarQuery {
     pub start: Option<String>,
     pub end: Option<String>,

@@ -19,6 +19,7 @@ use crate::web::AppState;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct QueueQuery {
     pub page: Option<i32>,
     pub page_size: Option<i32>,
@@ -113,8 +114,8 @@ pub struct QueueResourcePagingResource {
 /// Convert QueueItem from service to QueueResource for API
 fn queue_item_to_resource(
     item: &crate::core::queue::QueueItem,
-    series_repo: &SeriesRepository,
-    episode_repo: &EpisodeRepository,
+    _series_repo: &SeriesRepository,
+    _episode_repo: &EpisodeRepository,
 ) -> QueueResource {
     let protocol = match item.protocol {
         QueueProtocol::Usenet => "usenet",
@@ -468,6 +469,7 @@ pub struct QueueStatusResource {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct DeleteQueueQuery {
     #[serde(default)]
     pub remove_from_client: bool,
@@ -487,7 +489,7 @@ pub async fn delete_queue_item(
     Query(query): Query<DeleteQueueQuery>,
 ) -> Json<serde_json::Value> {
     let service = TrackedDownloadService::new(state.db.clone());
-    let tracked_repo = TrackedDownloadRepository::new(state.db.clone());
+    let _tracked_repo = TrackedDownloadRepository::new(state.db.clone());
 
     // Check if this is a tracked download (ID < 10000)
     if id < 10000 {
@@ -526,6 +528,7 @@ pub async fn delete_queue_item(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct BulkDeleteRequest {
     pub ids: Vec<i32>,
     #[serde(default)]

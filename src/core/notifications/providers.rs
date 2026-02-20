@@ -108,8 +108,8 @@ impl NotificationProvider for DiscordProvider {
     async fn test(&self) -> Result<()> {
         let test_payload = NotificationPayload {
             event_type: NotificationEventType::Test,
-            title: "Pir9 Test Notification".to_string(),
-            message: "This is a test notification from Pir9".to_string(),
+            title: "pir9 Test Notification".to_string(),
+            message: "This is a test notification from pir9".to_string(),
             series_title: Some("Test Series".to_string()),
             series_id: None,
             episode_info: None,
@@ -175,7 +175,7 @@ impl NotificationProvider for DiscordProvider {
             description: payload.message.clone(),
             color: Self::event_to_color(&payload.event_type),
             footer: Some(DiscordEmbedFooter {
-                text: "Pir9".to_string(),
+                text: "pir9".to_string(),
             }),
             fields,
         };
@@ -305,8 +305,8 @@ impl NotificationProvider for WebhookProvider {
     async fn test(&self) -> Result<()> {
         let test_payload = NotificationPayload {
             event_type: NotificationEventType::Test,
-            title: "Pir9 Test Notification".to_string(),
-            message: "This is a test notification from Pir9".to_string(),
+            title: "pir9 Test Notification".to_string(),
+            message: "This is a test notification from pir9".to_string(),
             series_title: Some("Test Series".to_string()),
             series_id: None,
             episode_info: None,

@@ -1,10 +1,10 @@
+#![allow(dead_code, unused_imports)]
 //! Download import service
 //! Processes completed downloads and imports them into the library
 
 use anyhow::{Context, Result};
 use chrono::Utc;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use crate::core::datastore::models::{
     EpisodeDbModel, EpisodeFileDbModel, HistoryDbModel, SeriesDbModel,

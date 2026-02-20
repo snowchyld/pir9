@@ -1,5 +1,7 @@
 //! TV Shows domain module
 //! Contains models and services for Series, Episodes, and Seasons
+#![allow(dead_code)]
+#![allow(unused_imports)]
 
 pub mod models;
 pub mod services;
@@ -7,7 +9,6 @@ pub mod repositories;
 pub mod events;
 
 pub use models::*;
-pub use services::*;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

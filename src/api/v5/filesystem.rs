@@ -8,6 +8,7 @@ use crate::web::AppState;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct FileSystemQuery {
     pub path: Option<String>,
     pub include_files: Option<bool>,

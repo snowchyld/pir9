@@ -3,7 +3,7 @@
 use axum::{
     extract::Path,
     response::Json,
-    routing::{delete, get, post, put},
+    routing::{get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -235,7 +235,7 @@ fn create_telegram_schema() -> NotificationResource {
         make_field(1, "chatId", "Chat ID", "textbox", None, Some("Chat ID to send messages to")),
         make_field(2, "topicId", "Topic ID", "textbox", None, Some("Topic ID for forum chats (optional)")),
         make_field(3, "sendSilently", "Send Silently", "checkbox", Some(serde_json::json!(false)), Some("Send notifications silently")),
-        make_field(4, "includeAppNameInTitle", "Include App Name", "checkbox", Some(serde_json::json!(true)), Some("Include Pir9 in notification title")),
+        make_field(4, "includeAppNameInTitle", "Include App Name", "checkbox", Some(serde_json::json!(true)), Some("Include pir9 in notification title")),
     ];
     schema
 }

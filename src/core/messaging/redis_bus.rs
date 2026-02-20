@@ -19,7 +19,7 @@ use futures_util::StreamExt;
 #[cfg(feature = "redis-events")]
 use crate::core::messaging::Message;
 
-/// Redis channel name for Pir9 events
+/// Redis channel name for pir9 events
 #[cfg(feature = "redis-events")]
 const REDIS_CHANNEL: &str = "pir9:events";
 
@@ -117,6 +117,9 @@ impl RedisEventBus {
             .context("Failed to create Redis client for subscriber")?;
 
         // Get async connection and convert to pubsub
+        // Note: get_async_connection is deprecated in favor of get_multiplexed_async_connection,
+        // but pubsub requires a dedicated connection that supports into_pubsub().
+        #[allow(deprecated)]
         let conn = client.get_async_connection().await
             .context("Failed to create Redis connection")?;
         let mut pubsub_conn = conn.into_pubsub();

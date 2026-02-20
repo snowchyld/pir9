@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Notifications module
 //! Integration with notification providers
 

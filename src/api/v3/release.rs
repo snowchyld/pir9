@@ -384,7 +384,7 @@ pub async fn create_release(
 
             // Try to re-fetch from indexer
             let indexer_repo = IndexerRepository::new(state.db.clone());
-            let indexer = match indexer_repo.get_by_id(body.indexer_id as i64).await {
+            let _indexer = match indexer_repo.get_by_id(body.indexer_id as i64).await {
                 Ok(Some(i)) => i,
                 _ => {
                     return Json(serde_json::json!({
@@ -499,6 +499,7 @@ pub async fn create_release(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct PushReleaseRequest {
     pub title: String,
     pub download_url: Option<String>,

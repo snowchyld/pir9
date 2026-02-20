@@ -1,8 +1,9 @@
+#![allow(dead_code)]
 //! Database models for SQLx
 //! Entity definitions for database tables
 
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 
 /// Series database model
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -237,6 +238,24 @@ pub struct BlocklistDbModel {
     pub indexer: String,
     pub message: Option<String>,
     pub date: DateTime<Utc>,
+}
+
+/// Custom filter database model
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct CustomFilterDbModel {
+    pub id: i64,
+    pub filter_type: String,
+    pub label: String,
+    pub filters: String, // JSON serialized
+}
+
+/// Remote path mapping database model
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct RemotePathMappingDbModel {
+    pub id: i64,
+    pub host: String,
+    pub remote_path: String,
+    pub local_path: String,
 }
 
 /// Root folder database model

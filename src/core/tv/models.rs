@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! TV Show domain models
 //! Series, Episode, and related entities
 
@@ -6,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::core::tv::{
-    Actor, CoverType, MediaCover, MonitoringOptions, NewItemMonitorType,
+    Actor, MediaCover, NewItemMonitorType,
     Ratings, Season, SeriesStatusType, SeriesType
 };
 use crate::core::profiles::QualityProfile;

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Download queue module
 //! Manages pending and active downloads
 
@@ -99,22 +100,22 @@ impl QueueService {
     }
     
     /// Get queue item by ID
-    pub async fn get_by_id(&self, id: i64) -> Option<QueueItem> {
+    pub async fn get_by_id(&self, _id: i64) -> Option<QueueItem> {
         None
     }
     
     /// Add item to queue
-    pub async fn add(&self, item: QueueItem) -> anyhow::Result<()> {
+    pub async fn add(&self, _item: QueueItem) -> anyhow::Result<()> {
         Ok(())
     }
     
     /// Remove item from queue
-    pub async fn remove(&self, id: i64, blacklist: bool) -> anyhow::Result<()> {
+    pub async fn remove(&self, _id: i64, _blacklist: bool) -> anyhow::Result<()> {
         Ok(())
     }
     
     /// Grab a release
-    pub async fn grab(&self, release_id: i64) -> anyhow::Result<()> {
+    pub async fn grab(&self, _release_id: i64) -> anyhow::Result<()> {
         Ok(())
     }
 }

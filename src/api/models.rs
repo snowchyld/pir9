@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Shared API models and DTOs
 
 use serde::{Deserialize, Serialize};

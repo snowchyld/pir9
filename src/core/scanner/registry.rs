@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Worker registry for tracking distributed scan workers
 //!
 //! The registry maintains a list of online workers, their paths, and health status.

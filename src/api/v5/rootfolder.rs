@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Json},
-    routing::{delete, get, post},
+    routing::get,
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -27,6 +27,7 @@ pub struct RootFolderResource {
 /// Input for creating a root folder (id is optional/generated)
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct CreateRootFolderRequest {
     #[serde(default)]
     pub id: Option<i32>,

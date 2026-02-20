@@ -1,4 +1,4 @@
-//! Pir9 - Smart PVR for TV and anime
+//! pir9 - Smart PVR for TV and anime
 //! A modern Rust media management application
 
 use std::net::SocketAddr;
@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    info!("=== Pir9 v{} ===", env!("CARGO_PKG_VERSION"));
+    info!("=== pir9 v{} ===", env!("CARGO_PKG_VERSION"));
     info!("Mode: {:?}", args.mode);
     if let Some(ref redis_url) = args.redis_url {
         info!("Redis URL: {}", redis_url);
@@ -114,12 +114,6 @@ async fn run_server_mode(args: &Args) -> Result<()> {
     database.migrate().await
         .context("Failed to run database migrations")?;
 
-    // Initialize IMDB database (creates schema if needed)
-    match crate::core::imdb::ImdbDatabase::connect(crate::core::imdb::DEFAULT_IMDB_DB_PATH).await {
-        Ok(_) => info!("IMDB database initialized"),
-        Err(e) => warn!("Failed to initialize IMDB database (IMDB features may be unavailable): {}", e),
-    }
-
     // Initialize the application event logger
     crate::core::logging::init_app_logger(database.clone()).await;
 
@@ -131,7 +125,7 @@ async fn run_server_mode(args: &Args) -> Result<()> {
     };
     crate::core::logging::log_info(
         "ApplicationStartup",
-        &format!("Pir9 v{} started in {} mode", env!("CARGO_PKG_VERSION"), mode_str)
+        &format!("pir9 v{} started in {} mode", env!("CARGO_PKG_VERSION"), mode_str)
     ).await;
 
     // Clean up stale commands from previous server sessions
@@ -224,7 +218,7 @@ async fn run_server_mode(args: &Args) -> Result<()> {
         .await
         .context("Server error")?;
 
-    info!("Pir9 shutdown complete");
+    info!("pir9 shutdown complete");
     Ok(())
 }
 
@@ -352,7 +346,7 @@ async fn media_cover_handler(
     let client = reqwest::Client::new();
     let response = match client
         .get(&skyhook_url)
-        .header("User-Agent", "Pir9/0.1.0")
+        .header("User-Agent", "pir9/0.1.0")
         .send()
         .await
     {

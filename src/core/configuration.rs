@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Application configuration management
 //! Handles loading and validation of configuration from files and environment
 

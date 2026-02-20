@@ -1,5 +1,5 @@
 //! Tracked download service
-//! Manages the relationship between Pir9 downloads and external download clients
+//! Manages the relationship between pir9 downloads and external download clients
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -10,7 +10,7 @@ use crate::core::datastore::models::TrackedDownloadDbModel;
 use crate::core::datastore::repositories::{
     TrackedDownloadRepository, DownloadClientRepository, SeriesRepository, EpisodeRepository,
 };
-use crate::core::download::clients::{create_client_from_model, DownloadClient, DownloadOptions, DownloadState};
+use crate::core::download::clients::{create_client_from_model, DownloadOptions, DownloadState};
 use crate::core::indexers::ReleaseInfo;
 use crate::core::profiles::qualities::QualityModel;
 
@@ -83,7 +83,7 @@ impl TrackedDownloadService {
     pub async fn get_queue(&self) -> Result<Vec<QueueItem>> {
         let repo = TrackedDownloadRepository::new(self.db.clone());
         let client_repo = DownloadClientRepository::new(self.db.clone());
-        let series_repo = SeriesRepository::new(self.db.clone());
+        let _series_repo = SeriesRepository::new(self.db.clone());
         let episode_repo = EpisodeRepository::new(self.db.clone());
 
         // Get all active tracked downloads

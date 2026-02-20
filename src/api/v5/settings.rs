@@ -2,7 +2,7 @@
 
 use axum::{
     response::Json,
-    routing::{get, put},
+    routing::get,
     Router,
 };
 use serde::{Deserialize, Serialize};

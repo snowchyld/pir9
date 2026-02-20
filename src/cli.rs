@@ -1,13 +1,14 @@
-//! Pir9 CLI tool
-//! Command-line interface for Pir9 management
+#![allow(dead_code)]
+//! pir9 CLI tool
+//! Command-line interface for pir9 management
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tracing::{info, error};
+use tracing::info;
 
 #[derive(Parser)]
 #[command(name = "pir9-cli")]
-#[command(about = "Pir9 command-line interface")]
+#[command(about = "pir9 command-line interface")]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -188,7 +189,7 @@ async fn main() -> Result<()> {
     
     let cli = Cli::parse();
     
-    info!("Pir9 CLI v{}", env!("CARGO_PKG_VERSION"));
+    info!("pir9 CLI v{}", env!("CARGO_PKG_VERSION"));
     
     match cli.command {
         Commands::Db { command } => handle_db_command(command).await,
@@ -226,7 +227,7 @@ async fn handle_series_command(command: SeriesCommands) -> Result<()> {
             info!("Listing series (format: {})...", format);
             Ok(())
         }
-        SeriesCommands::Add { tvdb_id, title, quality_profile, root_folder } => {
+        SeriesCommands::Add { tvdb_id, title, quality_profile: _, root_folder: _ } => {
             info!("Adding series: {} (TVDB: {})", title, tvdb_id);
             Ok(())
         }
@@ -238,7 +239,7 @@ async fn handle_series_command(command: SeriesCommands) -> Result<()> {
             info!("Refreshing series: {} (force: {})", id, force);
             Ok(())
         }
-        SeriesCommands::Search { series_id, season, episode } => {
+        SeriesCommands::Search { series_id: _, season: _, episode: _ } => {
             info!("Searching for episodes...");
             Ok(())
         }
@@ -248,7 +249,7 @@ async fn handle_series_command(command: SeriesCommands) -> Result<()> {
 async fn handle_system_command(command: SystemCommands) -> Result<()> {
     match command {
         SystemCommands::Status => {
-            println!("Pir9 System Status");
+            println!("pir9 System Status");
             println!("====================");
             println!("Version: {}", env!("CARGO_PKG_VERSION"));
             println!("OS: {}", std::env::consts::OS);
@@ -263,7 +264,7 @@ async fn handle_system_command(command: SystemCommands) -> Result<()> {
             info!("Checking disk space...");
             Ok(())
         }
-        SystemCommands::Backup { path } => {
+        SystemCommands::Backup { path: _ } => {
             info!("Creating backup...");
             Ok(())
         }

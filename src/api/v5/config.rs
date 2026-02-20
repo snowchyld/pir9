@@ -118,11 +118,13 @@ fn hash_password(password: &str) -> String {
 }
 
 /// Verify password against hash
+#[allow(dead_code)]
 pub fn verify_password(password: &str, hash: &str) -> bool {
     hash_password(password) == hash
 }
 
 /// Get stored credentials for authentication
+#[allow(dead_code)]
 pub async fn get_auth_credentials() -> Option<(String, String)> {
     let config = CONFIG_STATE.read().await;
     if config.authentication_method == "none" {
@@ -138,6 +140,7 @@ pub async fn get_auth_credentials() -> Option<(String, String)> {
 }
 
 /// Check if authentication is enabled (always disabled)
+#[allow(dead_code)]
 pub async fn is_auth_enabled() -> bool {
     false
 }
@@ -211,7 +214,7 @@ impl Default for HostConfigResource {
             ssl_cert_path: None,
             ssl_cert_password: None,
             url_base: String::new(),
-            instance_name: "Pir9".to_string(),
+            instance_name: "pir9".to_string(),
             application_url: None,
             update_automatically: false,
             update_mechanism: "builtIn".to_string(),

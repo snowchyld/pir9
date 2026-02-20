@@ -9,7 +9,7 @@ use crate::core::datastore::Database;
 use crate::core::datastore::repositories::NotificationRepository;
 use crate::core::messaging::{EventBus, Message};
 use super::{
-    NotificationPayload, NotificationEventType, EpisodeInfo, ReleaseInfo, HealthInfo,
+    NotificationPayload, NotificationEventType, ReleaseInfo, HealthInfo,
     create_provider_from_model,
 };
 
@@ -85,7 +85,7 @@ impl NotificationService {
 
             Message::DownloadCompleted {
                 series_id,
-                episode_file_id,
+                episode_file_id: _,
                 ..
             } => Some(NotificationPayload {
                 event_type: NotificationEventType::Download,

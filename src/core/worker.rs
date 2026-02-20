@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Worker module for distributed file scanning
 //!
 //! The worker runs on machines with direct access to media files (e.g., on a NAS).
@@ -12,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-use crate::core::messaging::{Message, ScanType, ScannedFile};
+use crate::core::messaging::{Message, ScanType};
 use crate::core::scanner;
 
 /// Get a human-readable name for a message type (for logging)

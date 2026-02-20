@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Indexer definitions and implementations
 
 use serde::{Deserialize, Serialize};

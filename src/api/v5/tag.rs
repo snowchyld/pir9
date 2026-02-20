@@ -4,13 +4,16 @@ use axum::{
     extract::{Path, State},
     response::{IntoResponse, Json},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::get,
     Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::core::datastore::repositories::TagRepository;
+use crate::core::datastore::repositories::{
+    DelayProfileRepository, DownloadClientRepository, IndexerRepository,
+    NotificationRepository, TagRepository,
+};
 use crate::web::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -140,30 +143,61 @@ pub async fn delete_tag(
     Ok(Json(serde_json::json!({})))
 }
 
+/// Parse a JSON-serialized tags string into a `Vec<i64>`.
+fn parse_tags(tags_json: &str) -> Vec<i64> {
+    serde_json::from_str::<Vec<i64>>(tags_json).unwrap_or_default()
+}
+
 /// GET /api/v5/tag/detail - Get all tags with usage details
 pub async fn get_tag_details(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<TagDetailsResource>>, TagError> {
-    let repo = TagRepository::new(state.db.clone());
-
-    let tags = repo.get_all().await
+    let tag_repo = TagRepository::new(state.db.clone());
+    let tags = tag_repo.get_all().await
         .map_err(|e| TagError::Internal(format!("Failed to fetch tags: {}", e)))?;
 
-    // TODO: Fetch related entities to populate the IDs
-    // For now, return empty relation arrays
+    // Load all entities that carry tags
+    let delay_profiles = DelayProfileRepository::new(state.db.clone()).get_all().await.unwrap_or_default();
+    let notifications = NotificationRepository::new(state.db.clone()).get_all().await.unwrap_or_default();
+    let indexers = IndexerRepository::new(state.db.clone()).get_all().await.unwrap_or_default();
+    let download_clients = DownloadClientRepository::new(state.db.clone()).get_all().await.unwrap_or_default();
+    // Note: series tags are not stored in the DB schema yet, so series_ids is always empty
+
     let resources: Vec<TagDetailsResource> = tags
         .into_iter()
-        .map(|(id, label)| TagDetailsResource {
-            id: id as i32,
-            label,
-            delay_profile_ids: vec![],
-            import_list_ids: vec![],
-            notification_ids: vec![],
-            restriction_ids: vec![],
-            indexer_ids: vec![],
-            download_client_ids: vec![],
-            auto_tag_ids: vec![],
-            series_ids: vec![],
+        .map(|(id, label)| {
+            let tag_id = id;
+
+            let delay_profile_ids: Vec<i32> = delay_profiles.iter()
+                .filter(|dp| parse_tags(&dp.tags).contains(&tag_id))
+                .map(|dp| dp.id as i32)
+                .collect();
+            let notification_ids: Vec<i32> = notifications.iter()
+                .filter(|n| parse_tags(&n.tags).contains(&tag_id))
+                .map(|n| n.id as i32)
+                .collect();
+            let indexer_ids: Vec<i32> = indexers.iter()
+                .filter(|i| parse_tags(&i.tags).contains(&tag_id))
+                .map(|i| i.id as i32)
+                .collect();
+            let download_client_ids: Vec<i32> = download_clients.iter()
+                .filter(|dc| parse_tags(&dc.tags).contains(&tag_id))
+                .map(|dc| dc.id as i32)
+                .collect();
+            let series_ids: Vec<i32> = vec![];
+
+            TagDetailsResource {
+                id: id as i32,
+                label,
+                delay_profile_ids,
+                import_list_ids: vec![],
+                notification_ids,
+                restriction_ids: vec![],
+                indexer_ids,
+                download_client_ids,
+                auto_tag_ids: vec![],
+                series_ids,
+            }
         })
         .collect();
 

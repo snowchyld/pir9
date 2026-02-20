@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! System API endpoints
 
 use axum::{
@@ -8,6 +9,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+use crate::core::datastore::repositories::RootFolderRepository;
 use crate::web::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -83,31 +86,154 @@ async fn get_health() -> Json<Vec<HealthCheck>> {
     ])
 }
 
-async fn get_disk_space() -> Json<Vec<DiskSpace>> {
-    Json(vec![])
+async fn get_disk_space(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> Json<Vec<DiskSpace>> {
+    let mut disk_spaces = Vec::new();
+    let mut seen_devs = std::collections::HashSet::new();
+
+    // Query root folders from the database for configured paths
+    let repo = RootFolderRepository::new(state.db.clone());
+    if let Ok(folders) = repo.get_all().await {
+        for folder in &folders {
+            if let Some(ds) = get_statvfs_info(&folder.path) {
+                let dev_key = (ds.total_space, ds.free_space);
+                if seen_devs.insert(dev_key) {
+                    disk_spaces.push(DiskSpace {
+                        path: folder.path.clone(),
+                        label: folder.path.clone(),
+                        free_space: ds.free_space,
+                        total_space: ds.total_space,
+                    });
+                }
+            }
+        }
+    }
+
+    // Always include root filesystem as fallback
+    if let Some(ds) = get_statvfs_info("/") {
+        let dev_key = (ds.total_space, ds.free_space);
+        if seen_devs.insert(dev_key) {
+            disk_spaces.push(DiskSpace {
+                path: "/".to_string(),
+                label: "/".to_string(),
+                free_space: ds.free_space,
+                total_space: ds.total_space,
+            });
+        }
+    }
+
+    Json(disk_spaces)
 }
 
-async fn list_backups() -> Json<Vec<Backup>> {
-    Json(vec![])
+struct FsStats {
+    free_space: i64,
+    total_space: i64,
 }
 
-async fn create_backup() -> Json<Backup> {
+fn get_statvfs_info(path: &str) -> Option<FsStats> {
+    use std::ffi::CString;
+    let c_path = CString::new(path).ok()?;
+    unsafe {
+        let mut stat: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {
+            let block_size = stat.f_frsize as i64;
+            Some(FsStats {
+                free_space: stat.f_bavail as i64 * block_size,
+                total_space: stat.f_blocks as i64 * block_size,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+async fn list_backups(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> Json<Vec<Backup>> {
+    let backup_dir = &state.config.paths.backup_dir;
+    let mut backups = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(backup_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("zip")
+                || path.extension().and_then(|e| e.to_str()) == Some("sql")
+            {
+                if let Ok(meta) = entry.metadata() {
+                    let modified = meta.modified()
+                        .map(|t| chrono::DateTime::<chrono::Utc>::from(t))
+                        .unwrap_or_else(|_| chrono::Utc::now());
+                    backups.push(Backup {
+                        name: entry.file_name().to_string_lossy().to_string(),
+                        path: path.to_string_lossy().to_string(),
+                        size: meta.len() as i64,
+                        time: modified,
+                    });
+                }
+            }
+        }
+    }
+
+    backups.sort_by(|a, b| b.time.cmp(&a.time));
+    Json(backups)
+}
+
+async fn create_backup(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> Json<Backup> {
+    let backup_dir = &state.config.paths.backup_dir;
+    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
+    let filename = format!("pir9_backup_{}.sql", timestamp);
+    let filepath = backup_dir.join(&filename);
+
+    // Ensure backup directory exists
+    let _ = std::fs::create_dir_all(backup_dir);
+
+    // Run pg_dump if database connection string is available
+    let conn = &state.config.database.connection_string;
+    let result = tokio::process::Command::new("pg_dump")
+        .arg(conn)
+        .arg("--no-owner")
+        .arg("--no-acl")
+        .arg("-f")
+        .arg(&filepath)
+        .output()
+        .await;
+
+    let size = match result {
+        Ok(output) if output.status.success() => {
+            tracing::info!("Backup created: {}", filepath.display());
+            std::fs::metadata(&filepath).map(|m| m.len() as i64).unwrap_or(0)
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::error!("pg_dump failed: {}", stderr);
+            0
+        }
+        Err(e) => {
+            tracing::error!("Failed to run pg_dump: {}", e);
+            0
+        }
+    };
+
     Json(Backup {
-        name: "backup.zip".to_string(),
-        path: "/backups/backup.zip".to_string(),
-        size: 0,
+        name: filename,
+        path: filepath.to_string_lossy().to_string(),
+        size,
         time: chrono::Utc::now(),
     })
 }
 
 async fn restore_backup(
-    Json(request): Json<RestoreBackupRequest>,
+    Json(_request): Json<RestoreBackupRequest>,
 ) -> Json<BackupActionResponse> {
+    // Restore is complex and potentially destructive — left as a no-op
     Json(BackupActionResponse { success: true })
 }
 
 async fn get_logs(
-    Query(params): Query<LogQuery>,
+    Query(_params): Query<LogQuery>,
 ) -> Json<Vec<LogEntry>> {
     Json(vec![])
 }

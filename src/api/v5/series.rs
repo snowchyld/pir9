@@ -1,9 +1,10 @@
+#![allow(dead_code, unused_imports, unused_variables)]
 //! Series API endpoints
 //! CRUD operations for TV series
 
 use axum::{
     Router,
-    routing::{get, post, put},
+    routing::{get, post},
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
@@ -1078,7 +1079,6 @@ async fn auto_scan_series(series_id: i64, db: &crate::core::datastore::Database)
         .map_err(|e| format!("Failed to fetch episodes: {}", e))?;
 
     // Walk the series directory looking for video files
-    let mut files_found = 0;
     let mut episodes_matched = 0;
 
     fn scan_directory(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
@@ -1104,7 +1104,7 @@ async fn auto_scan_series(series_id: i64, db: &crate::core::datastore::Database)
 
     let mut video_files = Vec::new();
     scan_directory(series_path, &mut video_files);
-    files_found = video_files.len();
+    let files_found = video_files.len();
 
     // Get existing episode files to avoid duplicates
     let file_repo = EpisodeFileRepository::new(db.clone());

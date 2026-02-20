@@ -1,4 +1,5 @@
-//! File scanning module for Pir9
+#![allow(dead_code, unused_imports)]
+//! File scanning module for pir9
 //!
 //! This module provides file system scanning capabilities that can be used
 //! by both the main server (local scanning) and distributed workers.
@@ -17,10 +18,10 @@ use tracing::{debug, warn};
 use crate::core::messaging::ScannedFile;
 
 pub use consumer::{ScanResultConsumer, create_scan_request};
-pub use jobs::{JobTracker, JobTrackerService, ScanJob, JobState, JobStats};
-pub use registry::{WorkerRegistry, WorkerRegistryService, WorkerInfo, WorkerStatus};
+pub use jobs::JobTrackerService;
+pub use registry::WorkerRegistryService;
 
-/// Video file extensions supported by Pir9
+/// Video file extensions supported by pir9
 pub const VIDEO_EXTENSIONS: &[&str] = &["mkv", "mp4", "avi", "wmv", "m4v", "ts", "webm", "mov"];
 
 /// Scan a directory recursively for video files

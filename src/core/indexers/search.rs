@@ -213,7 +213,7 @@ fn sanitize_title_for_search(title: &str) -> String {
 }
 
 /// Get TV categories based on protocol
-fn get_tv_categories(protocol: i32) -> Vec<i32> {
+fn get_tv_categories(_protocol: i32) -> Vec<i32> {
     // Standard Newznab TV categories
     // 5000: TV, 5010: WEB-DL, 5020: Foreign, 5030: SD, 5040: HD, 5045: UHD, 5050: Other, 5060: Sport, 5070: Anime, 5080: Documentary
     vec![5000, 5010, 5020, 5030, 5040, 5045, 5050, 5060, 5070, 5080]

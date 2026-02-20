@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Media files module
 //! Episode file management, media info, and file operations
 
@@ -49,28 +50,161 @@ pub struct MediaInfoModel {
 pub struct MediaAnalyzer;
 
 impl MediaAnalyzer {
-    /// Analyze a media file and extract media info
+    /// Analyze a media file and extract media info from the filename and metadata.
+    ///
+    /// This performs lightweight analysis using filename patterns and file metadata.
+    /// For full analysis (codecs, bitrate), a media info binary would be needed.
     pub async fn analyze(path: &std::path::Path) -> anyhow::Result<MediaInfoModel> {
-        // This would use a media info library like mediainfo
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        // Detect resolution from filename patterns
+        let resolution = Self::detect_resolution(&filename);
+
+        // Detect video codec from filename
+        let video_codec = Self::detect_video_codec(&filename);
+
+        // Detect audio codec from filename
+        let audio_codec = Self::detect_audio_codec(&filename);
+
+        // Detect HDR/dynamic range from filename
+        let (video_dynamic_range, video_dynamic_range_type) = Self::detect_hdr(&filename);
+
+        // Detect bit depth from filename
+        let video_bit_depth = Self::detect_bit_depth(&filename);
+
         Ok(MediaInfoModel {
             audio_bitrate: None,
-            audio_channels: None,
-            audio_codec: None,
+            audio_channels: Self::detect_audio_channels(&filename),
+            audio_codec,
             audio_languages: None,
             audio_stream_count: None,
-            video_bit_depth: None,
+            video_bit_depth,
             video_bitrate: None,
-            video_codec: None,
+            video_codec,
             video_fps: None,
-            video_dynamic_range: None,
-            video_dynamic_range_type: None,
-            resolution: None,
+            video_dynamic_range,
+            video_dynamic_range_type,
+            resolution,
             run_time: None,
             scan_type: None,
             subtitles: None,
         })
     }
-    
+
+    fn detect_resolution(filename: &str) -> Option<String> {
+        if filename.contains("2160p") || filename.contains("4k") || filename.contains("uhd") {
+            Some("3840x2160".to_string())
+        } else if filename.contains("1080p") || filename.contains("1080i") {
+            Some("1920x1080".to_string())
+        } else if filename.contains("720p") {
+            Some("1280x720".to_string())
+        } else if filename.contains("576p") || filename.contains("576i") {
+            Some("720x576".to_string())
+        } else if filename.contains("480p") || filename.contains("480i") {
+            Some("720x480".to_string())
+        } else {
+            None
+        }
+    }
+
+    fn detect_video_codec(filename: &str) -> Option<String> {
+        if filename.contains("x265") || filename.contains("h265") || filename.contains("hevc") {
+            Some("x265".to_string())
+        } else if filename.contains("x264") || filename.contains("h264") || filename.contains("avc") {
+            Some("x264".to_string())
+        } else if filename.contains("av1") {
+            Some("AV1".to_string())
+        } else if filename.contains("xvid") {
+            Some("XviD".to_string())
+        } else if filename.contains("divx") {
+            Some("DivX".to_string())
+        } else if filename.contains("mpeg2") {
+            Some("MPEG2".to_string())
+        } else {
+            None
+        }
+    }
+
+    fn detect_audio_codec(filename: &str) -> Option<String> {
+        if filename.contains("truehd") || filename.contains("true.hd") {
+            Some("TrueHD".to_string())
+        } else if filename.contains("atmos") {
+            Some("TrueHD Atmos".to_string())
+        } else if filename.contains("dts-hd.ma") || filename.contains("dts-hd ma") {
+            Some("DTS-HD MA".to_string())
+        } else if filename.contains("dts-hd") {
+            Some("DTS-HD".to_string())
+        } else if filename.contains("dts") {
+            Some("DTS".to_string())
+        } else if filename.contains("flac") {
+            Some("FLAC".to_string())
+        } else if filename.contains("eac3") || filename.contains("ddp") || filename.contains("dd+") {
+            Some("EAC3".to_string())
+        } else if filename.contains("ac3") || filename.contains("dd5") || filename.contains("dolby.digital") {
+            Some("AC3".to_string())
+        } else if filename.contains("aac") {
+            Some("AAC".to_string())
+        } else if filename.contains("mp3") {
+            Some("MP3".to_string())
+        } else {
+            None
+        }
+    }
+
+    fn detect_audio_channels(filename: &str) -> Option<f64> {
+        if filename.contains("7.1") {
+            Some(7.1)
+        } else if filename.contains("5.1") {
+            Some(5.1)
+        } else if filename.contains("2.0") || filename.contains("stereo") {
+            Some(2.0)
+        } else if filename.contains("mono") || filename.contains("1.0") {
+            Some(1.0)
+        } else {
+            None
+        }
+    }
+
+    fn detect_hdr(filename: &str) -> (Option<String>, Option<String>) {
+        if filename.contains("dolby.vision") || filename.contains("dovi") || filename.contains("dv") && filename.contains("hdr") {
+            (
+                Some("HDR".to_string()),
+                Some("Dolby Vision".to_string()),
+            )
+        } else if filename.contains("hdr10+") || filename.contains("hdr10plus") {
+            (
+                Some("HDR".to_string()),
+                Some("HDR10Plus".to_string()),
+            )
+        } else if filename.contains("hdr10") || filename.contains("hdr") {
+            (
+                Some("HDR".to_string()),
+                Some("HDR10".to_string()),
+            )
+        } else if filename.contains("hlg") {
+            (
+                Some("HDR".to_string()),
+                Some("HLG".to_string()),
+            )
+        } else {
+            (None, None)
+        }
+    }
+
+    fn detect_bit_depth(filename: &str) -> Option<i32> {
+        if filename.contains("10bit") || filename.contains("10-bit") || filename.contains("hi10p") {
+            Some(10)
+        } else if filename.contains("8bit") || filename.contains("8-bit") {
+            Some(8)
+        } else {
+            None
+        }
+    }
+
     /// Get video resolution from media info
     pub fn get_resolution(media_info: &MediaInfoModel) -> Option<(i32, i32)> {
         media_info.resolution.as_ref().and_then(|res| {

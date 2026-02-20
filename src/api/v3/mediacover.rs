@@ -60,7 +60,7 @@ pub async fn get_media_cover(
 
     let skyhook_response = match client
         .get(&url)
-        .header("User-Agent", "Pir9/0.1.0")
+        .header("User-Agent", "pir9/0.1.0")
         .send()
         .await
     {
@@ -96,7 +96,7 @@ pub async fn get_media_cover(
     // Fetch the actual image
     let image_response = match client
         .get(&image_url)
-        .header("User-Agent", "Pir9/0.1.0")
+        .header("User-Agent", "pir9/0.1.0")
         .send()
         .await
     {

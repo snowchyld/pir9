@@ -15,6 +15,7 @@ use crate::web::AppState;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct WantedQuery {
     pub page: Option<i32>,
     pub page_size: Option<i32>,

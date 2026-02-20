@@ -8,6 +8,7 @@ use crate::web::AppState;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct SeriesLookupQuery {
     pub term: Option<String>,
     pub tvdb_id: Option<i32>,
@@ -155,7 +156,7 @@ pub async fn lookup_series(Query(query): Query<SeriesLookupQuery>) -> Json<Vec<S
     let client = reqwest::Client::new();
     let response = match client
         .get(&url)
-        .header("User-Agent", "Pir9/0.1.0")
+        .header("User-Agent", "pir9/0.1.0")
         .send()
         .await
     {

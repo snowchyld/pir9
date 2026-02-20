@@ -1,15 +1,16 @@
+#![allow(dead_code, unused_imports)]
 //! TV Show domain services
 //! Business logic for managing series and episodes
 
 use anyhow::{Context, Result};
 use chrono::Utc;
 use std::sync::Arc;
-use tracing::{info, warn, error};
+use tracing::{info, warn};
 
 use crate::core::tv::{
     models::*,
     repositories::{EpisodeRepository, SeriesRepository},
-    AddOptions, MonitoringOptions, NewItemMonitorType, SeriesStatusType,
+    AddOptions, NewItemMonitorType, SeriesStatusType,
 };
 use crate::core::datastore::Database;
 use crate::core::messaging::{EventBus, Message};
@@ -280,7 +281,7 @@ impl SeriesService {
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
-            .header("User-Agent", "Pir9/0.1.0")
+            .header("User-Agent", "pir9/0.1.0")
             .send()
             .await
             .context("Failed to fetch from Skyhook")?;

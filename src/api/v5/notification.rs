@@ -3,7 +3,7 @@
 use axum::{
     extract::{Path, State},
     response::Json,
-    routing::{delete, get, post, put},
+    routing::{get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -468,13 +468,14 @@ pub async fn delete_notification(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct TestRequest {
     #[serde(flatten)]
     pub notification: NotificationResource,
 }
 
 pub async fn test_notification(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Json(body): Json<NotificationResource>,
 ) -> Json<serde_json::Value> {
     // Convert to model and create provider

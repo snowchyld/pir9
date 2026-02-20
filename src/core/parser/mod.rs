@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Parser module
 //! Parsing release titles to extract episode information
 

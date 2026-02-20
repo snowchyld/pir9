@@ -1,10 +1,10 @@
+#![allow(dead_code, unused_imports)]
 //! Download client module
 //! Integration with download clients like qBittorrent, SABnzbd, NZBGet
 
 pub mod clients;
 pub mod history;
 pub mod import;
-pub mod queue;
 
 pub use import::ImportService;
 

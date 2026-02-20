@@ -1,5 +1,5 @@
 //! API module
-//! REST API endpoints for Pir9
+//! REST API endpoints for pir9
 
 use axum::Router;
 use std::sync::Arc;
@@ -16,6 +16,7 @@ pub async fn health_check() -> &'static str {
 }
 
 /// Create API router with all routes
+#[allow(dead_code)]
 pub fn create_api_router() -> Router<Arc<AppState>> {
     Router::new()
         .nest("/v3", v3::routes())

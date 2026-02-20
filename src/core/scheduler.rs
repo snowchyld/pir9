@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Job scheduler module
 //! Handles periodic tasks like RSS sync, library refresh, etc.
 
@@ -8,10 +9,11 @@ use tracing::{info, warn, error};
 
 use crate::core::datastore::Database;
 use crate::core::datastore::repositories::{
-    IndexerRepository, DownloadClientRepository, SeriesRepository,
+    IndexerRepository, DownloadClientRepository, SeriesRepository, RootFolderRepository,
 };
 use crate::core::indexers::rss::RssSyncService;
 use crate::core::download::clients::create_client_from_model as create_download_client;
+use crate::core::download::import::ImportService;
 use crate::core::indexers::create_client_from_model as create_indexer_client;
 
 /// Job scheduler for managing background tasks
@@ -82,24 +84,6 @@ impl JobScheduler {
                 name: "Backup".to_string(),
                 interval_minutes: 10080, // Weekly
                 command: JobCommand::Backup,
-                enabled: true,
-                last_execution: None,
-                next_execution: None,
-            },
-            ScheduledJob {
-                id: 7,
-                name: "ImdbFullSync".to_string(),
-                interval_minutes: 10080, // Weekly (title.basics + title.episode)
-                command: JobCommand::ImdbFullSync,
-                enabled: true,
-                last_execution: None,
-                next_execution: None,
-            },
-            ScheduledJob {
-                id: 8,
-                name: "ImdbRatingsSync".to_string(),
-                interval_minutes: 1440, // Daily (title.ratings only)
-                command: JobCommand::ImdbRatingsSync,
                 enabled: true,
                 last_execution: None,
                 next_execution: None,
@@ -207,40 +191,6 @@ async fn execute_job_command(command: &JobCommand, db: &Database) -> Result<()> 
         JobCommand::Backup => {
             execute_backup(db).await?;
         }
-        JobCommand::ImdbFullSync => {
-            info!("Executing IMDB full sync...");
-
-            // Use separate IMDB database optimized for bulk import
-            let service = match crate::core::imdb::ImdbSyncService::with_import_db(
-                crate::core::imdb::DEFAULT_IMDB_DB_PATH
-            ).await {
-                Ok(s) => s,
-                Err(e) => {
-                    error!("Failed to connect to IMDB database: {}", e);
-                    return Ok(());
-                }
-            };
-
-            // Sync all IMDB datasets (delegated to pir9-imdb service)
-            match service.sync_all().await {
-                Ok(report) => {
-                    if !report.errors.is_empty() {
-                        warn!("IMDB sync completed with warnings: {:?}", report.errors);
-                    } else {
-                        info!("IMDB full sync completed");
-                    }
-                }
-                Err(e) => {
-                    error!("IMDB sync failed: {}", e);
-                }
-            }
-        }
-        JobCommand::ImdbRatingsSync => {
-            info!("Executing IMDB ratings sync...");
-            // Ratings sync is now handled by the pir9-imdb service
-            warn!("IMDB ratings sync should be performed by the pir9-imdb service");
-            info!("Use the pir9-imdb service's /api/sync endpoint for ratings updates");
-        }
         JobCommand::ProcessDownloadQueue => {
             execute_process_download_queue(db).await?;
         }
@@ -316,7 +266,7 @@ async fn execute_refresh_series(db: &Database) -> Result<()> {
         let client = reqwest::Client::new();
 
         match client.get(&url)
-            .header("User-Agent", "Pir9/0.1.0")
+            .header("User-Agent", "pir9/0.1.0")
             .send()
             .await
         {
@@ -364,59 +314,23 @@ async fn execute_process_download_queue(db: &Database) -> Result<()> {
     Ok(())
 }
 
-/// Downloaded Episodes Scan: Check download clients for completed downloads
+/// Downloaded Episodes Scan: Check download clients for completed downloads and import them
 async fn execute_downloaded_episodes_scan(db: &Database) -> Result<()> {
     info!("Executing downloaded episodes scan...");
 
-    // Get all download clients
-    let client_repo = DownloadClientRepository::new(db.clone());
-    let clients = client_repo.get_all().await?;
+    let import_service = ImportService::new(db.clone());
+    let results = import_service.process_completed_downloads(true).await?;
 
-    if clients.is_empty() {
-        info!("No download clients configured, skipping scan");
-        return Ok(());
+    let succeeded = results.iter().filter(|r| r.success).count();
+    let failed = results.len() - succeeded;
+
+    if !results.is_empty() {
+        info!(
+            "Downloaded episodes scan complete: {} imported, {} failed",
+            succeeded, failed
+        );
     }
 
-    let mut total_completed = 0;
-
-    for client_model in clients {
-        if !client_model.enable {
-            continue;
-        }
-
-        info!("Checking download client: {}", client_model.name);
-
-        match create_download_client(&client_model) {
-            Ok(client) => {
-                match client.get_downloads().await {
-                    Ok(downloads) => {
-                        let completed: Vec<_> = downloads.iter()
-                            .filter(|d| d.status == crate::core::download::clients::DownloadState::Completed)
-                            .collect();
-
-                        if !completed.is_empty() {
-                            info!("Found {} completed downloads in {}", completed.len(), client_model.name);
-                            total_completed += completed.len();
-
-                            // TODO: Import completed downloads
-                            // - Match to series/episodes
-                            // - Rename and move files
-                            // - Update episode records
-                            // - Remove from download client
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to get downloads from {}: {}", client_model.name, e);
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Failed to create client {}: {}", client_model.name, e);
-            }
-        }
-    }
-
-    info!("Downloaded episodes scan complete: {} completed downloads found", total_completed);
     Ok(())
 }
 
@@ -438,29 +352,6 @@ async fn execute_housekeeping(db: &Database) -> Result<()> {
     if let Ok(r) = result {
         if r.rows_affected() > 0 {
             info!("Cleaned up {} old command records", r.rows_affected());
-        }
-    }
-
-    // Clean up old IMDB sync records (keep last 10 per dataset)
-    let result = sqlx::query(
-        r#"
-        DELETE FROM imdb_sync_status
-        WHERE id NOT IN (
-            SELECT id FROM (
-                SELECT id, ROW_NUMBER() OVER (
-                    PARTITION BY dataset_name ORDER BY started_at DESC
-                ) as rn
-                FROM imdb_sync_status
-            ) sub WHERE rn <= 10
-        )
-        "#
-    )
-    .execute(pool)
-    .await;
-
-    if let Ok(r) = result {
-        if r.rows_affected() > 0 {
-            info!("Cleaned up {} old sync records", r.rows_affected());
         }
     }
 
@@ -536,7 +427,30 @@ async fn execute_health_check(db: &Database) -> Result<()> {
     }
 
     // Check disk space for root folders
-    // TODO: Get root folders from config and check free space
+    let root_folder_repo = RootFolderRepository::new(db.clone());
+    if let Ok(folders) = root_folder_repo.get_all().await {
+        for folder in &folders {
+            let c_path = std::ffi::CString::new(folder.path.as_str()).ok();
+            if let Some(c_path) = c_path {
+                let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+                let ret = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
+                if ret == 0 {
+                    let free_bytes = stat.f_bavail as u64 * stat.f_frsize as u64;
+                    let total_bytes = stat.f_blocks as u64 * stat.f_frsize as u64;
+                    // Warn if less than 2% free
+                    if total_bytes > 0 && (free_bytes * 100 / total_bytes) < 2 {
+                        warn!(
+                            "Low disk space on '{}': {} MB free of {} MB total",
+                            folder.path,
+                            free_bytes / 1_048_576,
+                            total_bytes / 1_048_576
+                        );
+                        all_healthy = false;
+                    }
+                }
+            }
+        }
+    }
 
     if all_healthy {
         info!("Health check passed: all services healthy");
@@ -547,48 +461,57 @@ async fn execute_health_check(db: &Database) -> Result<()> {
     Ok(())
 }
 
-/// Backup: Create a database backup
+/// Backup: Create a PostgreSQL database backup using pg_dump
 async fn execute_backup(_db: &Database) -> Result<()> {
     info!("Executing backup...");
 
-    // Default database path - SQLite stores in current directory or config path
-    let db_path = std::path::Path::new("pir9.db");
-
-    if !db_path.exists() {
-        warn!("Database file not found at {}, skipping backup", db_path.display());
-        return Ok(());
-    }
+    let db_url = std::env::var("PIR9_DB_CONNECTION")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .unwrap_or_else(|_| "postgresql://pir9:pir9@localhost:5432/pir9".to_string());
 
     // Create backup directory
-    let backup_dir = std::path::Path::new("backups");
-    tokio::fs::create_dir_all(backup_dir).await
+    let backup_dir = std::env::var("PIR9_BACKUP_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/config/Backups"));
+    tokio::fs::create_dir_all(&backup_dir).await
         .context("Failed to create backup directory")?;
 
     // Create timestamped backup filename
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let backup_filename = format!("pir9_backup_{}.db", timestamp);
+    let backup_filename = format!("pir9_backup_{}.sql", timestamp);
     let backup_path = backup_dir.join(&backup_filename);
 
-    // Copy database file
     info!("Creating backup: {}", backup_path.display());
-    tokio::fs::copy(db_path, &backup_path).await
-        .context("Failed to copy database")?;
+
+    let output = tokio::process::Command::new("pg_dump")
+        .arg(&db_url)
+        .arg("--file")
+        .arg(&backup_path)
+        .arg("--format=plain")
+        .arg("--no-owner")
+        .arg("--no-acl")
+        .output()
+        .await
+        .context("Failed to run pg_dump")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("pg_dump failed: {}", stderr);
+    }
 
     // Clean up old backups (keep last 7)
-    let mut dir_entries = tokio::fs::read_dir(backup_dir).await?;
+    let mut dir_entries = tokio::fs::read_dir(&backup_dir).await?;
     let mut backups = Vec::new();
 
     while let Some(entry) = dir_entries.next_entry().await? {
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "db") {
+        if path.extension().map_or(false, |ext| ext == "sql") {
             backups.push(entry);
         }
     }
 
-    // Sort by filename (which includes timestamp) in reverse order
     backups.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
 
-    // Remove old backups beyond the 7 most recent
     for old_backup in backups.into_iter().skip(7) {
         let path = old_backup.path();
         info!("Removing old backup: {}", path.display());
@@ -620,10 +543,6 @@ pub enum JobCommand {
     Housekeeping,
     HealthCheck,
     Backup,
-    /// Full IMDB sync (series + episodes)
-    ImdbFullSync,
-    /// IMDB ratings sync only
-    ImdbRatingsSync,
     /// Process download queue (update statuses, trigger imports)
     ProcessDownloadQueue,
     Custom { name: String, action: String },

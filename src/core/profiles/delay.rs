@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Delay profile definitions
 
 use serde::{Deserialize, Serialize};

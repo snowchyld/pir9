@@ -1,6 +1,6 @@
 //! Series Editor API endpoints
 
-use axum::{response::Json, routing::{delete, put}, Router};
+use axum::{response::Json, routing::put, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

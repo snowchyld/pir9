@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Indexer client implementations
 //! Newznab and Torznab protocol support
 
@@ -154,7 +155,7 @@ impl NewznabClient {
         let mut episode: Option<i32> = None;
         let mut seeders: Option<i32> = None;
         let mut peers: Option<i32> = None;
-        let mut category = String::new();
+        let mut _category = String::new();
         let mut info_hash: Option<String> = None;
 
         for attr in &item.newznab_attrs {
@@ -166,7 +167,7 @@ impl NewznabClient {
                 "episode" | "ep" => episode = attr.value.parse().ok(),
                 "seeders" => seeders = attr.value.parse().ok(),
                 "peers" => peers = attr.value.parse().ok(),
-                "category" => category = attr.value.clone(),
+                "category" => _category = attr.value.clone(),
                 "infohash" => info_hash = Some(attr.value.clone()),
                 _ => {}
             }

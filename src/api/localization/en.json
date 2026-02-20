@@ -688,7 +688,7 @@
   "FailedToLoadCustomFiltersFromApi": "Failed to load custom filters from API",
   "FailedToLoadQualityProfilesFromApi": "Failed to load quality profiles from API",
   "FailedToLoadSeriesFromApi": "Failed to load series from API",
-  "FailedToLoadPir9": "Failed to load {appName}",
+  "FailedToLoad": "Failed to load {appName}",
   "FailedToLoadSystemStatusFromApi": "Failed to load system status from API",
   "FailedToLoadTagsFromApi": "Failed to load tags from API",
   "FailedToLoadTranslationsFromApi": "Failed to load translations from API",

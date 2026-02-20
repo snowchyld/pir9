@@ -1,4 +1,4 @@
-//! Command-line argument parsing for Pir9
+//! Command-line argument parsing for pir9
 //!
 //! Supports different run modes for distributed deployments:
 //! - `all`: Full application (web server + scheduler + local scanning) - default
@@ -7,7 +7,7 @@
 
 use clap::{Parser, ValueEnum};
 
-/// Pir9 - Smart PVR for TV and anime
+/// pir9 - Smart PVR for TV and anime
 #[derive(Parser, Debug)]
 #[command(name = "pir9")]
 #[command(author, version, about, long_about = None)]
@@ -72,16 +72,19 @@ impl Args {
     }
 
     /// Check if this mode requires Redis
+    #[allow(dead_code)]
     pub fn requires_redis(&self) -> bool {
         matches!(self.mode, RunMode::Server | RunMode::Worker)
     }
 
     /// Check if this mode should run the web server
+    #[allow(dead_code)]
     pub fn should_run_web_server(&self) -> bool {
         matches!(self.mode, RunMode::All | RunMode::Server)
     }
 
     /// Check if this mode should run the scheduler
+    #[allow(dead_code)]
     pub fn should_run_scheduler(&self) -> bool {
         matches!(self.mode, RunMode::All | RunMode::Server)
     }
@@ -92,6 +95,7 @@ impl Args {
     }
 
     /// Check if scanning should be done locally (vs distributed via Redis)
+    #[allow(dead_code)]
     pub fn should_scan_locally(&self) -> bool {
         matches!(self.mode, RunMode::All)
     }

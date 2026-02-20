@@ -27,6 +27,7 @@ pub struct RootFolderResource {
 /// Input for creating a root folder
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct CreateRootFolderRequest {
     #[serde(default)]
     pub id: Option<i32>,

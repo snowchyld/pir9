@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Profiles module
 //! Quality profiles, language profiles, and delay profiles
 
