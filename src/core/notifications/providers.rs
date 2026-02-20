@@ -780,6 +780,219 @@ impl NotificationProvider for TelegramProvider {
 }
 
 // ============================================================================
+// Pushover Provider
+// ============================================================================
+
+/// Pushover notification provider
+pub struct PushoverProvider {
+    api_key: String,
+    user_key: String,
+    priority: i32,
+    sound: Option<String>,
+    devices: Vec<String>,
+}
+
+impl PushoverProvider {
+    pub fn new(api_key: String, user_key: String) -> Self {
+        Self {
+            api_key,
+            user_key,
+            priority: 0,
+            sound: None,
+            devices: Vec::new(),
+        }
+    }
+
+    pub fn with_priority(mut self, priority: i32) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    pub fn with_sound(mut self, sound: Option<String>) -> Self {
+        self.sound = sound;
+        self
+    }
+
+    pub fn with_devices(mut self, devices: Vec<String>) -> Self {
+        self.devices = devices;
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl NotificationProvider for PushoverProvider {
+    fn name(&self) -> &str {
+        "Pushover"
+    }
+
+    fn implementation(&self) -> &str {
+        "Pushover"
+    }
+
+    fn config_contract(&self) -> &str {
+        "PushoverSettings"
+    }
+
+    fn info_link(&self) -> &str {
+        "https://wiki.servarr.com/sonarr/settings#connect"
+    }
+
+    async fn test(&self) -> Result<()> {
+        let client = reqwest::Client::new();
+        let resp = client
+            .post("https://api.pushover.net/1/users/validate.json")
+            .form(&[("token", &self.api_key), ("user", &self.user_key)])
+            .send()
+            .await
+            .context("Failed to connect to Pushover API")?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Pushover validation failed: {}", body);
+        }
+
+        let json: serde_json::Value =
+            serde_json::from_str(&resp.text().await.unwrap_or_default()).unwrap_or_default();
+
+        if json["status"].as_i64() != Some(1) {
+            let errors = json["errors"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_else(|| "unknown error".to_string());
+            anyhow::bail!("Pushover validation failed: {}", errors);
+        }
+
+        Ok(())
+    }
+
+    async fn send(&self, payload: &NotificationPayload) -> Result<()> {
+        let client = reqwest::Client::new();
+        let series = payload.series_title.as_deref().unwrap_or("Unknown");
+
+        let title = match &payload.event_type {
+            NotificationEventType::Grab => format!("Episode Grabbed - {}", series),
+            NotificationEventType::Download => {
+                format!("Episode Downloaded - {}", series)
+            }
+            NotificationEventType::Rename => format!("Episode Renamed - {}", series),
+            _ => payload.title.clone(),
+        };
+
+        let message = if let Some(ref ep_info) = payload.episode_info {
+            let ep_title = ep_info.title.as_deref().unwrap_or("");
+            format!(
+                "{} - S{:02}E{:02} - {}",
+                series, ep_info.season_number, ep_info.episode_number, ep_title
+            )
+        } else {
+            payload.message.clone()
+        };
+
+        let mut form = vec![
+            ("token", self.api_key.clone()),
+            ("user", self.user_key.clone()),
+            ("title", title),
+            ("message", message),
+            ("priority", self.priority.to_string()),
+            ("html", "1".to_string()),
+        ];
+
+        if let Some(ref sound) = self.sound {
+            form.push(("sound", sound.clone()));
+        }
+
+        if !self.devices.is_empty() {
+            form.push(("device", self.devices.join(",")));
+        }
+
+        // Emergency priority requires retry and expire
+        if self.priority == 2 {
+            form.push(("retry", "60".to_string()));
+            form.push(("expire", "3600".to_string()));
+        }
+
+        let resp = client
+            .post("https://api.pushover.net/1/messages.json")
+            .form(&form)
+            .send()
+            .await
+            .context("Failed to send Pushover notification")?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Pushover send failed: {}", body);
+        }
+
+        Ok(())
+    }
+
+    fn get_fields(&self) -> Vec<NotificationField> {
+        vec![
+            NotificationField {
+                order: 0,
+                name: "apiKey".to_string(),
+                label: "API Key".to_string(),
+                value: Some(serde_json::Value::String(self.api_key.clone())),
+                field_type: "textbox".to_string(),
+                advanced: false,
+                help_text: Some("Pushover application API token".to_string()),
+                help_link: None,
+                privacy: "apiKey".to_string(),
+                is_float: false,
+            },
+            NotificationField {
+                order: 1,
+                name: "userKey".to_string(),
+                label: "User Key".to_string(),
+                value: Some(serde_json::Value::String(self.user_key.clone())),
+                field_type: "textbox".to_string(),
+                advanced: false,
+                help_text: Some("Pushover user or group key".to_string()),
+                help_link: None,
+                privacy: "apiKey".to_string(),
+                is_float: false,
+            },
+            NotificationField {
+                order: 2,
+                name: "priority".to_string(),
+                label: "Priority".to_string(),
+                value: Some(serde_json::Value::Number(self.priority.into())),
+                field_type: "select".to_string(),
+                advanced: false,
+                help_text: Some(
+                    "Priority: -2=lowest, -1=low, 0=normal, 1=high, 2=emergency".to_string(),
+                ),
+                help_link: None,
+                privacy: "normal".to_string(),
+                is_float: false,
+            },
+            NotificationField {
+                order: 3,
+                name: "sound".to_string(),
+                label: "Sound".to_string(),
+                value: self
+                    .sound
+                    .as_ref()
+                    .map(|s| serde_json::Value::String(s.clone())),
+                field_type: "textbox".to_string(),
+                advanced: true,
+                help_text: Some(
+                    "Notification sound (e.g. pushover, bike, cosmic, none)".to_string(),
+                ),
+                help_link: None,
+                privacy: "normal".to_string(),
+                is_float: false,
+            },
+        ]
+    }
+}
+
+// ============================================================================
 // Provider Factory
 // ============================================================================
 
@@ -852,6 +1065,35 @@ pub fn create_provider_from_model(
                 TelegramProvider::new(bot_token, chat_id).with_silent(send_silently),
             ))
         }
+        "Pushover" => {
+            let api_key = settings["apiKey"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Pushover API key is required"))?
+                .to_string();
+
+            let user_key = settings["userKey"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Pushover user key is required"))?
+                .to_string();
+
+            let priority = settings["priority"].as_i64().unwrap_or(0) as i32;
+            let sound = settings["sound"].as_str().map(String::from);
+            let devices: Vec<String> = settings["devices"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            Ok(Arc::new(
+                PushoverProvider::new(api_key, user_key)
+                    .with_priority(priority)
+                    .with_sound(sound)
+                    .with_devices(devices),
+            ))
+        }
         _ => Err(anyhow!(
             "Unknown notification implementation: {}",
             model.implementation
@@ -889,6 +1131,13 @@ pub fn get_provider_schemas() -> Vec<ProviderSchema> {
             config_contract: "TelegramSettings".to_string(),
             info_link: "https://wiki.servarr.com/sonarr/settings#connect".to_string(),
             fields: TelegramProvider::new(String::new(), String::new()).get_fields(),
+        },
+        ProviderSchema {
+            implementation: "Pushover".to_string(),
+            implementation_name: "Pushover".to_string(),
+            config_contract: "PushoverSettings".to_string(),
+            info_link: "https://wiki.servarr.com/sonarr/settings#connect".to_string(),
+            fields: PushoverProvider::new(String::new(), String::new()).get_fields(),
         },
     ]
 }
