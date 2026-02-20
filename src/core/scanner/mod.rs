@@ -34,9 +34,18 @@ pub const VIDEO_EXTENSIONS: &[&str] = &[
 /// Scan a directory recursively for video files
 ///
 /// Returns a list of all video files found in the directory tree.
-pub fn scan_directory_for_videos(dir: &Path) -> Vec<PathBuf> {
+pub fn scan_directory_for_videos(path: &Path) -> Vec<PathBuf> {
+    // Handle single-file paths (e.g., qBittorrent content_path for single-file torrents)
+    if path.is_file() {
+        return if is_video_file(path) {
+            vec![path.to_path_buf()]
+        } else {
+            vec![]
+        };
+    }
+
     let mut files = Vec::new();
-    scan_directory_recursive(dir, &mut files);
+    scan_directory_recursive(path, &mut files);
     files
 }
 
