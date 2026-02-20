@@ -1,7 +1,7 @@
 # pir9 Mental Model
 
 > Living document — updated as the codebase evolves.
-> **Version**: 0.31.1 | **Last updated**: 2026-02-16
+> **Version**: 0.32.0 | **Last updated**: 2026-02-16
 
 ## 1. What Is pir9?
 

@@ -10,10 +10,12 @@ import {
   type SeriesSortKey,
   searchQuery,
   seriesFilter,
+  seriesNetworkFilter,
   seriesSortDirection,
   seriesSortKey,
   seriesViewMode,
   setSeriesFilter,
+  setSeriesNetworkFilter,
   setSeriesSort,
   setSeriesViewMode,
   showError,
@@ -22,15 +24,9 @@ import {
   type ViewMode,
 } from '../../stores/app.store';
 
-interface NetworkGroup {
-  network: string;
-  series: Series[];
-}
-
 @customElement('series-index-page')
 export class SeriesIndexPage extends BaseComponent {
   private seriesQuery = useSeriesQuery();
-  private collapsedNetworks = new Set<string>();
 
   protected onInit(): void {
     this.watch(this.seriesQuery.data);
@@ -40,6 +36,7 @@ export class SeriesIndexPage extends BaseComponent {
     this.watch(seriesSortKey);
     this.watch(seriesSortDirection);
     this.watch(seriesFilter);
+    this.watch(seriesNetworkFilter);
     this.watch(searchQuery);
   }
 
@@ -51,7 +48,17 @@ export class SeriesIndexPage extends BaseComponent {
     const sortKey = seriesSortKey.value;
     const sortDir = seriesSortDirection.value;
     const filter = seriesFilter.value;
+    const networkFilter = seriesNetworkFilter.value;
     const search = searchQuery.value.toLowerCase();
+
+    // Collect unique networks (before filtering, so dropdown is always complete)
+    const networks = [...new Set(series.map((s) => s.network || 'Unknown Network'))].sort(
+      (a, b) => {
+        if (a === 'Unknown Network') return 1;
+        if (b === 'Unknown Network') return -1;
+        return a.localeCompare(b);
+      },
+    );
 
     // Filter and sort series
     let filtered = series;
@@ -79,6 +86,11 @@ export class SeriesIndexPage extends BaseComponent {
             return true;
         }
       });
+    }
+
+    // Apply network filter
+    if (networkFilter !== 'all') {
+      filtered = filtered.filter((s) => (s.network || 'Unknown Network') === networkFilter);
     }
 
     // Sort
@@ -114,6 +126,15 @@ export class SeriesIndexPage extends BaseComponent {
               <option value="unmonitored">Unmonitored</option>
               <option value="continuing">Continuing</option>
               <option value="ended">Ended</option>
+            </select>
+
+            <!-- Network filter dropdown -->
+            <select
+              class="filter-select"
+              onchange="this.closest('series-index-page').handleNetworkFilterChange(event)"
+            >
+              <option value="all" ${networkFilter === 'all' ? 'selected' : ''}>All Networks</option>
+              ${networks.map((n) => html`<option value="${escapeHtml(n)}" ${networkFilter === n ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('')}
             </select>
 
             <!-- Sort dropdown -->
@@ -755,56 +776,6 @@ export class SeriesIndexPage extends BaseComponent {
           margin-top: 2px;
         }
 
-        /* Network grouping */
-        .network-group {
-          display: flex;
-          flex-direction: column;
-          gap: 0.75rem;
-        }
-
-        .network-header {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          padding: 0.625rem 1rem;
-          background: var(--bg-card);
-          border: 1px solid var(--border-glass);
-          border-radius: 0.625rem;
-          cursor: pointer;
-          color: var(--text-color);
-          font-size: 0.9375rem;
-          font-weight: 600;
-          width: 100%;
-          text-align: left;
-          transition: all var(--transition-fast) var(--ease-out-expo);
-        }
-
-        .network-header:hover {
-          background: var(--bg-input-hover);
-          border-color: rgba(93, 156, 236, 0.3);
-        }
-
-        .chevron {
-          flex-shrink: 0;
-          transition: transform var(--transition-normal) var(--ease-spring);
-        }
-
-        .chevron.open {
-          transform: rotate(90deg);
-        }
-
-        .network-name {
-          flex: 1;
-        }
-
-        .network-count {
-          padding: 0.125rem 0.5rem;
-          font-size: 0.75rem;
-          font-weight: 500;
-          border-radius: 9999px;
-          background: var(--bg-progress);
-          color: var(--text-color-muted);
-        }
       </style>
     `;
   }
@@ -856,64 +827,10 @@ export class SeriesIndexPage extends BaseComponent {
       return this.renderEmpty();
     }
 
-    const groups = this.groupByNetwork(series);
-
-    if (groups.length <= 1) {
-      // Single group or no grouping — render flat
-      if (viewMode === 'table') {
-        return this.renderTable(series);
-      }
-      return this.renderGrid(series);
+    if (viewMode === 'table') {
+      return this.renderTable(series);
     }
-
-    return groups
-      .map((group) => {
-        const collapsed = this.collapsedNetworks.has(group.network);
-        return html`
-          <div class="network-group">
-            <button
-              class="network-header"
-              onclick="this.closest('series-index-page').handleToggleNetwork('${escapeHtml(group.network)}')"
-            >
-              <svg class="chevron ${collapsed ? '' : 'open'}" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="9 18 15 12 9 6"></polyline>
-              </svg>
-              <span class="network-name">${escapeHtml(group.network)}</span>
-              <span class="network-count">${group.series.length}</span>
-            </button>
-            ${
-              collapsed
-                ? ''
-                : viewMode === 'table'
-                  ? this.renderTable(group.series)
-                  : this.renderGrid(group.series)
-            }
-          </div>
-        `;
-      })
-      .join('');
-  }
-
-  private groupByNetwork(series: Series[]): NetworkGroup[] {
-    const groups = new Map<string, Series[]>();
-
-    for (const s of series) {
-      const network = s.network || 'Unknown Network';
-      const list = groups.get(network);
-      if (list) {
-        list.push(s);
-      } else {
-        groups.set(network, [s]);
-      }
-    }
-
-    return [...groups.entries()]
-      .sort(([a], [b]) => {
-        if (a === 'Unknown Network') return 1;
-        if (b === 'Unknown Network') return -1;
-        return a.localeCompare(b);
-      })
-      .map(([network, items]) => ({ network, series: items }));
+    return this.renderGrid(series);
   }
 
   private renderEmpty(): string {
@@ -1080,6 +997,11 @@ export class SeriesIndexPage extends BaseComponent {
     setSeriesFilter(select.value);
   }
 
+  handleNetworkFilterChange(event: Event): void {
+    const select = event.target as HTMLSelectElement;
+    setSeriesNetworkFilter(select.value);
+  }
+
   handleSortChange(event: Event): void {
     const select = event.target as HTMLSelectElement;
     setSeriesSort(select.value as SeriesSortKey);
@@ -1115,15 +1037,6 @@ export class SeriesIndexPage extends BaseComponent {
 
   handleAddSeries(): void {
     navigate('/add/new');
-  }
-
-  handleToggleNetwork(network: string): void {
-    if (this.collapsedNetworks.has(network)) {
-      this.collapsedNetworks.delete(network);
-    } else {
-      this.collapsedNetworks.add(network);
-    }
-    this.requestUpdate();
   }
 
   async handleRefreshAll(): Promise<void> {

@@ -101,6 +101,15 @@ export function setSeriesFilter(filter: string): void {
 }
 
 /**
+ * Series network filter — persisted so it survives navigation
+ */
+export const seriesNetworkFilter = persistedSignal<string>('series-network-filter', 'all');
+
+export function setSeriesNetworkFilter(network: string): void {
+  seriesNetworkFilter.set(network);
+}
+
+/**
  * Movie view mode
  */
 export const movieViewMode = persistedSignal<ViewMode>('movie-view-mode', 'posters');
