@@ -123,6 +123,22 @@ export class SeriesDetailPage extends BaseComponent {
     },
   });
 
+  private rescanSeasonMutation = createMutation({
+    mutationFn: (params: { seriesId: number; seasonNumber: number }) =>
+      http.post('/command', { name: 'RescanSeries', seriesId: params.seriesId, seasonNumber: params.seasonNumber }),
+    onSuccess: () => {
+      const id = this.seriesId.value;
+      if (id) {
+        invalidateQueries(['/series', id]);
+        invalidateQueries(['/episode', id]);
+      }
+      showSuccess('Season disk scan started');
+    },
+    onError: () => {
+      showError('Failed to start season disk scan');
+    },
+  });
+
   setSeriesId(id: number): void {
     this.seriesId.set(id);
     // Create the queries with the correct ID
@@ -588,6 +604,28 @@ export class SeriesDetailPage extends BaseComponent {
           color: var(--text-color-muted);
         }
 
+        .season-rescan-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: none;
+          border: none;
+          color: var(--text-color-muted);
+          cursor: pointer;
+          padding: 0.25rem;
+          border-radius: 0.25rem;
+          opacity: 0;
+          transition: opacity 0.15s, color 0.15s;
+        }
+
+        .season-header:hover .season-rescan-btn {
+          opacity: 1;
+        }
+
+        .season-rescan-btn:hover {
+          color: var(--color-primary);
+        }
+
         .season-progress {
           width: 100px;
           height: 6px;
@@ -856,6 +894,15 @@ export class SeriesDetailPage extends BaseComponent {
               <div class="season-progress-fill" style="width: ${season.statistics.percentOfEpisodes}%"></div>
             </div>
           </div>
+          <button
+            class="season-rescan-btn"
+            onclick="event.stopPropagation(); this.closest('series-detail-page').rescanSeason(${season.seasonNumber})"
+            title="Rescan ${seasonLabel} files on disk"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"></path>
+            </svg>
+          </button>
         </div>
 
         ${
@@ -1039,6 +1086,12 @@ export class SeriesDetailPage extends BaseComponent {
     const episodeIds = episodes.filter((e) => e.seasonNumber === seasonNumber).map((e) => e.id);
     if (episodeIds.length === 0) return;
     this.monitorMutation.mutate({ episodeIds, monitored });
+  }
+
+  rescanSeason(seasonNumber: number): void {
+    const id = this.seriesId.value;
+    if (!id) return;
+    this.rescanSeasonMutation.mutate({ seriesId: id, seasonNumber });
   }
 
   searchEpisode(episodeId: number): void {

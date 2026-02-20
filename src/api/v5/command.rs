@@ -337,7 +337,14 @@ pub async fn execute_command_with_options(
             .await
         }
         "RescanSeries" => {
-            execute_rescan_series(body, db, event_bus, options.hybrid_event_bus.as_ref()).await
+            execute_rescan_series(
+                body,
+                db,
+                event_bus,
+                options.hybrid_event_bus.as_ref(),
+                options.media_config.as_ref(),
+            )
+            .await
         }
         "DownloadedEpisodesScan" | "ProcessMonitoredDownloads" => {
             execute_process_downloads(
@@ -881,7 +888,7 @@ async fn execute_refresh_series(
             "name": "RescanSeries",
             "seriesIds": series_ids,
         });
-        if let Err(e) = execute_rescan_series(&rescan_body, db, event_bus, hybrid_event_bus).await {
+        if let Err(e) = execute_rescan_series(&rescan_body, db, event_bus, hybrid_event_bus, None).await {
             tracing::warn!("RefreshSeries: rescan failed: {}", e);
         }
     }
@@ -1159,11 +1166,14 @@ async fn execute_refresh_movies(
 ///
 /// If `hybrid_event_bus` is provided (distributed mode), publishes scan requests
 /// to workers instead of scanning locally.
+///
+/// Supports optional `seasonNumber` parameter to scope the scan to a single season folder.
 async fn execute_rescan_series(
     body: &serde_json::Value,
     db: &crate::core::datastore::Database,
     event_bus: &crate::core::messaging::EventBus,
     hybrid_event_bus: Option<&crate::core::messaging::HybridEventBus>,
+    media_config: Option<&crate::core::configuration::MediaConfig>,
 ) -> Result<String, String> {
     use crate::core::datastore::models::EpisodeFileDbModel;
     use crate::core::datastore::repositories::{
@@ -1171,6 +1181,13 @@ async fn execute_rescan_series(
     };
     use chrono::Utc;
     use std::path::Path;
+
+    // Parse optional seasonNumber — when provided, only that season's folder is scanned
+    let season_number: Option<i32> = body
+        .get("seasonNumber")
+        .or_else(|| body.get("body").and_then(|b| b.get("seasonNumber")))
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32);
 
     // Parse series IDs from body - handle both singular seriesId and plural seriesIds
     let mut series_ids: Vec<i64> = body
@@ -1212,15 +1229,31 @@ async fn execute_rescan_series(
     // Only fall back to local scanning when no Redis/workers are configured.
     if let Some(hybrid_bus) = hybrid_event_bus {
         if hybrid_bus.is_redis_enabled() {
-            let _ = execute_rescan_series_distributed(&series_ids, db, hybrid_bus).await;
+            let _ = execute_rescan_series_distributed(
+                &series_ids,
+                db,
+                hybrid_bus,
+                season_number,
+                media_config,
+            )
+            .await;
+            let scope = match season_number {
+                Some(n) => format!(" (season {})", n),
+                None => String::new(),
+            };
             return Ok(format!(
-                "Dispatched {} series to workers for scanning",
-                series_ids.len()
+                "Dispatched {} series to workers for scanning{}",
+                series_ids.len(),
+                scope
             ));
         }
     }
 
-    tracing::info!("RescanSeries: scanning {} series locally", series_ids.len());
+    tracing::info!(
+        "RescanSeries: scanning {} series locally{}",
+        series_ids.len(),
+        season_number.map_or(String::new(), |n| format!(" (season {})", n))
+    );
 
     let series_repo = SeriesRepository::new(db.clone());
     let episode_repo = EpisodeRepository::new(db.clone());
@@ -1236,25 +1269,42 @@ async fn execute_rescan_series(
             _ => continue,
         };
 
-        let series_path = Path::new(&series.path);
-        if !series_path.exists() {
+        // When seasonNumber is provided, scope scan to that season's folder
+        let scan_path = if let Some(sn) = season_number {
+            let default_config = crate::core::configuration::MediaConfig::default();
+            let config = media_config.unwrap_or(&default_config);
+            let season_folder = crate::core::naming::build_season_folder(config, sn);
+            Path::new(&series.path).join(&season_folder)
+        } else {
+            Path::new(&series.path).to_path_buf()
+        };
+
+        if !scan_path.exists() {
             tracing::info!(
                 "RescanSeries: path does not exist for {}: {}",
                 series.title,
-                series.path
+                scan_path.display()
             );
             continue;
         }
 
-        // Get episodes for this series
-        let episodes = match episode_repo.get_by_series_id(*series_id).await {
+        // Get episodes for this series, optionally filtered to the target season
+        let all_episodes = match episode_repo.get_by_series_id(*series_id).await {
             Ok(eps) => eps,
             Err(_) => continue,
+        };
+        let episodes = if let Some(sn) = season_number {
+            all_episodes
+                .into_iter()
+                .filter(|e| e.season_number == sn)
+                .collect()
+        } else {
+            all_episodes
         };
 
         // Scan for video files
         let mut video_files = Vec::new();
-        scan_directory_for_videos(series_path, &mut video_files);
+        scan_directory_for_videos(&scan_path, &mut video_files);
         total_files += video_files.len();
 
         // Match files to episodes (supports multi-episode files like S01E01E02E03)
@@ -1423,10 +1473,14 @@ async fn execute_rescan_series(
 }
 
 /// Execute RescanSeries in distributed mode - publishes scan requests to workers
+///
+/// When `season_number` is provided, scopes the scan path and known_files to that season.
 async fn execute_rescan_series_distributed(
     series_ids: &[i64],
     db: &crate::core::datastore::Database,
     hybrid_event_bus: &crate::core::messaging::HybridEventBus,
+    season_number: Option<i32>,
+    media_config: Option<&crate::core::configuration::MediaConfig>,
 ) -> Result<String, String> {
     use crate::core::datastore::repositories::{EpisodeFileRepository, SeriesRepository};
     use crate::core::messaging::KnownFileInfo;
@@ -1434,12 +1488,20 @@ async fn execute_rescan_series_distributed(
     use std::collections::HashMap;
 
     tracing::info!(
-        "RescanSeries: distributing scan for {} series to workers",
-        series_ids.len()
+        "RescanSeries: distributing scan for {} series to workers{}",
+        series_ids.len(),
+        season_number.map_or(String::new(), |n| format!(" (season {})", n))
     );
 
     let series_repo = SeriesRepository::new(db.clone());
     let episode_file_repo = EpisodeFileRepository::new(db.clone());
+
+    // Precompute season folder name if scoping to a single season
+    let season_folder = season_number.map(|sn| {
+        let default_config = crate::core::configuration::MediaConfig::default();
+        let config = media_config.unwrap_or(&default_config);
+        crate::core::naming::build_season_folder(config, sn)
+    });
 
     // Collect series paths for the scan request, keeping series_ids and paths aligned
     let mut valid_series_ids = Vec::new();
@@ -1450,13 +1512,34 @@ async fn execute_rescan_series_distributed(
         match series_repo.get_by_id(*series_id).await {
             Ok(Some(series)) => {
                 valid_series_ids.push(series.id);
-                paths.push(series.path.clone());
-                tracing::debug!("Adding path for scan: {} ({})", series.title, series.path);
+
+                // Scope path to season folder when season_number is provided
+                let scan_path = if let Some(ref folder) = season_folder {
+                    format!("{}/{}", series.path, folder)
+                } else {
+                    series.path.clone()
+                };
+                paths.push(scan_path);
+                tracing::debug!(
+                    "Adding path for scan: {} ({}{})",
+                    series.title,
+                    series.path,
+                    season_folder
+                        .as_ref()
+                        .map_or(String::new(), |f| format!("/{}", f))
+                );
 
                 // Query existing episode files for this series to build known_files map
+                // When scanning a single season, only include that season's files
                 if let Ok(files) = episode_file_repo.get_by_series_id(series.id).await {
                     for f in files {
                         if f.file_hash.is_some() {
+                            // Skip files from other seasons when scoping
+                            if let Some(sn) = season_number {
+                                if f.season_number != sn {
+                                    continue;
+                                }
+                            }
                             known_files.insert(
                                 f.path.clone(),
                                 KnownFileInfo {
