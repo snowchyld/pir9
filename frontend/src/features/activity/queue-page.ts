@@ -266,6 +266,7 @@ export class QueuePage extends BaseComponent {
         .status-icon.paused { color: var(--color-warning); }
         .status-icon.queued { color: var(--text-color-muted); }
         .status-icon.completed { color: var(--color-success, #2ecc71); }
+        .status-icon.stalled { color: var(--color-warning); }
         .status-icon.error { color: var(--color-danger); }
 
         /* Progress */
@@ -287,9 +288,23 @@ export class QueuePage extends BaseComponent {
           transition: width 0.3s ease;
         }
 
+        .progress-fill.stalled {
+          background-color: var(--color-warning);
+        }
+
         .progress-text {
           font-size: 0.75rem;
           color: var(--text-color-muted);
+        }
+
+        .peer-info {
+          font-size: 0.6875rem;
+          color: var(--text-color-muted);
+          margin-top: 0.125rem;
+        }
+
+        .peer-info.stalled {
+          color: var(--color-danger);
         }
 
         /* Protocol badge */
@@ -501,6 +516,7 @@ export class QueuePage extends BaseComponent {
   }
 
   private isImportable(item: QueueItem): boolean {
+    if (item.status === 'stalled') return false;
     return item.status === 'completed' || item.trackedDownloadState === 'importPending';
   }
 
@@ -549,11 +565,12 @@ export class QueuePage extends BaseComponent {
         </td>
         <td class="progress-cell">
           <div class="progress-bar">
-            <div class="progress-fill" style="width: ${progress}%"></div>
+            <div class="progress-fill ${item.status === 'stalled' ? 'stalled' : ''}" style="width: ${progress}%"></div>
           </div>
           <div class="progress-text">
             ${this.formatSize(item.size - item.sizeleft)} / ${this.formatSize(item.size)}
           </div>
+          ${safeHtml(this.renderPeerInfo(item))}
         </td>
         <td>${item.timeleft ?? '-'}</td>
         <td>
@@ -614,11 +631,12 @@ export class QueuePage extends BaseComponent {
       case 'status': {
         const priority: Record<string, number> = {
           downloading: 0,
-          queued: 1,
-          paused: 2,
-          completed: 3,
-          warning: 4,
-          error: 5,
+          stalled: 1,
+          queued: 2,
+          paused: 3,
+          completed: 4,
+          warning: 5,
+          error: 6,
         };
         return priority[item.status.toLowerCase()] ?? 99;
       }
@@ -670,10 +688,23 @@ export class QueuePage extends BaseComponent {
         '<svg class="status-icon queued" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
       completed:
         '<svg class="status-icon completed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="9 12 12 15 16 10"></polyline></svg>',
+      stalled:
+        '<svg class="status-icon stalled" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>',
       error:
         '<svg class="status-icon error" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
     };
     return icons[status.toLowerCase()] ?? icons.queued;
+  }
+
+  private renderPeerInfo(item: QueueItem): string {
+    if (item.seeds == null && item.leechers == null) return '';
+    const seeds = item.seeds ?? 0;
+    const leechers = item.leechers ?? 0;
+    const isStalled = item.status === 'stalled' || (seeds === 0 && leechers === 0);
+    const cls = isStalled ? 'peer-info stalled' : 'peer-info';
+    const seedLabel = seeds === 1 ? 'seed' : 'seeds';
+    const leechLabel = leechers === 1 ? 'leecher' : 'leechers';
+    return `<div class="${cls}">${seeds} ${seedLabel} · ${leechers} ${leechLabel}</div>`;
   }
 
   private truncate(text: string, max: number): string {

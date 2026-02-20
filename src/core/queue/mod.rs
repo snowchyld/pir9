@@ -74,6 +74,14 @@ pub struct QueueItem {
     pub estimated_completion_time: Option<DateTime<Utc>>,
     pub added: DateTime<Utc>,
     pub quality: crate::core::profiles::qualities::QualityModel,
+    /// Connected seeds (peers sending data to us)
+    pub seeds: Option<i32>,
+    /// Connected leechers (peers we're sending data to)
+    pub leechers: Option<i32>,
+    /// Total seeds available in the swarm
+    pub seed_count: Option<i32>,
+    /// Total leechers in the swarm
+    pub leech_count: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

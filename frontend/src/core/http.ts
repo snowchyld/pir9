@@ -402,6 +402,10 @@ export interface QueueItem {
   size: number;
   sizeleft: number;
   timeleft?: string;
+  seeds?: number;
+  leechers?: number;
+  seedCount?: number;
+  leechCount?: number;
   estimatedCompletionTime?: string;
   added?: string;
   quality?: { quality: { id: number; name: string; source?: string; resolution?: number } };

@@ -169,6 +169,14 @@ pub struct DownloadStatus {
     pub error_message: Option<String>,
     pub output_path: Option<String>,
     pub category: Option<String>,
+    /// Connected seeds (peers sending data to us)
+    pub seeds: Option<i32>,
+    /// Connected leechers (peers we're sending data to)
+    pub leechers: Option<i32>,
+    /// Total seeds available in the swarm
+    pub seed_count: Option<i32>,
+    /// Total leechers in the swarm
+    pub leech_count: Option<i32>,
 }
 
 /// Download state
@@ -178,6 +186,7 @@ pub enum DownloadState {
     Queued,
     Paused,
     Downloading,
+    Stalled,
     Seeding,
     Completed,
     Failed,
@@ -398,6 +407,14 @@ struct QBTorrentInfo {
     content_path: Option<String>,
     #[serde(default)]
     amount_left: i64,
+    #[serde(default)]
+    num_seeds: i64,
+    #[serde(default)]
+    num_leechs: i64,
+    #[serde(default)]
+    num_complete: i64,
+    #[serde(default)]
+    num_incomplete: i64,
 }
 
 impl QBTorrentInfo {
@@ -409,14 +426,15 @@ impl QBTorrentInfo {
             }
             "downloading" | "forcedDL" | "metaDL" | "allocating" => DownloadState::Downloading,
             "uploading" | "forcedUP" | "stalledUP" => DownloadState::Seeding,
-            "stalledDL" => DownloadState::Downloading,
+            "stalledDL" => DownloadState::Stalled,
             "error" | "missingFiles" => DownloadState::Failed,
             "moving" => DownloadState::Downloading,
             _ => DownloadState::Queued,
         };
 
-        // Check if completed (progress >= 1.0 or amount_left == 0)
-        let state = if self.progress >= 1.0 || (self.amount_left == 0 && self.size > 0) {
+        // Check if completed — guard with size > 0 to prevent 0-byte torrents
+        // (metadata not yet fetched) from being marked as completed
+        let state = if self.size > 0 && (self.progress >= 1.0 || self.amount_left == 0) {
             if state == DownloadState::Paused {
                 DownloadState::Paused
             } else {
@@ -443,6 +461,10 @@ impl QBTorrentInfo {
             error_message: None,
             output_path: self.content_path.clone().or_else(|| self.save_path.clone()),
             category: self.category.clone(),
+            seeds: Some(self.num_seeds as i32),
+            leechers: Some(self.num_leechs as i32),
+            seed_count: Some(self.num_complete as i32),
+            leech_count: Some(self.num_incomplete as i32),
         }
     }
 }
@@ -809,6 +831,10 @@ impl SABSlot {
             error_message: None,
             output_path: self.storage.clone(),
             category: self.cat.clone(),
+            seeds: None,
+            leechers: None,
+            seed_count: None,
+            leech_count: None,
         }
     }
 }
@@ -989,6 +1015,10 @@ impl DownloadClient for SabnzbdClient {
                                     .map(|s| s.to_string()),
                                 output_path: storage.map(|s| s.to_string()),
                                 category: cat.map(|s| s.to_string()),
+                                seeds: None,
+                                leechers: None,
+                                seed_count: None,
+                                leech_count: None,
                             });
                         }
                     }
@@ -1179,6 +1209,10 @@ impl NzbgetGroup {
             } else {
                 Some(self.Category.clone())
             },
+            seeds: None,
+            leechers: None,
+            seed_count: None,
+            leech_count: None,
         }
     }
 }
@@ -1233,6 +1267,10 @@ impl NzbgetHistoryItem {
             } else {
                 Some(self.Category.clone())
             },
+            seeds: None,
+            leechers: None,
+            seed_count: None,
+            leech_count: None,
         }
     }
 }
@@ -1586,6 +1624,10 @@ impl TransmissionClient {
             error_message,
             output_path: torrent["downloadDir"].as_str().map(String::from),
             category: None,
+            seeds: torrent["peersSendingToUs"].as_i64().map(|v| v as i32),
+            leechers: torrent["peersGettingFromUs"].as_i64().map(|v| v as i32),
+            seed_count: None,
+            leech_count: None,
         }
     }
 }
@@ -1674,7 +1716,8 @@ impl DownloadClient for TransmissionClient {
                         "percentDone", "leftUntilDone", "sizeWhenDone",
                         "rateDownload", "rateUpload", "eta",
                         "error", "errorString", "downloadDir",
-                        "isFinished", "addedDate", "doneDate"
+                        "isFinished", "addedDate", "doneDate",
+                        "peersSendingToUs", "peersGettingFromUs"
                     ]
                 }),
             )
@@ -1699,7 +1742,8 @@ impl DownloadClient for TransmissionClient {
                         "percentDone", "leftUntilDone", "sizeWhenDone",
                         "rateDownload", "rateUpload", "eta",
                         "error", "errorString", "downloadDir",
-                        "isFinished"
+                        "isFinished",
+                        "peersSendingToUs", "peersGettingFromUs"
                     ]
                 }),
             )
@@ -1930,6 +1974,10 @@ impl DelugeClient {
             error_message,
             output_path: torrent["save_path"].as_str().map(String::from),
             category: torrent["label"].as_str().map(String::from),
+            seeds: None,
+            leechers: None,
+            seed_count: None,
+            leech_count: None,
         }
     }
 }

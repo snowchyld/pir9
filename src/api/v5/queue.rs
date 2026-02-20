@@ -89,6 +89,14 @@ pub struct QueueResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub movie_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub seeds: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leechers: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed_count: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leech_count: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub episode: Option<QueueEpisodeResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub series: Option<QueueSeriesResource>,
@@ -287,6 +295,14 @@ fn queue_item_to_resource(item: &crate::core::queue::QueueItem) -> QueueResource
         QueueStatus::Unknown => "unknown",
     };
 
+    // Override status to "stalled" when the download is stalled (Warning from a Stalled state)
+    // We detect this by checking if it's a warning with active seed/leech data showing 0 seeds
+    let status = if status == "warning" && item.seeds == Some(0) && item.leechers == Some(0) {
+        "stalled"
+    } else {
+        status
+    };
+
     let tracked_state = match item.tracked_download_state {
         TrackedDownloadState::Downloading => "downloading",
         TrackedDownloadState::ImportBlocked => "importBlocked",
@@ -373,6 +389,10 @@ fn queue_item_to_resource(item: &crate::core::queue::QueueItem) -> QueueResource
         } else {
             None
         },
+        seeds: item.seeds,
+        leechers: item.leechers,
+        seed_count: item.seed_count,
+        leech_count: item.leech_count,
         episode: None,
         series: None,
         movie: None,
@@ -471,6 +491,7 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                 DownloadState::Queued => "queued",
                                 DownloadState::Paused => "paused",
                                 DownloadState::Downloading => "downloading",
+                                DownloadState::Stalled => "stalled",
                                 DownloadState::Seeding => "seeding",
                                 DownloadState::Completed => "completed",
                                 DownloadState::Failed => "failed",
@@ -480,6 +501,7 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                             let tracked_state = match dl.status {
                                 DownloadState::Queued => "importPending",
                                 DownloadState::Downloading => "downloading",
+                                DownloadState::Stalled => "downloading",
                                 DownloadState::Paused => "paused",
                                 DownloadState::Seeding => "importPending",
                                 DownloadState::Completed => "importPending",
@@ -763,6 +785,10 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                 episode_has_file: episode_has_file_val,
                                 content_type: content_type.to_string(),
                                 movie_id: None,
+                                seeds: dl.seeds,
+                                leechers: dl.leechers,
+                                seed_count: dl.seed_count,
+                                leech_count: dl.leech_count,
                                 episode: parsed_episode,
                                 series: parsed_series,
                                 movie: None,

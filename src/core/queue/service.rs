@@ -277,6 +277,7 @@ impl TrackedDownloadService {
                         DownloadState::Queued => QueueStatus::Queued,
                         DownloadState::Paused => QueueStatus::Paused,
                         DownloadState::Downloading => QueueStatus::Downloading,
+                        DownloadState::Stalled => QueueStatus::Warning,
                         DownloadState::Seeding => QueueStatus::Completed,
                         DownloadState::Completed => QueueStatus::Completed,
                         DownloadState::Failed => QueueStatus::Failed,
@@ -286,6 +287,7 @@ impl TrackedDownloadService {
                     let tracked_state = match live.status {
                         DownloadState::Queued => TrackedDownloadState::Downloading,
                         DownloadState::Downloading => TrackedDownloadState::Downloading,
+                        DownloadState::Stalled => TrackedDownloadState::Downloading,
                         DownloadState::Paused => TrackedDownloadState::Downloading,
                         DownloadState::Seeding => TrackedDownloadState::ImportPending,
                         DownloadState::Completed => TrackedDownloadState::ImportPending,
@@ -389,6 +391,13 @@ impl TrackedDownloadService {
                 .cloned()
                 .unwrap_or_else(|| "Unknown".to_string());
 
+            // Extract peer data from live status
+            let (seeds, leechers, seed_count, leech_count) = if let Some(live) = live_status {
+                (live.seeds, live.leechers, live.seed_count, live.leech_count)
+            } else {
+                (None, None, None, None)
+            };
+
             queue_items.push(QueueItem {
                 id: td.id,
                 series_id: td.series_id,
@@ -414,6 +423,10 @@ impl TrackedDownloadService {
                 estimated_completion_time: estimated_completion,
                 added: td.added,
                 quality,
+                seeds,
+                leechers,
+                seed_count,
+                leech_count,
             });
         }
 
