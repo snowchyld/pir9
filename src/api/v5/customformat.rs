@@ -96,7 +96,195 @@ pub async fn delete_custom_format(
 }
 
 pub async fn get_custom_format_schema() -> Json<Vec<serde_json::Value>> {
-    Json(vec![])
+    // Return the available condition types for custom format specifications
+    // These match Sonarr's custom format schema definitions
+    Json(vec![
+        serde_json::json!({
+            "name": "ReleaseTitleSpecification",
+            "implementation": "ReleaseTitleSpecification",
+            "implementationName": "Release Title",
+            "infoLink": "https://wiki.servarr.com/sonarr/settings#custom-formats",
+            "negate": false,
+            "required": false,
+            "fields": [{
+                "order": 0,
+                "name": "value",
+                "label": "Regular Expression",
+                "type": "textbox",
+                "advanced": false,
+                "helpText": "Custom format made when this regex matches the release title",
+            }]
+        }),
+        serde_json::json!({
+            "name": "QualityModifierSpecification",
+            "implementation": "QualityModifierSpecification",
+            "implementationName": "Quality Modifier",
+            "infoLink": "https://wiki.servarr.com/sonarr/settings#custom-formats",
+            "negate": false,
+            "required": false,
+            "fields": [{
+                "order": 0,
+                "name": "value",
+                "label": "Quality Modifier",
+                "type": "select",
+                "advanced": false,
+                "selectOptions": [
+                    {"value": 0, "name": "None"},
+                    {"value": 1, "name": "Regional"},
+                    {"value": 2, "name": "Screener"},
+                    {"value": 3, "name": "RAWHD"},
+                    {"value": 4, "name": "BRDISK"},
+                    {"value": 5, "name": "REMUX"}
+                ]
+            }]
+        }),
+        serde_json::json!({
+            "name": "SizeSpecification",
+            "implementation": "SizeSpecification",
+            "implementationName": "Size",
+            "infoLink": "https://wiki.servarr.com/sonarr/settings#custom-formats",
+            "negate": false,
+            "required": false,
+            "fields": [
+                {"order": 0, "name": "min", "label": "Minimum Size (MB)", "type": "number", "advanced": false},
+                {"order": 1, "name": "max", "label": "Maximum Size (MB)", "type": "number", "advanced": false}
+            ]
+        }),
+        serde_json::json!({
+            "name": "LanguageSpecification",
+            "implementation": "LanguageSpecification",
+            "implementationName": "Language",
+            "infoLink": "https://wiki.servarr.com/sonarr/settings#custom-formats",
+            "negate": false,
+            "required": false,
+            "fields": [{
+                "order": 0,
+                "name": "value",
+                "label": "Language",
+                "type": "select",
+                "advanced": false,
+                "selectOptions": [
+                    {"value": 1, "name": "English"},
+                    {"value": 2, "name": "French"},
+                    {"value": 3, "name": "Spanish"},
+                    {"value": 4, "name": "German"},
+                    {"value": 5, "name": "Italian"},
+                    {"value": 6, "name": "Danish"},
+                    {"value": 7, "name": "Dutch"},
+                    {"value": 8, "name": "Japanese"},
+                    {"value": 9, "name": "Icelandic"},
+                    {"value": 10, "name": "Chinese"},
+                    {"value": 11, "name": "Russian"},
+                    {"value": 12, "name": "Polish"},
+                    {"value": 13, "name": "Vietnamese"},
+                    {"value": 14, "name": "Swedish"},
+                    {"value": 15, "name": "Norwegian"},
+                    {"value": 16, "name": "Finnish"},
+                    {"value": 17, "name": "Turkish"},
+                    {"value": 18, "name": "Portuguese"},
+                    {"value": 19, "name": "Flemish"},
+                    {"value": 20, "name": "Greek"},
+                    {"value": 21, "name": "Korean"},
+                    {"value": 22, "name": "Hungarian"},
+                    {"value": 23, "name": "Hebrew"},
+                    {"value": 24, "name": "Lithuanian"},
+                    {"value": 25, "name": "Czech"},
+                    {"value": 26, "name": "Hindi"},
+                    {"value": 27, "name": "Romanian"},
+                    {"value": 28, "name": "Thai"},
+                    {"value": 29, "name": "Bulgarian"}
+                ]
+            }]
+        }),
+        serde_json::json!({
+            "name": "IndexerFlagSpecification",
+            "implementation": "IndexerFlagSpecification",
+            "implementationName": "Indexer Flag",
+            "infoLink": "https://wiki.servarr.com/sonarr/settings#custom-formats",
+            "negate": false,
+            "required": false,
+            "fields": [{
+                "order": 0,
+                "name": "value",
+                "label": "Flag",
+                "type": "select",
+                "advanced": false,
+                "selectOptions": [
+                    {"value": 1, "name": "Freeleech"},
+                    {"value": 2, "name": "Halfleech"},
+                    {"value": 4, "name": "DoubleUpload"},
+                    {"value": 8, "name": "Internal"},
+                    {"value": 16, "name": "Scene"},
+                    {"value": 32, "name": "Freeleech75"},
+                    {"value": 64, "name": "Freeleech25"}
+                ]
+            }]
+        }),
+        serde_json::json!({
+            "name": "SourceSpecification",
+            "implementation": "SourceSpecification",
+            "implementationName": "Source",
+            "infoLink": "https://wiki.servarr.com/sonarr/settings#custom-formats",
+            "negate": false,
+            "required": false,
+            "fields": [{
+                "order": 0,
+                "name": "value",
+                "label": "Source",
+                "type": "select",
+                "advanced": false,
+                "selectOptions": [
+                    {"value": 1, "name": "Television"},
+                    {"value": 2, "name": "TelevisionRaw"},
+                    {"value": 3, "name": "Web"},
+                    {"value": 4, "name": "WebRip"},
+                    {"value": 5, "name": "DVD"},
+                    {"value": 6, "name": "Bluray"},
+                    {"value": 7, "name": "BlurayRaw"}
+                ]
+            }]
+        }),
+        serde_json::json!({
+            "name": "ResolutionSpecification",
+            "implementation": "ResolutionSpecification",
+            "implementationName": "Resolution",
+            "infoLink": "https://wiki.servarr.com/sonarr/settings#custom-formats",
+            "negate": false,
+            "required": false,
+            "fields": [{
+                "order": 0,
+                "name": "value",
+                "label": "Resolution",
+                "type": "select",
+                "advanced": false,
+                "selectOptions": [
+                    {"value": 360, "name": "360p"},
+                    {"value": 480, "name": "480p"},
+                    {"value": 540, "name": "540p"},
+                    {"value": 576, "name": "576p"},
+                    {"value": 720, "name": "720p"},
+                    {"value": 1080, "name": "1080p"},
+                    {"value": 2160, "name": "2160p"}
+                ]
+            }]
+        }),
+        serde_json::json!({
+            "name": "ReleaseGroupSpecification",
+            "implementation": "ReleaseGroupSpecification",
+            "implementationName": "Release Group",
+            "infoLink": "https://wiki.servarr.com/sonarr/settings#custom-formats",
+            "negate": false,
+            "required": false,
+            "fields": [{
+                "order": 0,
+                "name": "value",
+                "label": "Regular Expression",
+                "type": "textbox",
+                "advanced": false,
+                "helpText": "Custom format made when release group matches regex",
+            }]
+        }),
+    ])
 }
 
 fn db_to_resource(model: &CustomFormatDbModel) -> CustomFormatResource {

@@ -236,11 +236,61 @@ async fn get_logs(Query(_params): Query<LogQuery>) -> Json<Vec<LogEntry>> {
 }
 
 async fn get_update_info() -> Json<UpdateInfo> {
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+
+    // Check GitHub releases for a newer version
+    let latest_version = check_latest_release().await;
+    let update_available = latest_version
+        .as_ref()
+        .map(|latest| is_newer_version(&current_version, latest))
+        .unwrap_or(false);
+
     Json(UpdateInfo {
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        version: latest_version.unwrap_or_else(|| current_version.clone()),
         branch: "main".to_string(),
-        update_available: false,
+        update_available,
     })
+}
+
+/// Check GitHub releases for the latest version
+async fn check_latest_release() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .user_agent("pir9")
+        .build()
+        .ok()?;
+
+    let resp = client
+        .get("https://api.github.com/repos/pir9/pir9/releases/latest")
+        .header("Accept", "application/vnd.github.v3+json")
+        .send()
+        .await
+        .ok()?;
+
+    if !resp.status().is_success() {
+        return None;
+    }
+
+    let json: serde_json::Value = resp.json().await.ok()?;
+    let tag = json["tag_name"].as_str()?;
+    // Strip leading 'v' if present
+    Some(tag.trim_start_matches('v').to_string())
+}
+
+/// Compare semver strings: true if `latest` is newer than `current`
+fn is_newer_version(current: &str, latest: &str) -> bool {
+    let parse = |v: &str| -> (u32, u32, u32) {
+        let parts: Vec<u32> = v.split('.').filter_map(|s| s.parse().ok()).collect();
+        (
+            parts.first().copied().unwrap_or(0),
+            parts.get(1).copied().unwrap_or(0),
+            parts.get(2).copied().unwrap_or(0),
+        )
+    };
+
+    let c = parse(current);
+    let l = parse(latest);
+    l > c
 }
 
 async fn trigger_update() -> Json<UpdateActionResponse> {

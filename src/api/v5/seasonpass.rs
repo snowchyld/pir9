@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::web::AppState;
+use sqlx;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,7 +37,35 @@ pub struct MonitoringOptionsResource {
     pub monitor: Option<String>,
 }
 
-pub async fn update_season_pass(Json(_body): Json<SeasonPassResource>) -> Json<serde_json::Value> {
+pub async fn update_season_pass(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(body): Json<SeasonPassResource>,
+) -> Json<serde_json::Value> {
+    let pool = state.db.pool();
+
+    for series_entry in &body.series {
+        // Update series monitored status if specified
+        if let Some(monitored) = series_entry.monitored {
+            let _ = sqlx::query("UPDATE series SET monitored = $1 WHERE id = $2")
+                .bind(monitored)
+                .bind(series_entry.id as i64)
+                .execute(pool)
+                .await;
+        }
+
+        // Update individual season monitoring
+        for season in &series_entry.seasons {
+            let _ = sqlx::query(
+                "UPDATE episodes SET monitored = $1 WHERE series_id = $2 AND season_number = $3",
+            )
+            .bind(season.monitored)
+            .bind(series_entry.id as i64)
+            .bind(season.season_number)
+            .execute(pool)
+            .await;
+        }
+    }
+
     Json(serde_json::json!({}))
 }
 
