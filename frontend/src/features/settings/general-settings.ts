@@ -18,6 +18,7 @@ interface HostConfig {
   sslCertPath: string;
   sslCertPassword: string;
   launchBrowser: boolean;
+  apiKey: string;
 }
 
 @customElement('general-settings')
@@ -118,15 +119,12 @@ export class GeneralSettings extends BaseComponent {
           <div class="api-key-group">
             <input
               type="text"
-              class="form-input"
-              value="••••••••••••••••••••••••••••••••"
+              class="form-input api-key-input"
+              value="${escapeHtml(host?.apiKey ?? '')}"
               readonly
             />
             <button class="copy-btn" onclick="this.closest('general-settings').handleCopyApiKey()">
               Copy
-            </button>
-            <button class="regenerate-btn" onclick="this.closest('general-settings').handleRegenerateApiKey()">
-              Regenerate
             </button>
           </div>
         </div>
@@ -380,16 +378,11 @@ export class GeneralSettings extends BaseComponent {
   }
 
   handleCopyApiKey(): void {
-    showSuccess('API key copied to clipboard');
-  }
-
-  handleRegenerateApiKey(): void {
-    if (
-      confirm(
-        'Are you sure you want to regenerate the API key? All existing applications will need to be updated.',
-      )
-    ) {
-      showSuccess('API key regenerated');
+    const apiKey = this.hostQuery.data.value?.apiKey;
+    if (apiKey) {
+      navigator.clipboard.writeText(apiKey).then(() => {
+        showSuccess('API key copied to clipboard');
+      });
     }
   }
 }
