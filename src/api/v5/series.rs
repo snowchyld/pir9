@@ -155,6 +155,34 @@ async fn enrich_series_response(
         }).collect();
     }
 
+    // Compute next/previous airing from episodes
+    let now = chrono::Utc::now();
+    if let Ok(row) = sqlx::query(
+        r#"
+        SELECT
+            MIN(CASE WHEN air_date_utc > $2 THEN air_date_utc END) as next_airing,
+            MAX(CASE WHEN air_date_utc <= $2 THEN air_date_utc END) as previous_airing
+        FROM episodes
+        WHERE series_id = $1 AND air_date_utc IS NOT NULL
+        "#,
+    )
+    .bind(response.id)
+    .bind(now)
+    .fetch_one(pool)
+    .await
+    {
+        response.next_airing = row
+            .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("next_airing")
+            .ok()
+            .flatten()
+            .map(|dt| dt.to_rfc3339());
+        response.previous_airing = row
+            .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("previous_airing")
+            .ok()
+            .flatten()
+            .map(|dt| dt.to_rfc3339());
+    }
+
     // Update statistics
     let percent = if total_episodes > 0 {
         (total_episode_files as f64 / total_episodes as f64) * 100.0

@@ -94,10 +94,17 @@ export class SeriesIndexPage extends BaseComponent {
     }
 
     // Sort
+    const isDateSort = sortKey === 'nextAiring' || sortKey === 'previousAiring';
     filtered = [...filtered].sort((a, b) => {
       let comparison = 0;
       const aVal = this.getSortValue(a, sortKey);
       const bVal = this.getSortValue(b, sortKey);
+
+      // Push missing date values to the bottom regardless of direction
+      if (isDateSort) {
+        if (aVal === '' && bVal !== '') return 1;
+        if (aVal !== '' && bVal === '') return -1;
+      }
 
       if (aVal < bVal) comparison = -1;
       if (aVal > bVal) comparison = 1;
@@ -776,6 +783,12 @@ export class SeriesIndexPage extends BaseComponent {
           margin-top: 2px;
         }
 
+        .airing-date {
+          white-space: nowrap;
+          font-size: 0.8125rem;
+          color: var(--text-color-muted);
+        }
+
       </style>
     `;
   }
@@ -901,6 +914,12 @@ export class SeriesIndexPage extends BaseComponent {
             <th class="sortable ${sortKey === 'status' ? 'sorted' : ''}" onclick="this.closest('series-index-page').handleHeaderSort('status')">
               Status ${sortKey === 'status' ? safeHtml(sortIcon) : ''}
             </th>
+            <th class="sortable ${sortKey === 'nextAiring' ? 'sorted' : ''}" onclick="this.closest('series-index-page').handleHeaderSort('nextAiring')">
+              Next Airing ${sortKey === 'nextAiring' ? safeHtml(sortIcon) : ''}
+            </th>
+            <th class="sortable ${sortKey === 'previousAiring' ? 'sorted' : ''}" onclick="this.closest('series-index-page').handleHeaderSort('previousAiring')">
+              Prev Airing ${sortKey === 'previousAiring' ? safeHtml(sortIcon) : ''}
+            </th>
             <th class="sortable ${sortKey === 'year' ? 'sorted' : ''}" onclick="this.closest('series-index-page').handleHeaderSort('year')">
               Year ${sortKey === 'year' ? safeHtml(sortIcon) : ''}
             </th>
@@ -940,6 +959,8 @@ export class SeriesIndexPage extends BaseComponent {
             ${this.getStatusLabel(series.status)}
           </span>
         </td>
+        <td class="airing-date">${this.formatAiringDate(series.nextAiring)}</td>
+        <td class="airing-date">${this.formatAiringDate(series.previousAiring)}</td>
         <td>${series.year > 0 ? series.year : '-'}</td>
         <td>${stats?.seasonCount ?? 0}</td>
         <td class="episode-progress">
@@ -950,6 +971,24 @@ export class SeriesIndexPage extends BaseComponent {
         </td>
       </tr>
     `;
+  }
+
+  private formatAiringDate(dateStr?: string): string {
+    if (!dateStr) return '-';
+    const date = new Date(dateStr);
+    if (Number.isNaN(date.getTime())) return '-';
+    const now = new Date();
+    const diffMs = date.getTime() - now.getTime();
+    const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+    // Show relative for near-future/past, absolute for far dates
+    if (diffDays === 0) return 'Today';
+    if (diffDays === 1) return 'Tomorrow';
+    if (diffDays === -1) return 'Yesterday';
+    if (diffDays > 1 && diffDays <= 7) return `in ${diffDays} days`;
+    if (diffDays < -1 && diffDays >= -7) return `${Math.abs(diffDays)} days ago`;
+
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   }
 
   private getStatusLabel(status: string): string {
