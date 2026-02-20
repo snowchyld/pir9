@@ -72,7 +72,8 @@ impl MovieService {
         Ok(movie)
     }
 
-    /// Refresh movie information from metadata source (Radarr public proxy)
+    /// Refresh movie information from metadata sources.
+    /// Uses IMDB service first for core metadata, then TMDB/Radarr cascade for images.
     pub async fn refresh_movie(&self, movie_id: i64, _force: bool) -> Result<()> {
         let mut movie = self
             .movie_repo
@@ -82,33 +83,16 @@ impl MovieService {
 
         info!("Refreshing movie: {}", movie.title);
 
-        // Fetch updated metadata from Radarr public proxy (requires IMDB ID)
         if let Some(ref imdb_id) = movie.imdb_id {
-            if let Some(metadata) =
-                crate::api::v5::movies::fetch_radarr_full_metadata(imdb_id).await
+            // Step 1: Fetch images via TMDB → Radarr cascade
+            if let Some((tmdb_id, images)) =
+                crate::api::v5::movies::fetch_movie_images_and_tmdb_id(imdb_id).await
             {
-                // Update fields only if the proxy returned non-empty values
-                if let Some(overview) = metadata.overview {
-                    if !overview.is_empty() {
-                        movie.overview = Some(overview);
-                    }
+                if tmdb_id > 0 && movie.tmdb_id == 0 {
+                    movie.tmdb_id = tmdb_id;
                 }
-                if let Some(year) = metadata.year {
-                    if year > 0 {
-                        movie.year = year;
-                    }
-                }
-                if let Some(runtime) = metadata.runtime {
-                    if runtime > 0 {
-                        movie.runtime = runtime;
-                    }
-                }
-                if metadata.tmdb_id > 0 && movie.tmdb_id == 0 {
-                    movie.tmdb_id = metadata.tmdb_id;
-                }
-                if !metadata.images.is_empty() {
-                    movie.images = metadata
-                        .images
+                if !images.is_empty() {
+                    movie.images = images
                         .into_iter()
                         .filter_map(|img| {
                             let cover_type = match img.cover_type.as_str() {
@@ -128,7 +112,7 @@ impl MovieService {
                 info!("Updated metadata for movie: {}", movie.title);
             } else {
                 warn!(
-                    "No metadata found for movie: {} (IMDB: {})",
+                    "No image metadata found for movie: {} (IMDB: {})",
                     movie.title, imdb_id
                 );
             }

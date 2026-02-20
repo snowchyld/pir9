@@ -376,4 +376,5 @@ pub struct TrackedDownloadDbModel {
     pub output_path: Option<String>,   // Download output path
     pub is_upgrade: bool,              // Whether this is an upgrade
     pub added: DateTime<Utc>,
+    pub movie_id: Option<i64>, // FK to movies (for movie downloads)
 }

@@ -273,6 +273,43 @@ export class SeriesEditDialog extends BaseComponent {
     this.updateField('path', newPath);
   }
 
+  async handleSave(): Promise<void> {
+    const series = this.series.value;
+    const data = this.formData.value;
+    if (!series || !data) return;
+
+    this.isSaving.set(true);
+    this.errors.set([]);
+
+    const pathChanged = data.path !== series.path;
+
+    try {
+      await http.put(
+        `/series`,
+        {
+          id: series.id,
+          monitored: data.monitored,
+          seasonFolder: data.seasonFolder,
+          qualityProfileId: data.qualityProfileId,
+          seriesType: data.seriesType,
+          path: data.path,
+        },
+        {
+          params: { moveFiles: pathChanged },
+        },
+      );
+
+      invalidateQueries(['/series']);
+      showSuccess('Series saved');
+      this.close();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to save series';
+      this.errors.set([message]);
+    } finally {
+      this.isSaving.set(false);
+    }
+  }
+
   handleDelete(): void {
     const series = this.series.value;
     if (!series) return;

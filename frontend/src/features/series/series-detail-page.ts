@@ -82,7 +82,7 @@ export class SeriesDetailPage extends BaseComponent {
     mutationFn: (params: { episodeIds: number[]; monitored: boolean }) =>
       http.put('/episode/monitor', params),
     onSuccess: () => {
-      invalidateQueries(['/episode']);
+      invalidateQueries(['/episode', '/series']);
       showSuccess('Episode monitoring updated');
     },
     onError: () => {
@@ -592,6 +592,13 @@ export class SeriesDetailPage extends BaseComponent {
           accent-color: var(--color-primary);
         }
 
+        .season-monitor {
+          width: 18px;
+          height: 18px;
+          accent-color: var(--color-primary);
+          cursor: pointer;
+        }
+
         .episode-number {
           width: 50px;
           font-weight: 500;
@@ -744,6 +751,13 @@ export class SeriesDetailPage extends BaseComponent {
           <svg class="expand-icon ${isExpanded ? 'expanded' : ''}" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="9 18 15 12 9 6"></polyline>
           </svg>
+          <input
+            type="checkbox"
+            class="season-monitor"
+            ${season.monitored ? 'checked' : ''}
+            onclick="event.stopPropagation(); this.closest('series-detail-page').toggleSeasonMonitor(${season.seasonNumber}, this.checked)"
+            title="${season.monitored ? 'Unmonitor season' : 'Monitor season'}"
+          />
           <span class="season-title">${seasonLabel}</span>
           <div class="season-stats">
             <span>${season.statistics.episodeFileCount}/${season.statistics.episodeCount}</span>
@@ -786,7 +800,7 @@ export class SeriesDetailPage extends BaseComponent {
           type="checkbox"
           class="episode-monitor"
           ${episode.monitored ? 'checked' : ''}
-          onclick="event.stopPropagation(); this.closest('series-detail-page').toggleMonitor(${episode.id}, !this.checked)"
+          onclick="event.stopPropagation(); this.closest('series-detail-page').toggleMonitor(${episode.id}, this.checked)"
           title="${episode.monitored ? 'Unmonitor' : 'Monitor'}"
         />
         <span class="episode-number">E${String(episode.episodeNumber).padStart(2, '0')}</span>
@@ -926,6 +940,14 @@ export class SeriesDetailPage extends BaseComponent {
 
   toggleMonitor(episodeId: number, monitored: boolean): void {
     this.monitorMutation.mutate({ episodeIds: [episodeId], monitored });
+  }
+
+  toggleSeasonMonitor(seasonNumber: number, monitored: boolean): void {
+    const episodes = this.episodesQuery?.data.value as Episode[] | undefined;
+    if (!episodes) return;
+    const episodeIds = episodes.filter((e) => e.seasonNumber === seasonNumber).map((e) => e.id);
+    if (episodeIds.length === 0) return;
+    this.monitorMutation.mutate({ episodeIds, monitored });
   }
 
   searchEpisode(episodeId: number): void {

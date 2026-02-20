@@ -106,7 +106,6 @@ impl ImdbClient {
         }
     }
 
-    #[allow(dead_code)] // API surface for future movie enrichment/refresh
     pub async fn get_movie(&self, imdb_id: &str) -> anyhow::Result<Option<ImdbMovie>> {
         if !self.config.enabled {
             return Ok(None);

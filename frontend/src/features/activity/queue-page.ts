@@ -7,6 +7,9 @@ import { http, type QueueItem, type QueueResponse } from '../../core/http';
 import { createMutation, invalidateQueries, useQueueQuery } from '../../core/query';
 import { navigate } from '../../router';
 import { showError, showSuccess } from '../../stores/app.store';
+import type { QueueMatchDialog } from './queue-match-dialog';
+
+import './queue-match-dialog';
 
 type QueueSortKey = 'status' | 'title' | 'episode' | 'protocol' | 'progress' | 'timeleft';
 
@@ -15,6 +18,7 @@ export class QueuePage extends BaseComponent {
   private queueQuery = useQueueQuery();
   private sortKey: QueueSortKey = 'timeleft';
   private sortDirection: 'asc' | 'desc' = 'asc';
+  private dialogOpen = false;
 
   private removeItemMutation = createMutation({
     mutationFn: (params: { id: number; removeFromClient?: boolean; blocklist?: boolean }) =>
@@ -54,6 +58,13 @@ export class QueuePage extends BaseComponent {
     this.watch(this.queueQuery.isError);
   }
 
+  // Suppress re-renders while the match dialog is open so the 5s poll
+  // doesn't destroy the dialog DOM via innerHTML replacement
+  requestUpdate(): void {
+    if (this.dialogOpen) return;
+    super.requestUpdate();
+  }
+
   protected template(): string {
     const response = this.queueQuery.data.value as QueueResponse | undefined;
     const items = response?.records ?? [];
@@ -89,6 +100,8 @@ export class QueuePage extends BaseComponent {
           ${!isLoading && !isError ? this.renderContent(items) : ''}
         </div>
       </div>
+
+      <queue-match-dialog></queue-match-dialog>
 
       <style>
         .queue-page {
@@ -417,11 +430,22 @@ export class QueuePage extends BaseComponent {
   private renderRow(item: QueueItem): string {
     const progress = item.size > 0 ? ((item.size - item.sizeleft) / item.size) * 100 : 0;
     const statusIcon = this.getStatusIcon(item.status);
-    const seriesTitle = item.series?.title ?? item.title;
-    const hasDbSeries = item.seriesId != null && item.seriesId > 0 && item.series?.titleSlug;
-    const episodeLabel = item.episode
-      ? `S${String(item.episode.seasonNumber).padStart(2, '0')}E${String(item.episode.episodeNumber).padStart(2, '0')}${item.episode.title ? ` - ${item.episode.title}` : ''}`
-      : '-';
+    const isMovie = item.contentType === 'movie' || (item.movieId != null && item.movieId > 0);
+    const displayTitle = isMovie
+      ? (item.movie?.title ?? item.title)
+      : (item.series?.title ?? item.title);
+    const hasDbLink = isMovie
+      ? item.movie?.titleSlug != null
+      : item.seriesId != null && item.seriesId > 0 && item.series?.titleSlug != null;
+    const linkPath = isMovie
+      ? `/movies/${item.movie?.titleSlug ?? ''}`
+      : `/series/${item.series?.titleSlug ?? ''}`;
+    const linkSlug = isMovie ? (item.movie?.titleSlug ?? '') : (item.series?.titleSlug ?? '');
+    const episodeLabel = isMovie
+      ? '-'
+      : item.episode
+        ? `S${String(item.episode.seasonNumber).padStart(2, '0')}E${String(item.episode.episodeNumber).padStart(2, '0')}${item.episode.title ? ` - ${item.episode.title}` : ''}`
+        : '-';
     const importable = this.isImportable(item);
 
     return html`
@@ -434,9 +458,9 @@ export class QueuePage extends BaseComponent {
         </td>
         <td class="title-cell">
           ${
-            hasDbSeries
-              ? `<a class="title-link" href="/series/${escapeHtml(item.series!.titleSlug)}" onclick="event.preventDefault(); this.closest('queue-page').handleSeriesClick('${escapeHtml(item.series!.titleSlug)}')" title="${escapeHtml(seriesTitle)}">${escapeHtml(this.truncate(seriesTitle, 32))}</a>`
-              : `<span title="${escapeHtml(seriesTitle)}">${escapeHtml(this.truncate(seriesTitle, 32))}</span>`
+            hasDbLink
+              ? `<a class="title-link" href="${escapeHtml(linkPath)}" onclick="event.preventDefault(); this.closest('queue-page').${isMovie ? 'handleMovieClick' : 'handleSeriesClick'}('${escapeHtml(linkSlug)}')" title="${escapeHtml(displayTitle)}">${escapeHtml(this.truncate(displayTitle, 32))}</a>`
+              : `<span title="${escapeHtml(displayTitle)}">${escapeHtml(this.truncate(displayTitle, 32))}</span>`
           }
         </td>
         <td class="episode-cell" title="${escapeHtml(episodeLabel)}">
@@ -457,6 +481,16 @@ export class QueuePage extends BaseComponent {
         <td>${item.timeleft ?? '-'}</td>
         <td>
           <div class="action-buttons">
+            <button
+              class="action-btn"
+              onclick="this.closest('queue-page').handleEditMatch(${item.id})"
+              title="Fix series/episode match"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+              </svg>
+            </button>
             ${
               importable
                 ? `<button
@@ -579,8 +613,13 @@ export class QueuePage extends BaseComponent {
     this.queueQuery.refetch();
   }
 
-  handleSeriesClick(titleSlug: string): void {
-    navigate(`/series/${titleSlug}`);
+  handleSeriesClick(slug: string): void {
+    // Navigate to the appropriate detail page — slug is already the full path segment
+    navigate(`/series/${slug}`);
+  }
+
+  handleMovieClick(slug: string): void {
+    navigate(`/movies/${slug}`);
   }
 
   handleImport(id: number): void {
@@ -590,6 +629,21 @@ export class QueuePage extends BaseComponent {
   handleRemove(id: number): void {
     if (confirm('Remove this item from the queue?')) {
       this.removeItemMutation.mutate({ id, removeFromClient: true });
+    }
+  }
+
+  handleEditMatch(id: number): void {
+    const response = this.queueQuery.data.value as QueueResponse | undefined;
+    const item = response?.records?.find((r) => r.id === id);
+    if (!item) return;
+
+    const dialog = this.querySelector('queue-match-dialog') as QueueMatchDialog | null;
+    if (dialog) {
+      this.dialogOpen = true;
+      dialog.open(item, () => {
+        this.dialogOpen = false;
+        this.requestUpdate();
+      });
     }
   }
 

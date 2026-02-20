@@ -187,6 +187,7 @@ impl TrackedDownloadService {
             output_path: None,
             is_upgrade,
             added: Utc::now(),
+            movie_id: None,
         };
 
         let id = repo.insert(&tracked).await?;
@@ -217,6 +218,7 @@ impl TrackedDownloadService {
         // Build client status map: (client_id, download_id) -> DownloadStatus
         let mut client_status_map = std::collections::HashMap::new();
         let mut client_name_map = std::collections::HashMap::new();
+        let mut polled_clients = std::collections::HashSet::new();
 
         for client_model in &clients {
             if !client_model.enable {
@@ -228,6 +230,7 @@ impl TrackedDownloadService {
             match create_client_from_model(client_model) {
                 Ok(client) => match client.get_downloads().await {
                     Ok(downloads) => {
+                        polled_clients.insert(client_model.id);
                         for dl in downloads {
                             client_status_map.insert((client_model.id, dl.id.clone()), dl);
                         }
@@ -255,6 +258,17 @@ impl TrackedDownloadService {
             // Get live status from download client
             let live_status =
                 client_status_map.get(&(td.download_client_id, td.download_id.clone()));
+
+            // If the client was successfully polled but the download is gone,
+            // clean up the stale tracked_download record
+            if live_status.is_none() && polled_clients.contains(&td.download_client_id) {
+                info!(
+                    "Cleaning up stale tracked download {}: '{}' no longer in download client",
+                    td.id, td.title
+                );
+                let _ = repo.delete(td.id).await;
+                continue;
+            }
 
             // Determine queue status and state
             let (queue_status, tracked_state, size_left, timeleft, estimated_completion) =
@@ -393,6 +407,7 @@ impl TrackedDownloadService {
                 indexer: td.indexer.unwrap_or_default(),
                 output_path: td.output_path,
                 episode_has_file,
+                movie_id: td.movie_id.unwrap_or(0),
                 size: td.size,
                 sizeleft: size_left,
                 timeleft,
@@ -450,19 +465,12 @@ impl TrackedDownloadService {
             let live_status = match client.get_download(&td.download_id).await {
                 Ok(Some(status)) => status,
                 Ok(None) => {
-                    // Download not found - might have been removed externally
-                    warn!(
-                        "Download {} not found in client {}",
-                        td.download_id, client_model.name
+                    // Download not found — removed from client, clean up DB record
+                    info!(
+                        "Download {} ('{}') no longer in client {}, removing tracked record",
+                        td.download_id, td.title, client_model.name
                     );
-                    // Mark as failed
-                    repo.update_status(
-                        td.id,
-                        TrackedDownloadState::Failed as i32,
-                        "[]",
-                        Some("Download not found in client"),
-                    )
-                    .await?;
+                    let _ = repo.delete(td.id).await;
                     continue;
                 }
                 Err(e) => {
@@ -588,9 +596,20 @@ impl TrackedDownloadService {
         // Create the download client
         let client = create_client_from_model(client_model)?;
 
-        // Prepare download options
+        // Read the category from client settings based on content type.
+        // Falls back to "category" (series) → "sonarr" if the specific field is missing.
+        let grab_category = serde_json::from_str::<serde_json::Value>(&client_model.settings)
+            .ok()
+            .and_then(|s| {
+                s.get("category").and_then(|v| v.as_str()).map(|cat| {
+                    // Use the first category if comma-separated (legacy format)
+                    cat.split(',').next().unwrap_or("sonarr").trim().to_string()
+                })
+            })
+            .unwrap_or_else(|| "sonarr".to_string());
+
         let options = DownloadOptions {
-            category: Some("sonarr".to_string()),
+            category: Some(grab_category),
             priority: None,
             download_dir: None,
             tags: vec![],
@@ -808,6 +827,7 @@ impl TrackedDownloadService {
                     output_path: dl.output_path.clone(),
                     is_upgrade: false,
                     added: Utc::now(),
+                    movie_id: None,
                 };
 
                 match repo.insert(&tracked).await {

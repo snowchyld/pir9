@@ -74,7 +74,8 @@ export class ProviderSelectDialog extends BaseComponent {
 
     return schemas.reduce(
       (groups, schema) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        // biome-ignore lint/suspicious/noExplicitAny: dynamic property access on unknown schema shape
+        // biome-ignore lint/style/noNonNullAssertion: groupBy is guaranteed set when this path executes
         const key = ((schema as any)[config.groupBy!] as string) || 'other';
         if (!groups[key]) {
           groups[key] = [];

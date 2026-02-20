@@ -123,6 +123,18 @@ pub trait DownloadClient: Send + Sync {
 
     /// Resume download
     async fn resume(&self, id: &str) -> Result<()>;
+
+    /// Get files in a download (supported by torrent clients, usenet clients return empty)
+    async fn get_files(&self, _id: &str) -> Result<Vec<DownloadFile>> {
+        Ok(vec![])
+    }
+}
+
+/// A file within a download (torrent piece or NZB segment)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadFile {
+    pub name: String,
+    pub size: i64,
 }
 
 /// Download protocol type
@@ -676,6 +688,22 @@ impl DownloadClient for QBittorrentClient {
         self.post_form("/api/v2/torrents/resume", &[("hashes", id)])
             .await?;
         Ok(())
+    }
+
+    async fn get_files(&self, id: &str) -> Result<Vec<DownloadFile>> {
+        self.login().await?;
+        let body = self
+            .get(&format!("/api/v2/torrents/files?hash={}", id))
+            .await?;
+        let files: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap_or_default();
+        Ok(files
+            .iter()
+            .map(|f| DownloadFile {
+                name: f["name"].as_str().unwrap_or("").to_string(),
+                size: f["size"].as_i64().unwrap_or(0),
+            })
+            .filter(|f| !f.name.is_empty())
+            .collect())
     }
 }
 
@@ -1725,6 +1753,36 @@ impl DownloadClient for TransmissionClient {
         self.rpc_call("torrent-start", serde_json::json!({ "ids": [id] }))
             .await?;
         Ok(())
+    }
+
+    async fn get_files(&self, id: &str) -> Result<Vec<DownloadFile>> {
+        let result = self
+            .rpc_call(
+                "torrent-get",
+                serde_json::json!({
+                    "ids": [id],
+                    "fields": ["files"]
+                }),
+            )
+            .await?;
+
+        let files = result["torrents"]
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|t| t["files"].as_array())
+            .map(|files| {
+                files
+                    .iter()
+                    .map(|f| DownloadFile {
+                        name: f["name"].as_str().unwrap_or("").to_string(),
+                        size: f["length"].as_i64().unwrap_or(0),
+                    })
+                    .filter(|f| !f.name.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(files)
     }
 }
 

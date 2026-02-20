@@ -8,6 +8,10 @@ import { createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
 import { navigate } from '../../router';
 import { showError, showInfo, showSuccess } from '../../stores/app.store';
+import './movie-edit-dialog';
+import './movie-match-dialog';
+import type { MovieEditDialog } from './movie-edit-dialog';
+import type { MovieMatchDialog } from './movie-match-dialog';
 
 @customElement('movie-detail-page')
 export class MovieDetailPage extends BaseComponent {
@@ -210,7 +214,29 @@ export class MovieDetailPage extends BaseComponent {
               <path d="M3 22v-6h6"></path>
               <path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
             </svg>
-            Refresh Metadata
+            Refresh
+          </button>
+          <button class="action-btn" onclick="this.closest('movie-detail-page').handleRescanFiles()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              <line x1="12" y1="11" x2="12" y2="17"></line>
+              <line x1="9" y1="14" x2="15" y2="14"></line>
+            </svg>
+            Rescan Files
+          </button>
+          <button class="action-btn" onclick="this.closest('movie-detail-page').handleFixMatch()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            Fix Match
+          </button>
+          <button class="action-btn" onclick="this.closest('movie-detail-page').handleEdit()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+            </svg>
+            Edit
           </button>
           <button class="action-btn danger" onclick="this.closest('movie-detail-page').handleDelete()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -221,6 +247,9 @@ export class MovieDetailPage extends BaseComponent {
           </button>
         </div>
       </div>
+
+      <movie-edit-dialog></movie-edit-dialog>
+      <movie-match-dialog></movie-match-dialog>
 
       ${this.styles()}
     `;
@@ -514,7 +543,6 @@ export class MovieDetailPage extends BaseComponent {
       await http.post('/command', { name: 'RefreshMovies', movieId: id });
       showInfo('Refreshing movie metadata from IMDB...');
 
-      // Refetch after a short delay to show updated data
       setTimeout(() => {
         this.movieQuery?.refetch();
         showSuccess('Movie metadata updated');
@@ -522,6 +550,39 @@ export class MovieDetailPage extends BaseComponent {
     } catch {
       showError('Failed to queue metadata refresh');
     }
+  }
+
+  async handleRescanFiles(): Promise<void> {
+    const id = this.movieId.value;
+    if (!id) return;
+
+    try {
+      await http.post('/command', { name: 'RescanMovie', movieId: id });
+      showInfo('Scanning for movie files...');
+
+      setTimeout(() => {
+        this.movieQuery?.refetch();
+        showSuccess('File scan complete');
+      }, 5000);
+    } catch {
+      showError('Failed to scan files');
+    }
+  }
+
+  handleFixMatch(): void {
+    const movie = this.movieQuery?.data.value;
+    if (!movie) return;
+
+    const dialog = this.querySelector('movie-match-dialog') as MovieMatchDialog | null;
+    dialog?.open(movie.id, movie.title, movie.imdbId ?? null);
+  }
+
+  handleEdit(): void {
+    const movie = this.movieQuery?.data.value;
+    if (!movie) return;
+
+    const dialog = this.querySelector('movie-edit-dialog') as MovieEditDialog | null;
+    dialog?.open(movie);
   }
 
   async handleDelete(): Promise<void> {

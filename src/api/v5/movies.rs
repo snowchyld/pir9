@@ -36,6 +36,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/{id}",
             get(get_movie).put(update_movie).delete(delete_movie),
         )
+        .route("/{id}/rematch", post(rematch_movie))
         .route("/lookup", get(lookup_movie))
         .route("/import", post(import_movies))
 }
@@ -129,13 +130,24 @@ async fn create_movie(
 
     let repo = MovieRepository::new(state.db.clone());
 
-    // Check if movie already exists by tmdbId
-    if let Some(_existing) = repo
-        .get_by_tmdb_id(options.tmdb_id)
-        .await
-        .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?
-    {
-        return Err(ApiError::Validation("Movie already exists".to_string()));
+    // Check if movie already exists by tmdbId or imdbId
+    if options.tmdb_id > 0 {
+        if let Some(_existing) = repo
+            .get_by_tmdb_id(options.tmdb_id)
+            .await
+            .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?
+        {
+            return Err(ApiError::Validation("Movie already exists".to_string()));
+        }
+    }
+    if let Some(ref imdb_id) = options.imdb_id {
+        if let Some(_existing) = repo
+            .get_by_imdb_id(imdb_id)
+            .await
+            .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?
+        {
+            return Err(ApiError::Validation("Movie already exists".to_string()));
+        }
     }
 
     let clean = clean_title(&options.title);
@@ -160,21 +172,29 @@ async fn create_movie(
     let genres_json = serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string());
     let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
 
-    // Use images from request; if empty, try to fetch from Radarr metadata API
-    let images = if options.images.is_empty() {
+    // Use images from request; if empty, fetch via TMDB → Radarr cascade
+    let (resolved_tmdb_id, images) = if options.images.is_empty() {
         if let Some(ref imdb_id) = options.imdb_id {
-            fetch_radarr_images(imdb_id).await
+            let result = fetch_movie_images_and_tmdb_id(imdb_id).await;
+            result.unwrap_or((0, vec![]))
         } else {
-            vec![]
+            (0, vec![])
         }
     } else {
-        options.images.clone()
+        (0, options.images.clone())
     };
     let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
 
+    // Use TMDB ID from request if provided, otherwise use resolved from image lookup
+    let tmdb_id = if options.tmdb_id > 0 {
+        options.tmdb_id
+    } else {
+        resolved_tmdb_id
+    };
+
     let db_movie = MovieDbModel {
         id: 0,
-        tmdb_id: options.tmdb_id,
+        tmdb_id,
         imdb_id: options.imdb_id.clone(),
         title: options.title.clone(),
         clean_title: clean,
@@ -312,6 +332,87 @@ async fn delete_movie(
     Ok(())
 }
 
+/// Re-match a movie to a different IMDB entry.
+/// Updates the IMDB ID, refreshes metadata from IMDB service, and re-fetches images.
+async fn rematch_movie(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(req): Json<RematchMovieRequest>,
+) -> Result<Json<MovieResponse>, ApiError> {
+    let repo = MovieRepository::new(state.db.clone());
+
+    let mut movie = repo
+        .get_by_id(id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch movie: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
+
+    tracing::info!(
+        "Rematching movie id={} '{}' -> imdb_id={}",
+        id,
+        movie.title,
+        req.imdb_id
+    );
+
+    // Update IMDB ID
+    movie.imdb_id = Some(req.imdb_id.clone());
+
+    // Enrich from IMDB service if available
+    if state.imdb_client.is_enabled() {
+        if let Ok(Some(imdb_movie)) = state.imdb_client.get_movie(&req.imdb_id).await {
+            movie.title = imdb_movie.title.clone();
+            movie.clean_title = clean_title(&imdb_movie.title);
+            movie.sort_title = movie.clean_title.clone();
+            movie.title_slug = generate_slug(&imdb_movie.title);
+            if let Some(year) = imdb_movie.year {
+                movie.year = year;
+            }
+            if let Some(runtime) = imdb_movie.runtime_minutes {
+                movie.runtime = runtime;
+            }
+            if !imdb_movie.genres.is_empty() {
+                movie.genres =
+                    serde_json::to_string(&imdb_movie.genres).unwrap_or_else(|_| "[]".to_string());
+            }
+            movie.imdb_rating = imdb_movie.rating.map(|r| r as f32);
+            movie.imdb_votes = imdb_movie.votes.map(|v| v as i32);
+        }
+    }
+
+    // Fetch images via TMDB → Radarr cascade
+    if let Some((tmdb_id, images)) = fetch_movie_images_and_tmdb_id(&req.imdb_id).await {
+        if tmdb_id > 0 {
+            movie.tmdb_id = tmdb_id;
+        }
+        if !images.is_empty() {
+            movie.images = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+        }
+    }
+
+    // Clear cached poster/fanart files so new images get fetched
+    let cache_dir = format!("cache/MediaCover/Movies/{}", id);
+    if std::path::Path::new(&cache_dir).exists() {
+        let _ = std::fs::remove_dir_all(&cache_dir);
+    }
+
+    movie.last_info_sync = Some(Utc::now());
+
+    repo.update(&movie)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to update movie: {}", e)))?;
+
+    tracing::info!(
+        "Rematched movie id={}: '{}' [{}]",
+        id,
+        movie.title,
+        req.imdb_id
+    );
+
+    let mut response = MovieResponse::from(movie);
+    enrich_movie_response(&mut response, &state.db).await;
+    Ok(Json(response))
+}
+
 /// Lookup movies from pir9-imdb service, enriched with Radarr metadata images
 async fn lookup_movie(
     State(state): State<Arc<AppState>>,
@@ -323,22 +424,22 @@ async fn lookup_movie(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to search movies: {}", e)))?;
 
-    // Fire Radarr metadata lookups in parallel for all results (same pattern as series Skyhook)
-    let radarr_futures: Vec<_> = results
+    // Fire image lookups in parallel: TMDB (if configured) → Radarr fallback
+    let image_futures: Vec<_> = results
         .iter()
         .map(|m| {
             let imdb_id = m.imdb_id.clone();
-            async move { fetch_radarr_metadata(&imdb_id).await }
+            async move { fetch_movie_images_and_tmdb_id(&imdb_id).await }
         })
         .collect();
 
-    let radarr_results = futures::future::join_all(radarr_futures).await;
+    let image_results = futures::future::join_all(image_futures).await;
 
     let lookup_results: Vec<MovieLookupResult> = results
         .into_iter()
-        .zip(radarr_results)
-        .map(|(m, radarr)| {
-            let (tmdb_id, images) = radarr.unwrap_or((0, vec![]));
+        .zip(image_results)
+        .map(|(m, img_result)| {
+            let (tmdb_id, images) = img_result.unwrap_or((0, vec![]));
 
             MovieLookupResult {
                 tmdb_id,
@@ -410,14 +511,18 @@ pub async fn fetch_radarr_metadata(imdb_id: &str) -> Option<(i64, Vec<MovieImage
         .ok()?;
 
     if !resp.status().is_success() {
-        tracing::warn!("Radarr API returned {} for {}", resp.status(), imdb_id);
+        tracing::debug!(
+            "Radarr API returned {} for {} (expected for many movies)",
+            resp.status(),
+            imdb_id
+        );
         return None;
     }
 
     let radarr_list: Vec<RadarrMovie> = match resp.json().await {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!("Failed to parse Radarr response for {}: {}", imdb_id, e);
+            tracing::debug!("Failed to parse Radarr response for {}: {}", imdb_id, e);
             return None;
         }
     };
@@ -425,7 +530,7 @@ pub async fn fetch_radarr_metadata(imdb_id: &str) -> Option<(i64, Vec<MovieImage
     let radarr = match radarr_list.into_iter().next() {
         Some(r) => r,
         None => {
-            tracing::warn!("Radarr returned empty array for {}", imdb_id);
+            tracing::debug!("Radarr returned empty array for {}", imdb_id);
             return None;
         }
     };
@@ -506,6 +611,88 @@ pub async fn fetch_radarr_images(imdb_id: &str) -> Vec<MovieImage> {
         .unwrap_or_default()
 }
 
+// ---- TMDB direct API ----
+
+#[derive(serde::Deserialize)]
+struct TmdbFindResponse {
+    movie_results: Vec<TmdbMovieResult>,
+}
+
+#[derive(serde::Deserialize)]
+struct TmdbMovieResult {
+    id: i64,
+    poster_path: Option<String>,
+    backdrop_path: Option<String>,
+}
+
+/// Fetch movie images and TMDB ID directly from TMDB's `/find/{imdb_id}` endpoint.
+/// Requires `PIR9_TMDB_API_KEY` environment variable. Returns None if key absent or API fails.
+async fn fetch_tmdb_movie_data(imdb_id: &str) -> Option<(i64, Vec<MovieImage>)> {
+    static TMDB_API_KEY: once_cell::sync::Lazy<Option<String>> =
+        once_cell::sync::Lazy::new(|| std::env::var("PIR9_TMDB_API_KEY").ok());
+
+    let api_key = TMDB_API_KEY.as_deref()?;
+
+    let url = format!(
+        "https://api.themoviedb.org/3/find/{}?api_key={}&external_source=imdb_id",
+        imdb_id, api_key
+    );
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(&url)
+        .header("User-Agent", format!("pir9/{}", env!("CARGO_PKG_VERSION")))
+        .send()
+        .await
+        .ok()?;
+
+    if !resp.status().is_success() {
+        tracing::debug!("TMDB API returned {} for {}", resp.status(), imdb_id);
+        return None;
+    }
+
+    let find: TmdbFindResponse = resp.json().await.ok()?;
+    let movie = find.movie_results.into_iter().next()?;
+
+    let mut images = Vec::new();
+    if let Some(ref poster) = movie.poster_path {
+        let url = format!("https://image.tmdb.org/t/p/w500{}", poster);
+        images.push(MovieImage {
+            cover_type: "poster".to_string(),
+            url: url.clone(),
+            remote_url: Some(url),
+        });
+    }
+    if let Some(ref backdrop) = movie.backdrop_path {
+        let url = format!("https://image.tmdb.org/t/p/w1280{}", backdrop);
+        images.push(MovieImage {
+            cover_type: "fanart".to_string(),
+            url: url.clone(),
+            remote_url: Some(url),
+        });
+    }
+
+    Some((movie.id, images))
+}
+
+/// Fetch movie images and TMDB ID using a cascading strategy:
+/// 1. TMDB direct API (if PIR9_TMDB_API_KEY configured) — most reliable
+/// 2. Radarr metadata proxy — fallback
+pub async fn fetch_movie_images_and_tmdb_id(imdb_id: &str) -> Option<(i64, Vec<MovieImage>)> {
+    // Try TMDB first
+    if let Some(result) = fetch_tmdb_movie_data(imdb_id).await {
+        tracing::debug!(
+            "TMDB lookup succeeded for {}: tmdb_id={}",
+            imdb_id,
+            result.0
+        );
+        return Some(result);
+    }
+
+    // Fall back to Radarr
+    fetch_radarr_metadata(imdb_id).await
+}
+
 fn clean_title(title: &str) -> String {
     title
         .to_lowercase()
@@ -530,6 +717,7 @@ fn generate_slug(title: &str) -> String {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateMovieRequest {
+    #[serde(default)]
     pub tmdb_id: i64,
     pub title: String,
     pub quality_profile_id: i64,
@@ -560,8 +748,10 @@ pub struct CreateMovieRequest {
 
 impl CreateMovieRequest {
     fn validate(&self) -> Result<(), ApiError> {
-        if self.tmdb_id <= 0 {
-            return Err(ApiError::Validation("tmdbId must be positive".to_string()));
+        if self.tmdb_id == 0 && self.imdb_id.is_none() {
+            return Err(ApiError::Validation(
+                "tmdbId or imdbId is required".to_string(),
+            ));
         }
         if self.title.is_empty() {
             return Err(ApiError::Validation("title is required".to_string()));
@@ -624,6 +814,12 @@ pub struct DeleteMovieQuery {
     pub delete_files: bool,
     #[serde(default)]
     pub add_import_list_exclusion: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RematchMovieRequest {
+    pub imdb_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -949,6 +1145,55 @@ async fn import_movies(
                     None,
                 ),
             }
+        } else if let Some(ref id) = imdb_id {
+            // IMDB ID already known — enrich from IMDB service first
+            if state.imdb_client.is_enabled() {
+                match state.imdb_client.get_movie(id).await {
+                    Ok(Some(m)) => {
+                        tracing::info!(
+                            "IMDB enrichment for {}: {} ({})",
+                            id,
+                            m.title,
+                            m.year.unwrap_or(0)
+                        );
+                        (
+                            Some(id.clone()),
+                            import_req.title.clone().unwrap_or(m.title),
+                            m.year.or(import_req.year).or(folder_year),
+                            import_req.overview.clone(),
+                            m.runtime_minutes.or(import_req.runtime),
+                            if m.genres.is_empty() {
+                                import_req.genres.clone().unwrap_or_default()
+                            } else {
+                                m.genres
+                            },
+                            m.rating.map(|r| r as f32),
+                            m.votes.map(|v| v as i32),
+                        )
+                    }
+                    _ => (
+                        imdb_id,
+                        lookup_title.clone(),
+                        import_req.year.or(folder_year),
+                        import_req.overview.clone(),
+                        import_req.runtime,
+                        import_req.genres.clone().unwrap_or_default(),
+                        None,
+                        None,
+                    ),
+                }
+            } else {
+                (
+                    imdb_id,
+                    lookup_title.clone(),
+                    import_req.year.or(folder_year),
+                    import_req.overview.clone(),
+                    import_req.runtime,
+                    import_req.genres.clone().unwrap_or_default(),
+                    None,
+                    None,
+                )
+            }
         } else {
             (
                 imdb_id,
@@ -992,14 +1237,16 @@ async fn import_movies(
         let tags_json = serde_json::to_string(&import_req.tags.unwrap_or_default())
             .unwrap_or_else(|_| "[]".to_string());
 
-        // Use images from request; if empty, try to fetch from Radarr metadata API
-        let images = match import_req.images {
-            Some(ref imgs) if !imgs.is_empty() => imgs.clone(),
+        // Use images from request; if empty, fetch via TMDB → Radarr cascade
+        let (import_tmdb_id, images) = match import_req.images {
+            Some(ref imgs) if !imgs.is_empty() => (0i64, imgs.clone()),
             _ => {
                 if let Some(ref id) = resolved_imdb_id {
-                    fetch_radarr_images(id).await
+                    fetch_movie_images_and_tmdb_id(id)
+                        .await
+                        .unwrap_or((0, vec![]))
                 } else {
-                    vec![]
+                    (0, vec![])
                 }
             }
         };
@@ -1007,8 +1254,8 @@ async fn import_movies(
 
         let db_movie = MovieDbModel {
             id: 0,
-            tmdb_id: 0,
-            imdb_id: resolved_imdb_id,
+            tmdb_id: import_tmdb_id,
+            imdb_id: resolved_imdb_id.clone(),
             title: title.clone(),
             clean_title: clean,
             sort_title: sort,
@@ -1037,63 +1284,92 @@ async fn import_movies(
             imdb_votes: resolved_votes,
         };
 
-        match repo.insert(&db_movie).await {
+        // Insert the movie, handling duplicate IMDB IDs gracefully.
+        // If the insert fails due to a unique constraint (race condition or re-import),
+        // recover by using the existing movie's ID.
+        let movie_id = match repo.insert(&db_movie).await {
             Ok(id) => {
                 tracing::info!("Imported movie: id={}, title={}", id, title);
-
-                // Scan folder for video file
-                if let Some(mut movie_file) = scan_movie_folder(&full_path, id) {
-                    let file_path = std::path::Path::new(&movie_file.path);
-
-                    // Real media analysis via FFmpeg probe
-                    let media_info_result = MediaAnalyzer::analyze(file_path).await;
-                    movie_file.media_info = media_info_result
-                        .as_ref()
-                        .ok()
-                        .and_then(|info| serde_json::to_string(info).ok());
-
-                    // Derive quality from actual resolution (not filename)
-                    if let Ok(ref info) = media_info_result {
-                        let quality = derive_quality_from_media(info, &movie_file.path);
-                        movie_file.quality = serde_json::to_string(&quality)
-                            .unwrap_or_else(|_| movie_file.quality.clone());
-                    }
-
-                    // BLAKE3 file hash
-                    movie_file.file_hash = compute_file_hash(file_path).await.ok();
-
-                    match file_repo.insert(&movie_file).await {
-                        Ok(file_id) => {
-                            // Update movie with file info
-                            let pool = state.db.pool();
-                            let _ = sqlx::query(
-                                "UPDATE movies SET has_file = true, movie_file_id = $1 WHERE id = $2"
-                            )
-                            .bind(file_id)
-                            .bind(id)
-                            .execute(pool)
-                            .await;
-                            tracing::info!(
-                                "Found video file for movie {}: {}",
-                                id,
-                                movie_file.path
-                            );
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to insert movie file for {}: {}", id, e);
-                        }
-                    }
-                }
-
-                if let Ok(Some(created)) = repo.get_by_id(id).await {
-                    let mut response = MovieResponse::from(created);
-                    enrich_movie_response(&mut response, &state.db).await;
-                    results.push(response);
-                }
+                id
             }
             Err(e) => {
-                tracing::error!("Failed to import movie {}: {}", title, e);
+                let err_str = e.to_string();
+                if err_str.contains("duplicate key") || err_str.contains("unique constraint") {
+                    // Movie already exists — find existing and use its ID
+                    if let Some(ref imdb) = resolved_imdb_id {
+                        if let Ok(Some(existing)) = repo.get_by_imdb_id(imdb).await {
+                            tracing::info!(
+                                "Movie already exists (id={}), using existing: {}",
+                                existing.id,
+                                title
+                            );
+                            existing.id
+                        } else {
+                            tracing::warn!(
+                                "Duplicate key but could not find existing movie: {}",
+                                title
+                            );
+                            continue;
+                        }
+                    } else {
+                        tracing::warn!("Duplicate key but no IMDB ID to look up: {}", title);
+                        continue;
+                    }
+                } else {
+                    tracing::error!("Failed to import movie {}: {}", title, e);
+                    continue;
+                }
             }
+        };
+
+        // Scan folder for video file
+        if let Some(mut movie_file) = scan_movie_folder(&full_path, movie_id) {
+            let file_path = std::path::Path::new(&movie_file.path);
+
+            // Real media analysis via FFmpeg probe
+            let media_info_result = MediaAnalyzer::analyze(file_path).await;
+            movie_file.media_info = media_info_result
+                .as_ref()
+                .ok()
+                .and_then(|info| serde_json::to_string(info).ok());
+
+            // Derive quality from actual resolution (not filename)
+            if let Ok(ref info) = media_info_result {
+                let quality = derive_quality_from_media(info, &movie_file.path);
+                movie_file.quality =
+                    serde_json::to_string(&quality).unwrap_or_else(|_| movie_file.quality.clone());
+            }
+
+            // BLAKE3 file hash
+            movie_file.file_hash = compute_file_hash(file_path).await.ok();
+
+            match file_repo.insert(&movie_file).await {
+                Ok(file_id) => {
+                    // Update movie with file info
+                    let pool = state.db.pool();
+                    let _ = sqlx::query(
+                        "UPDATE movies SET has_file = true, movie_file_id = $1 WHERE id = $2",
+                    )
+                    .bind(file_id)
+                    .bind(movie_id)
+                    .execute(pool)
+                    .await;
+                    tracing::info!(
+                        "Found video file for movie {}: {}",
+                        movie_id,
+                        movie_file.path
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("Failed to insert movie file for {}: {}", movie_id, e);
+                }
+            }
+        }
+
+        if let Ok(Some(created)) = repo.get_by_id(movie_id).await {
+            let mut response = MovieResponse::from(created);
+            enrich_movie_response(&mut response, &state.db).await;
+            results.push(response);
         }
     }
 
@@ -1130,7 +1406,7 @@ fn extract_year_from_folder(folder: &str) -> Option<i32> {
 }
 
 /// Scan a movie folder for the largest video file and return a MovieFileDbModel
-fn scan_movie_folder(folder_path: &str, movie_id: i64) -> Option<MovieFileDbModel> {
+pub(super) fn scan_movie_folder(folder_path: &str, movie_id: i64) -> Option<MovieFileDbModel> {
     use std::path::Path;
 
     let root = Path::new(folder_path);

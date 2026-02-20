@@ -360,6 +360,7 @@ pub async fn execute_command_with_options(
             )
             .await
         }
+        "RescanMovie" => execute_rescan_movie(body, db).await,
         "RefreshMonitoredDownloads" => {
             let service = crate::core::queue::TrackedDownloadService::new(db.clone());
             match service.reconcile_downloads().await {
@@ -875,9 +876,11 @@ async fn execute_refresh_movies(
             }
         }
 
-        // Step 2: If we have an imdb_id, fetch Radarr metadata for tmdb_id + images
+        // Step 2: If we have an imdb_id, fetch images via TMDB → Radarr cascade
         if let Some(ref imdb_id) = movie.imdb_id {
-            if let Some((tmdb_id, images)) = super::movies::fetch_radarr_metadata(imdb_id).await {
+            if let Some((tmdb_id, images)) =
+                super::movies::fetch_movie_images_and_tmdb_id(imdb_id).await
+            {
                 if tmdb_id > 0 && movie.tmdb_id == 0 {
                     movie.tmdb_id = tmdb_id;
                 }
@@ -1809,4 +1812,128 @@ async fn execute_series_search(
         .await;
 
     Ok(format!("Series search started for series {}", series_id))
+}
+
+/// Execute RescanMovie command — scans a movie's folder for video files.
+/// If a movie has no file or the file path changed, re-scans and updates.
+async fn execute_rescan_movie(
+    body: &serde_json::Value,
+    db: &crate::core::datastore::Database,
+) -> Result<String, String> {
+    let movie_id = body
+        .get("movieId")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| "Missing movieId".to_string())?;
+
+    let repo = crate::core::datastore::repositories::MovieRepository::new(db.clone());
+    let file_repo = crate::core::datastore::repositories::MovieFileRepository::new(db.clone());
+
+    let movie = repo
+        .get_by_id(movie_id)
+        .await
+        .map_err(|e| format!("Failed to fetch movie: {}", e))?
+        .ok_or_else(|| format!("Movie {} not found", movie_id))?;
+
+    tracing::info!("RescanMovie: scanning '{}' at {}", movie.title, movie.path);
+
+    let folder_path = &movie.path;
+    if !std::path::Path::new(folder_path).exists() {
+        tracing::info!(
+            "RescanMovie: path does not exist for '{}': {}",
+            movie.title,
+            folder_path
+        );
+        // If movie claimed to have a file but path is gone, clear the file reference
+        if movie.has_file {
+            let pool = db.pool();
+            let _ = sqlx::query(
+                "UPDATE movies SET has_file = false, movie_file_id = NULL WHERE id = $1",
+            )
+            .bind(movie_id)
+            .execute(pool)
+            .await;
+        }
+        return Ok(format!("Path does not exist: {}", folder_path));
+    }
+
+    // Scan for the largest video file
+    if let Some(mut movie_file) = super::movies::scan_movie_folder(folder_path, movie_id) {
+        // Check if this file is already tracked
+        let existing_files = file_repo
+            .get_by_movie_id(movie_id)
+            .await
+            .map_err(|e| format!("Failed to fetch movie files: {}", e))?;
+
+        let already_tracked = existing_files.iter().any(|f| f.path == movie_file.path);
+        if already_tracked {
+            tracing::info!(
+                "RescanMovie: '{}' — file already tracked: {}",
+                movie.title,
+                movie_file.path
+            );
+            return Ok(format!("Movie file already tracked for '{}'", movie.title));
+        }
+
+        let file_path = std::path::Path::new(&movie_file.path);
+
+        // Real media analysis via FFmpeg probe
+        let media_info_result = crate::core::mediafiles::MediaAnalyzer::analyze(file_path).await;
+        movie_file.media_info = media_info_result
+            .as_ref()
+            .ok()
+            .and_then(|info| serde_json::to_string(info).ok());
+
+        // Derive quality from actual resolution
+        if let Ok(ref info) = media_info_result {
+            let quality =
+                crate::core::mediafiles::derive_quality_from_media(info, &movie_file.path);
+            movie_file.quality =
+                serde_json::to_string(&quality).unwrap_or_else(|_| movie_file.quality.clone());
+        }
+
+        // BLAKE3 file hash
+        movie_file.file_hash = crate::core::mediafiles::compute_file_hash(file_path)
+            .await
+            .ok();
+
+        match file_repo.insert(&movie_file).await {
+            Ok(file_id) => {
+                let pool = db.pool();
+                let _ = sqlx::query(
+                    "UPDATE movies SET has_file = true, movie_file_id = $1 WHERE id = $2",
+                )
+                .bind(file_id)
+                .bind(movie_id)
+                .execute(pool)
+                .await;
+                tracing::info!(
+                    "RescanMovie: found file for '{}': {} ({} bytes)",
+                    movie.title,
+                    movie_file.path,
+                    movie_file.size
+                );
+                Ok(format!(
+                    "Found video file for '{}': {}",
+                    movie.title, movie_file.path
+                ))
+            }
+            Err(e) => {
+                tracing::error!("RescanMovie: failed to insert movie file: {}", e);
+                Err(format!("Failed to insert movie file: {}", e))
+            }
+        }
+    } else {
+        tracing::info!("RescanMovie: no video files found in '{}'", folder_path);
+        // Clear file reference if movie thought it had one
+        if movie.has_file {
+            let pool = db.pool();
+            let _ = sqlx::query(
+                "UPDATE movies SET has_file = false, movie_file_id = NULL WHERE id = $1",
+            )
+            .bind(movie_id)
+            .execute(pool)
+            .await;
+        }
+        Ok(format!("No video files found for '{}'", movie.title))
+    }
 }

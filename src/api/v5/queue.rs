@@ -12,7 +12,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::core::datastore::repositories::{
-    DownloadClientRepository, EpisodeRepository, SeriesRepository,
+    DownloadClientRepository, EpisodeRepository, MovieFileRepository, MovieRepository,
+    SeriesRepository, TrackedDownloadRepository,
 };
 use crate::core::download::clients::{create_client_from_model, DownloadState};
 use crate::core::parser::{normalize_title, parse_title, title_matches_series};
@@ -84,10 +85,15 @@ pub struct QueueResource {
     pub indexer: Option<String>,
     pub output_path: Option<String>,
     pub episode_has_file: bool,
+    pub content_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub movie_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub episode: Option<QueueEpisodeResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub series: Option<QueueSeriesResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub movie: Option<QueueMovieResource>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -106,6 +112,92 @@ pub struct QueueSeriesResource {
     pub id: i64,
     pub title: String,
     pub title_slug: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueMovieResource {
+    pub id: i64,
+    pub title: String,
+    pub title_slug: String,
+}
+
+/// Per-content-type category mappings parsed from download client settings.
+struct ClientCategories {
+    movie: Vec<String>,
+    anime: Vec<String>,
+    /// Union of all categories — used for download filtering.
+    all: Vec<String>,
+}
+
+impl ClientCategories {
+    /// Parse category fields from download client settings JSON.
+    /// Supports both the new split format (category/movieCategory/animeCategory)
+    /// and the legacy comma-separated format in the `category` field.
+    fn from_settings(settings: &serde_json::Value) -> Self {
+        let get_cats = |key: &str| -> Vec<String> {
+            settings
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(|s| {
+                    s.split(',')
+                        .map(|c| c.trim().to_lowercase())
+                        .filter(|c| !c.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        let has_new_format = settings.get("movieCategory").is_some();
+
+        if has_new_format {
+            // New split format: each key has its own categories
+            let series = get_cats("category");
+            let movie = get_cats("movieCategory");
+            let anime = get_cats("animeCategory");
+
+            let mut all = Vec::new();
+            all.extend(series.iter().cloned());
+            all.extend(movie.iter().cloned());
+            all.extend(anime.iter().cloned());
+            all.sort();
+            all.dedup();
+
+            Self { movie, anime, all }
+        } else {
+            // Legacy format: single comma-separated `category` field.
+            // Infer content type from well-known category names.
+            let all_cats = get_cats("category");
+            let mut movie = Vec::new();
+            let mut anime = Vec::new();
+
+            for cat in &all_cats {
+                match cat.as_str() {
+                    "radarr" | "movies" | "movie" => movie.push(cat.clone()),
+                    "anime" | "sonarr-anime" | "anime-sonarr" => anime.push(cat.clone()),
+                    _ => {} // series (default)
+                }
+            }
+
+            Self {
+                movie,
+                anime,
+                all: all_cats,
+            }
+        }
+    }
+
+    /// Determine content type for a download based on its category.
+    fn content_type_for(&self, category: &str) -> &'static str {
+        let cat = category.to_lowercase();
+        if self.movie.iter().any(|c| c == &cat) {
+            return "movie";
+        }
+        if self.anime.iter().any(|c| c == &cat) {
+            return "anime";
+        }
+        "series"
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -235,6 +327,9 @@ fn queue_item_to_resource(item: &crate::core::queue::QueueItem) -> QueueResource
         })
         .collect();
 
+    // Derive content type from movie_id presence
+    let content_type = if item.movie_id > 0 { "movie" } else { "series" };
+
     QueueResource {
         id: item.id,
         series_id: if item.series_id > 0 {
@@ -272,8 +367,15 @@ fn queue_item_to_resource(item: &crate::core::queue::QueueItem) -> QueueResource
         indexer: Some(item.indexer.clone()),
         output_path: item.output_path.clone(),
         episode_has_file: item.episode_has_file,
+        content_type: content_type.to_string(),
+        movie_id: if item.movie_id > 0 {
+            Some(item.movie_id)
+        } else {
+            None
+        },
         episode: None,
         series: None,
+        movie: None,
     }
 }
 
@@ -287,9 +389,21 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
 
     let mut all_downloads = Vec::new();
 
+    // Collect ALL tracked download IDs before filtering, so that untracked
+    // duplicates are always suppressed even when a tracked download is hidden
+    // by the episode_has_file filter. Without this, a manually re-matched
+    // download can be hidden from the tracked section, then re-appear from
+    // the untracked section with a stale title-parsed series match.
+    let mut tracked_ids: HashSet<String> = HashSet::new();
+
     // Get tracked downloads with live status merged
     match service.get_queue().await {
         Ok(queue_items) => {
+            for item in &queue_items {
+                if let Some(ref did) = item.download_id {
+                    tracked_ids.insert(did.clone());
+                }
+            }
             for item in queue_items {
                 // Skip downloads where the episode already has a file and
                 // the download is waiting to be imported — already in the library
@@ -309,12 +423,6 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
         }
     }
 
-    // Collect download IDs that are already tracked
-    let tracked_ids: HashSet<String> = all_downloads
-        .iter()
-        .filter_map(|d| d.download_id.clone())
-        .collect();
-
     // Also include untracked downloads from clients (for backwards compatibility)
     if include_unknown {
         let clients = match client_repo.get_all().await {
@@ -329,16 +437,10 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
         let mut id_counter = (all_downloads.len() as i64) + 10000;
 
         for db_client in clients.iter().filter(|c| c.enable) {
-            // Parse the configured category from client settings
-            let client_category: Option<String> =
-                serde_json::from_str::<serde_json::Value>(&db_client.settings)
-                    .ok()
-                    .and_then(|s| {
-                        s.get("tvCategory")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .filter(|s| !s.is_empty());
+            // Parse the configured categories from client settings.
+            let settings_json: serde_json::Value =
+                serde_json::from_str(&db_client.settings).unwrap_or(serde_json::json!({}));
+            let client_categories = ClientCategories::from_settings(&settings_json);
 
             match create_client_from_model(db_client) {
                 Ok(client) => match client.get_downloads().await {
@@ -354,13 +456,16 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                 continue;
                             }
 
-                            // Skip downloads that don't match the configured category
-                            if let Some(ref expected_cat) = client_category {
-                                let dl_cat = dl.category.as_deref().unwrap_or("");
-                                if !dl_cat.eq_ignore_ascii_case(expected_cat) {
-                                    continue;
-                                }
+                            // Skip downloads that don't match any configured category
+                            let dl_cat = dl.category.as_deref().unwrap_or("").to_lowercase();
+                            if !client_categories.all.is_empty()
+                                && !client_categories.all.iter().any(|c| c == &dl_cat)
+                            {
+                                continue;
                             }
+
+                            // Determine content type from download category
+                            let content_type = client_categories.content_type_for(&dl_cat);
 
                             let status = match dl.status {
                                 DownloadState::Queued => "queued",
@@ -656,8 +761,11 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                 indexer: None,
                                 output_path: dl.output_path,
                                 episode_has_file: episode_has_file_val,
+                                content_type: content_type.to_string(),
+                                movie_id: None,
                                 episode: parsed_episode,
                                 series: parsed_series,
+                                movie: None,
                             });
 
                             id_counter += 1;
@@ -686,10 +794,11 @@ async fn list_queue(
     let include_series = params.include_series.unwrap_or(true);
     let mut all_downloads = fetch_all_downloads(&state, include_unknown).await;
 
-    // Enrich with episode/series metadata
+    // Enrich with episode/series/movie metadata
     if include_episode || include_series {
         let episode_repo = EpisodeRepository::new(state.db.clone());
         let series_repo = SeriesRepository::new(state.db.clone());
+        let movie_repo = MovieRepository::new(state.db.clone());
 
         for dl in &mut all_downloads {
             if include_episode {
@@ -714,6 +823,16 @@ async fn list_queue(
                             title: s.title,
                         });
                     }
+                }
+            }
+            // Enrich movie data
+            if let Some(mid) = dl.movie_id {
+                if let Ok(Some(m)) = movie_repo.get_by_id(mid).await {
+                    dl.movie = Some(QueueMovieResource {
+                        id: m.id,
+                        title: m.title,
+                        title_slug: m.title_slug,
+                    });
                 }
             }
         }
@@ -952,10 +1071,10 @@ async fn import_queue_item(
     let import_service = ImportService::new(state.db.clone(), state.config.read().media.clone());
 
     // Find the download — either tracked (id < 10000) or untracked
-    let (download_id, download_client_id, title) = if id < 10000 {
+    let (download_id, download_client_id, title, tracked_movie_id) = if id < 10000 {
         // Tracked download — look up from DB
         match td_repo.get_by_id(id).await {
-            Ok(Some(td)) => (td.download_id, td.download_client_id, td.title),
+            Ok(Some(td)) => (td.download_id, td.download_client_id, td.title, td.movie_id),
             _ => {
                 tracing::warn!("Import: tracked download {} not found", id);
                 return Json(QueueActionResponse { success: false });
@@ -978,7 +1097,7 @@ async fn import_queue_item(
                     .find(|c| c.name == client_name)
                     .map(|c| c.id)
                     .unwrap_or(0);
-                (dl_id, client_id, dl.title)
+                (dl_id, client_id, dl.title, dl.movie_id)
             }
             None => {
                 tracing::warn!("Import: queue item {} not found", id);
@@ -1040,6 +1159,81 @@ async fn import_queue_item(
         }
         mapped
     };
+
+    // Movie import: if this download is matched to a movie, use the movie import flow
+    if let Some(movie_id) = tracked_movie_id {
+        let movie_repo = MovieRepository::new(state.db.clone());
+        let movie_file_repo = MovieFileRepository::new(state.db.clone());
+
+        let movie = match movie_repo.get_by_id(movie_id).await {
+            Ok(Some(m)) => m,
+            _ => {
+                tracing::warn!(
+                    "Import: movie {} not found for download {}",
+                    movie_id,
+                    download_id
+                );
+                return Json(QueueActionResponse { success: false });
+            }
+        };
+
+        let db = state.db.clone();
+        let movie_title = movie.title.clone();
+        let dl_title = title.clone();
+        tokio::spawn(async move {
+            // scan_movie_folder finds the largest video file in the output path
+            if let Some(movie_file) = super::movies::scan_movie_folder(&output_path, movie_id) {
+                match movie_file_repo.insert(&movie_file).await {
+                    Ok(file_id) => {
+                        // Update movie to have a file
+                        let pool = db.pool();
+                        let _ = sqlx::query(
+                            "UPDATE movies SET has_file = true, movie_file_id = $1 WHERE id = $2",
+                        )
+                        .bind(file_id)
+                        .bind(movie_id)
+                        .execute(pool)
+                        .await;
+
+                        tracing::info!(
+                            "Movie imported: '{}' → movie {} (file: {})",
+                            dl_title,
+                            movie_title,
+                            movie_file.path,
+                        );
+
+                        // Update tracked download state to Imported
+                        if id < 10000 {
+                            let td_repo = TrackedDownloadRepository::new(db);
+                            let _ = td_repo
+                                .update_status(
+                                    id,
+                                    crate::core::queue::TrackedDownloadState::Imported as i32,
+                                    "[]",
+                                    None,
+                                )
+                                .await;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Import: failed to insert movie file for {}: {}",
+                            movie_title,
+                            e
+                        );
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    "Import: no video file found in '{}' for movie {}",
+                    output_path,
+                    movie_title
+                );
+            }
+        });
+
+        return Json(QueueActionResponse { success: true });
+    }
 
     // Build a PendingImport using the import service's matching logic
     let mut parsed = crate::core::parser::parse_title(&title);
@@ -1144,42 +1338,410 @@ async fn import_queue_item(
         episodes,
     };
 
-    // Run the import
-    match import_service.import(&pending).await {
-        Ok(result) if result.success => {
-            tracing::info!(
-                "Imported '{}': {} files, {} episodes",
-                title,
-                result.files_imported,
-                result.episode_ids.len()
-            );
+    // Run the import in the background to avoid proxy timeouts.
+    // Season/multi-season packs can take minutes (FFmpeg probing + hashing per file).
+    let db = state.db.clone();
+    tokio::spawn(async move {
+        match import_service.import(&pending).await {
+            Ok(result) if result.success => {
+                tracing::info!(
+                    "Imported '{}': {} files, {} episodes",
+                    pending.title,
+                    result.files_imported,
+                    result.episode_ids.len()
+                );
 
-            // Update tracked download state to Imported (if tracked)
-            if id < 10000 {
+                // Update tracked download state to Imported (if tracked)
+                if id < 10000 {
+                    let td_repo = TrackedDownloadRepository::new(db);
+                    let _ = td_repo
+                        .update_status(
+                            id,
+                            crate::core::queue::TrackedDownloadState::Imported as i32,
+                            "[]",
+                            None,
+                        )
+                        .await;
+                }
+            }
+            Ok(result) => {
+                let msg = result
+                    .error_message
+                    .unwrap_or_else(|| "Unknown error".to_string());
+                tracing::warn!("Import failed for '{}': {}", pending.title, msg);
+            }
+            Err(e) => {
+                tracing::warn!("Import error for '{}': {}", pending.title, e);
+            }
+        }
+    });
+
+    Json(QueueActionResponse { success: true })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueFileResource {
+    pub name: String,
+    pub size: i64,
+}
+
+/// GET /api/v5/queue/{id}/files
+/// Returns the file list for a download (from the download client)
+async fn get_queue_files(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Vec<QueueFileResource>>, StatusCode> {
+    let td_repo = TrackedDownloadRepository::new(state.db.clone());
+    let client_repo = DownloadClientRepository::new(state.db.clone());
+
+    // Resolve download_id and client for this queue item
+    let (download_id, client_id) = if id < 10000 {
+        // Tracked download
+        match td_repo.get_by_id(id).await {
+            Ok(Some(td)) => (td.download_id, td.download_client_id),
+            _ => return Err(StatusCode::NOT_FOUND),
+        }
+    } else {
+        // Untracked download — find from live queue data
+        let downloads = fetch_all_downloads(&state, true).await;
+        match downloads.iter().find(|d| d.id == id) {
+            Some(dl) => {
+                let dl_id = dl.download_id.clone().unwrap_or_default();
+                let client_name = dl.download_client.clone().unwrap_or_default();
+                let clients = client_repo.get_all().await.unwrap_or_default();
+                match clients.iter().find(|c| c.name == client_name) {
+                    Some(c) => (dl_id, c.id),
+                    None => return Err(StatusCode::NOT_FOUND),
+                }
+            }
+            None => return Err(StatusCode::NOT_FOUND),
+        }
+    };
+
+    // Get client and fetch files
+    let client_model = match client_repo.get_by_id(client_id).await {
+        Ok(Some(c)) => c,
+        _ => return Err(StatusCode::NOT_FOUND),
+    };
+
+    let client = match create_client_from_model(&client_model) {
+        Ok(c) => c,
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
+
+    match client.get_files(&download_id).await {
+        Ok(files) => Ok(Json(
+            files
+                .into_iter()
+                .map(|f| QueueFileResource {
+                    name: f.name,
+                    size: f.size,
+                })
+                .collect(),
+        )),
+        Err(e) => {
+            tracing::warn!("Failed to get files for download {}: {}", download_id, e);
+            // Return empty list rather than error — usenet clients don't support file listing
+            Ok(Json(vec![]))
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMatchRequest {
+    /// Series ID (for series/anime match)
+    pub series_id: Option<i64>,
+    /// Episode IDs (for series/anime match)
+    pub episode_ids: Option<Vec<i64>>,
+    /// Movie ID (for movie match — mutually exclusive with series_id)
+    pub movie_id: Option<i64>,
+    /// Required for untracked downloads (id >= 10000) — the download client's ID for this item
+    pub download_id: Option<String>,
+    /// Required for untracked downloads — the download client name
+    pub download_client: Option<String>,
+    /// Protocol: "usenet" or "torrent"
+    pub protocol: Option<String>,
+    /// Download size in bytes
+    pub size: Option<f64>,
+    /// Release title
+    pub title: Option<String>,
+}
+
+/// PUT /api/v5/queue/{id}/match
+/// Manually fix the series/episode or movie match for a queue item.
+/// For tracked downloads (id < 10000): updates the existing DB record.
+/// For untracked downloads (id >= 10000): promotes to a tracked download by
+/// creating a new DB record with the corrected match.
+async fn update_match(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateMatchRequest>,
+) -> Result<Json<QueueActionResponse>, StatusCode> {
+    let td_repo = TrackedDownloadRepository::new(state.db.clone());
+
+    // Determine if this is a movie match or series match
+    let is_movie_match = body.movie_id.is_some();
+
+    if is_movie_match {
+        // --- Movie match ---
+        let movie_id = body.movie_id.unwrap();
+        let movie_repo = MovieRepository::new(state.db.clone());
+
+        // Validate movie exists
+        match movie_repo.get_by_id(movie_id).await {
+            Ok(Some(_)) => {}
+            _ => return Err(StatusCode::NOT_FOUND),
+        }
+
+        if id < 10000 {
+            // Tracked download — update existing record
+            if let Err(e) = td_repo.update_movie_match(id, movie_id).await {
+                tracing::warn!(
+                    "Failed to update movie match for tracked download {}: {}",
+                    id,
+                    e
+                );
+                return Ok(Json(QueueActionResponse { success: false }));
+            }
+            tracing::info!("Queue match updated: download {} → movie {}", id, movie_id);
+        } else {
+            // Untracked download — promote to tracked
+            let download_id = match body.download_id {
+                Some(ref id) if !id.is_empty() => id.clone(),
+                _ => return Err(StatusCode::BAD_REQUEST),
+            };
+            let client_name = match body.download_client {
+                Some(ref name) if !name.is_empty() => name.clone(),
+                _ => return Err(StatusCode::BAD_REQUEST),
+            };
+
+            let client_repo = DownloadClientRepository::new(state.db.clone());
+            let clients = client_repo.get_all().await.unwrap_or_default();
+            let client_id = match clients.iter().find(|c| c.name == client_name) {
+                Some(c) => c.id,
+                None => return Err(StatusCode::NOT_FOUND),
+            };
+
+            if let Ok(Some(existing)) = td_repo.get_by_download_id(client_id, &download_id).await {
+                if let Err(e) = td_repo.update_movie_match(existing.id, movie_id).await {
+                    tracing::warn!(
+                        "Failed to update movie match for existing tracked download {}: {}",
+                        existing.id,
+                        e
+                    );
+                    return Ok(Json(QueueActionResponse { success: false }));
+                }
                 let _ = td_repo
                     .update_status(
-                        id,
-                        crate::core::queue::TrackedDownloadState::Imported as i32,
+                        existing.id,
+                        TrackedDownloadState::ImportPending as i32,
                         "[]",
                         None,
                     )
                     .await;
+                tracing::info!(
+                    "Queue match updated (existing): download {} → movie {}",
+                    existing.id,
+                    movie_id
+                );
+            } else {
+                let protocol = match body.protocol.as_deref() {
+                    Some("usenet") => 1,
+                    _ => 2,
+                };
+                use crate::core::datastore::models::TrackedDownloadDbModel;
+                let model = TrackedDownloadDbModel {
+                    id: 0,
+                    download_id: download_id.clone(),
+                    download_client_id: client_id,
+                    series_id: 0,
+                    episode_ids: "[]".to_string(),
+                    title: body.title.unwrap_or_default(),
+                    indexer: None,
+                    size: body.size.unwrap_or(0.0) as i64,
+                    protocol,
+                    quality: "{}".to_string(),
+                    languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
+                    status: TrackedDownloadState::Downloading as i32,
+                    status_messages: "[]".to_string(),
+                    error_message: None,
+                    output_path: None,
+                    is_upgrade: false,
+                    added: chrono::Utc::now(),
+                    movie_id: Some(movie_id),
+                };
+                match td_repo.insert(&model).await {
+                    Ok(new_id) => {
+                        tracing::info!(
+                            "Untracked download promoted: '{}' → tracked {} (movie {})",
+                            download_id,
+                            new_id,
+                            movie_id,
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to promote untracked download '{}': {}",
+                            download_id,
+                            e
+                        );
+                        return Ok(Json(QueueActionResponse { success: false }));
+                    }
+                }
+            }
+        }
+    } else {
+        // --- Series match ---
+        let series_id = match body.series_id {
+            Some(sid) => sid,
+            None => return Err(StatusCode::BAD_REQUEST),
+        };
+        let episode_ids = body.episode_ids.unwrap_or_default();
+
+        let series_repo = SeriesRepository::new(state.db.clone());
+        let episode_repo = EpisodeRepository::new(state.db.clone());
+
+        // Validate series exists
+        match series_repo.get_by_id(series_id).await {
+            Ok(Some(_)) => {}
+            _ => return Err(StatusCode::NOT_FOUND),
+        }
+
+        // Validate episode IDs exist
+        for &ep_id in &episode_ids {
+            match episode_repo.get_by_id(ep_id).await {
+                Ok(Some(_)) => {}
+                _ => return Err(StatusCode::NOT_FOUND),
+            }
+        }
+
+        let episode_ids_json =
+            serde_json::to_string(&episode_ids).unwrap_or_else(|_| "[]".to_string());
+
+        if id < 10000 {
+            // Tracked download — update existing record
+            if let Err(e) = td_repo
+                .update_series_match(id, series_id, &episode_ids_json)
+                .await
+            {
+                tracing::warn!("Failed to update match for tracked download {}: {}", id, e);
+                return Ok(Json(QueueActionResponse { success: false }));
             }
 
-            Json(QueueActionResponse { success: true })
-        }
-        Ok(result) => {
-            let msg = result
-                .error_message
-                .unwrap_or_else(|| "Unknown error".to_string());
-            tracing::warn!("Import failed for '{}': {}", title, msg);
-            Json(QueueActionResponse { success: false })
-        }
-        Err(e) => {
-            tracing::warn!("Import error for '{}': {}", title, e);
-            Json(QueueActionResponse { success: false })
+            tracing::info!(
+                "Queue match updated: download {} → series {}, episodes {:?}",
+                id,
+                series_id,
+                episode_ids
+            );
+        } else {
+            // Untracked download — either update existing record or create new one
+            let download_id = match body.download_id {
+                Some(ref id) if !id.is_empty() => id.clone(),
+                _ => return Err(StatusCode::BAD_REQUEST),
+            };
+            let client_name = match body.download_client {
+                Some(ref name) if !name.is_empty() => name.clone(),
+                _ => return Err(StatusCode::BAD_REQUEST),
+            };
+
+            // Resolve download client ID from name
+            let client_repo = DownloadClientRepository::new(state.db.clone());
+            let clients = client_repo.get_all().await.unwrap_or_default();
+            let client_id = match clients.iter().find(|c| c.name == client_name) {
+                Some(c) => c.id,
+                None => {
+                    tracing::warn!("Match: download client '{}' not found", client_name);
+                    return Err(StatusCode::NOT_FOUND);
+                }
+            };
+
+            // Check if a tracked_downloads record already exists for this download.
+            if let Ok(Some(existing)) = td_repo.get_by_download_id(client_id, &download_id).await {
+                if let Err(e) = td_repo
+                    .update_series_match(existing.id, series_id, &episode_ids_json)
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to update match for existing tracked download {}: {}",
+                        existing.id,
+                        e
+                    );
+                    return Ok(Json(QueueActionResponse { success: false }));
+                }
+
+                // Reset status to ImportPending
+                let _ = td_repo
+                    .update_status(
+                        existing.id,
+                        TrackedDownloadState::ImportPending as i32,
+                        "[]",
+                        None,
+                    )
+                    .await;
+
+                tracing::info!(
+                    "Queue match updated (existing): download {} → series {}, episodes {:?}",
+                    existing.id,
+                    series_id,
+                    episode_ids,
+                );
+            } else {
+                // Truly untracked — promote to tracked by creating a new record
+                let protocol = match body.protocol.as_deref() {
+                    Some("usenet") => 1,
+                    _ => 2,
+                };
+
+                use crate::core::datastore::models::TrackedDownloadDbModel;
+
+                let model = TrackedDownloadDbModel {
+                    id: 0,
+                    download_id: download_id.clone(),
+                    download_client_id: client_id,
+                    series_id,
+                    episode_ids: episode_ids_json,
+                    title: body.title.unwrap_or_default(),
+                    indexer: None,
+                    size: body.size.unwrap_or(0.0) as i64,
+                    protocol,
+                    quality: "{}".to_string(),
+                    languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
+                    status: TrackedDownloadState::Downloading as i32,
+                    status_messages: "[]".to_string(),
+                    error_message: None,
+                    output_path: None,
+                    is_upgrade: false,
+                    added: chrono::Utc::now(),
+                    movie_id: None,
+                };
+
+                match td_repo.insert(&model).await {
+                    Ok(new_id) => {
+                        tracing::info!(
+                            "Untracked download promoted: '{}' → tracked {} (series {}, episodes {:?})",
+                            download_id,
+                            new_id,
+                            series_id,
+                            episode_ids,
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to promote untracked download '{}': {}",
+                            download_id,
+                            e
+                        );
+                        return Ok(Json(QueueActionResponse { success: false }));
+                    }
+                }
+            }
         }
     }
+
+    Ok(Json(QueueActionResponse { success: true }))
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -1190,4 +1752,6 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/{id}", get(get_queue_item).delete(remove_queue_item))
         .route("/{id}/grab", get(grab_release))
         .route("/{id}/import", axum::routing::post(import_queue_item))
+        .route("/{id}/match", axum::routing::put(update_match))
+        .route("/{id}/files", get(get_queue_files))
 }

@@ -2026,8 +2026,9 @@ impl TrackedDownloadRepository {
             INSERT INTO tracked_downloads (
                 download_id, download_client_id, series_id, episode_ids, title,
                 indexer, size, protocol, quality, languages, status,
-                status_messages, error_message, output_path, is_upgrade, added
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                status_messages, error_message, output_path, is_upgrade, added,
+                movie_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             RETURNING id
             "#,
         )
@@ -2047,6 +2048,7 @@ impl TrackedDownloadRepository {
         .bind(&download.output_path)
         .bind(download.is_upgrade)
         .bind(download.added)
+        .bind(download.movie_id)
         .fetch_one(pool)
         .await?;
         Ok(row.0)
@@ -2081,6 +2083,38 @@ impl TrackedDownloadRepository {
             .bind(id)
             .execute(pool)
             .await?;
+        Ok(())
+    }
+
+    /// Update tracked download series/episode match
+    pub async fn update_series_match(
+        &self,
+        id: i64,
+        series_id: i64,
+        episode_ids: &str,
+    ) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            "UPDATE tracked_downloads SET series_id = $1, episode_ids = $2, movie_id = NULL WHERE id = $3",
+        )
+        .bind(series_id)
+        .bind(episode_ids)
+        .bind(id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Update tracked download movie match
+    pub async fn update_movie_match(&self, id: i64, movie_id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            "UPDATE tracked_downloads SET movie_id = $1, series_id = 0, episode_ids = '[]' WHERE id = $2",
+        )
+        .bind(movie_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
         Ok(())
     }
 

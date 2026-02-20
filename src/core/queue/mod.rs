@@ -67,6 +67,7 @@ pub struct QueueItem {
     pub indexer: String,
     pub output_path: Option<String>,
     pub episode_has_file: bool,
+    pub movie_id: i64,
     pub size: i64,
     pub sizeleft: i64,
     pub timeleft: Option<String>,

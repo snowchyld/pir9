@@ -215,10 +215,26 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
             order += 1;
             fields.push(make_field(
                 order,
-                "tvCategory",
-                "Category",
+                "category",
+                "Series Category",
                 "textbox",
-                settings.get("tvCategory").cloned(),
+                settings.get("category").cloned(),
+            ));
+            order += 1;
+            fields.push(make_field(
+                order,
+                "movieCategory",
+                "Movie Category",
+                "textbox",
+                settings.get("movieCategory").cloned(),
+            ));
+            order += 1;
+            fields.push(make_field(
+                order,
+                "animeCategory",
+                "Anime Category",
+                "textbox",
+                settings.get("animeCategory").cloned(),
             ));
         }
         "Sabnzbd" | "SABnzbd" => {
@@ -264,10 +280,26 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
             order += 1;
             fields.push(make_field(
                 order,
-                "tvCategory",
-                "Category",
+                "category",
+                "Series Category",
                 "textbox",
-                settings.get("tvCategory").cloned(),
+                settings.get("category").cloned(),
+            ));
+            order += 1;
+            fields.push(make_field(
+                order,
+                "movieCategory",
+                "Movie Category",
+                "textbox",
+                settings.get("movieCategory").cloned(),
+            ));
+            order += 1;
+            fields.push(make_field(
+                order,
+                "animeCategory",
+                "Anime Category",
+                "textbox",
+                settings.get("animeCategory").cloned(),
             ));
         }
         _ => {
@@ -632,41 +664,55 @@ fn create_qbittorrent_schema() -> DownloadClientResource {
             make_field(5, "password", "Password", "password", None),
             make_field(
                 6,
-                "tvCategory",
-                "Category",
+                "category",
+                "Series Category",
                 "textbox",
                 Some(serde_json::json!("sonarr")),
             ),
             make_field(
                 7,
+                "movieCategory",
+                "Movie Category",
+                "textbox",
+                Some(serde_json::json!("radarr")),
+            ),
+            make_field(
+                8,
+                "animeCategory",
+                "Anime Category",
+                "textbox",
+                Some(serde_json::json!("anime")),
+            ),
+            make_field(
+                9,
                 "recentTvPriority",
                 "Recent Priority",
                 "select",
                 Some(serde_json::json!(0)),
             ),
             make_field(
-                8,
+                10,
                 "olderTvPriority",
                 "Older Priority",
                 "select",
                 Some(serde_json::json!(0)),
             ),
             make_field(
-                9,
+                11,
                 "initialState",
                 "Initial State",
                 "select",
                 Some(serde_json::json!(0)),
             ),
             make_field(
-                10,
+                12,
                 "sequentialOrder",
                 "Sequential Order",
                 "checkbox",
                 Some(serde_json::json!(false)),
             ),
             make_field(
-                11,
+                13,
                 "firstAndLast",
                 "First and Last",
                 "checkbox",
@@ -713,20 +759,34 @@ fn create_sabnzbd_schema() -> DownloadClientResource {
             make_field(4, "apiKey", "API Key", "textbox", None),
             make_field(
                 5,
-                "tvCategory",
-                "Category",
+                "category",
+                "Series Category",
                 "textbox",
                 Some(serde_json::json!("tv")),
             ),
             make_field(
                 6,
+                "movieCategory",
+                "Movie Category",
+                "textbox",
+                Some(serde_json::json!("radarr")),
+            ),
+            make_field(
+                7,
+                "animeCategory",
+                "Anime Category",
+                "textbox",
+                Some(serde_json::json!("anime")),
+            ),
+            make_field(
+                8,
                 "recentTvPriority",
                 "Recent Priority",
                 "select",
                 Some(serde_json::json!(-100)),
             ),
             make_field(
-                7,
+                9,
                 "olderTvPriority",
                 "Older Priority",
                 "select",

@@ -379,10 +379,18 @@ export interface QueueItemSeries {
   titleSlug: string;
 }
 
+export interface QueueItemMovie {
+  id: number;
+  title: string;
+  titleSlug: string;
+}
+
 export interface QueueItem {
   id: number;
   seriesId?: number | null;
   episodeId?: number | null;
+  movieId?: number | null;
+  contentType?: 'series' | 'movie' | 'anime';
   title: string;
   status: string;
   trackedDownloadStatus: string;
@@ -398,6 +406,7 @@ export interface QueueItem {
   added?: string;
   episode?: QueueItemEpisode;
   series?: QueueItemSeries;
+  movie?: QueueItemMovie;
 }
 
 export interface QueueResponse {
