@@ -183,13 +183,19 @@ async fn create_series(
 
     let repo = SeriesRepository::new(state.db.clone());
 
-    // Check if series already exists
-    if let Some(_existing) = repo
+    // Check if series already exists — return it instead of erroring
+    if let Some(existing) = repo
         .get_by_tvdb_id(options.tvdb_id)
         .await
         .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?
     {
-        return Err(ApiError::Validation("Series already exists".to_string()));
+        tracing::info!(
+            "Series already exists: id={}, title='{}', tvdb_id={}",
+            existing.id, existing.title, existing.tvdb_id
+        );
+        let mut response = SeriesResponse::from(existing);
+        enrich_series_response(&mut response, &state.db).await;
+        return Ok(Json(response));
     }
 
     // Generate clean title and slug

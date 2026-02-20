@@ -59,8 +59,8 @@ export class AddSeriesPage extends BaseComponent {
       showSuccess('Series added successfully');
       navigate(`/series/${data.titleSlug}`);
     },
-    onError: () => {
-      showError('Failed to add series');
+    onError: (error: Error) => {
+      showError(error.message || 'Failed to add series');
     },
   });
 
