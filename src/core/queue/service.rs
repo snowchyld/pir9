@@ -331,11 +331,19 @@ impl TrackedDownloadService {
                         estimated,
                     )
                 } else {
-                    // Download not found in client - might be removed or client unavailable
+                    // Download not found in client - might be removed or client unavailable.
+                    // Infer size_left from the stored status: completed/import-pending means
+                    // nothing left to download, otherwise assume worst-case (full size).
+                    let stored_state = TrackedDownloadState::from_i32(td.status);
+                    let inferred_size_left = match stored_state {
+                        TrackedDownloadState::ImportPending
+                        | TrackedDownloadState::Imported => 0,
+                        _ => td.size,
+                    };
                     (
                         QueueStatus::DownloadClientUnavailable,
-                        TrackedDownloadState::from_i32(td.status),
-                        td.size,
+                        stored_state,
+                        inferred_size_left,
                         None,
                         None,
                     )
