@@ -68,4 +68,9 @@ ENV RUST_LOG=info,pir9_imdb=debug
 
 EXPOSE 8990
 
+# Run as non-root user for security
+RUN groupadd -r pir9 && useradd -r -g pir9 -d /app pir9 \
+    && chown -R pir9:pir9 /app
+USER pir9
+
 CMD ["/app/pir9-imdb"]

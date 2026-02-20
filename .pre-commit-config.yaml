@@ -66,12 +66,12 @@ repos:
         language: system
         pass_filenames: false
 
-  # Grype vulnerability scan (CVEs in lockfiles and binaries)
+  # Grype vulnerability scan (CVEs via SBOM — avoids false positives from system binaries)
   - repo: local
     hooks:
       - id: grype
         name: grype
-        entry: bash -c 'grype dir:. --only-fixed --fail-on medium'
+        entry: bash -c 'grype sbom:sbom.cdx.json --only-fixed --fail-on medium'
         language: system
         files: (Cargo\.lock|package-lock\.json)$
         pass_filenames: false
@@ -88,11 +88,12 @@ repos:
   # ── SBOM generation ────────────────────────────────────────────────────
 
   # Syft SBOM (CycloneDX — kept in repo, always reflects current deps)
+  # Excludes Go/ELF binary catalogers to avoid cataloging system tools (gitleaks, grype)
   - repo: local
     hooks:
       - id: syft-sbom
         name: syft sbom
-        entry: bash -c 'syft dir:. -o cyclonedx-json=sbom.cdx.json && git add sbom.cdx.json'
+        entry: bash -c 'syft dir:. --select-catalogers=-go-module-binary-cataloger,-elf-binary-package-cataloger -o cyclonedx-json=sbom.cdx.json && git add sbom.cdx.json'
         language: system
         files: (Cargo\.lock|package-lock\.json)$
         pass_filenames: false

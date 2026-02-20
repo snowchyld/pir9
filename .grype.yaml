@@ -1,0 +1,6 @@
+# Grype ignore list — unfixable transitive vulnerabilities only
+# Review periodically and remove entries when upstream fixes land
+
+ignore:
+  # time 0.1.45 via chrono 0.3.0 via mediainfo 0.2.0 (optional dep, not in default build)
+  - vulnerability: GHSA-wcg3-cvx6-7396

@@ -27,6 +27,13 @@ services:
     image: pir9-frontend:latest
     container_name: pir9-frontend
     restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /run
     ports:
       - "8989:80"
     networks:
@@ -51,6 +58,11 @@ services:
     image: pir9-api:latest
     container_name: pir9-api
     restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     command:
       - "--mode"
       - "server"
@@ -168,6 +180,11 @@ services:
     image: pir9-imdb:latest
     container_name: pir9-imdb
     restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     environment:
       - RUST_LOG=info,pir9_imdb=debug
       - PIR9_IMDB_PORT=8990

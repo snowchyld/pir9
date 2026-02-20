@@ -1,0 +1,17 @@
+# Ignored advisories for cargo audit
+# These are all transitive dependencies with no available fix
+
+[advisories]
+ignore = [
+    # chrono 0.3.0 via mediainfo 0.2.0 (optional dep, not in default build)
+    # localtime_r segfault — awaiting mediainfo update to chrono 0.4+
+    "RUSTSEC-2020-0159",
+
+    # time 0.1.45 via chrono 0.3.0 via mediainfo 0.2.0 (optional dep)
+    # Same chain as above — blocked on mediainfo update
+    "RUSTSEC-2020-0071",
+
+    # rsa 0.9.10 via sqlx-mysql (transitive, pir9 uses postgres not mysql)
+    # Marvin Attack — no fix available upstream
+    "RUSTSEC-2023-0071",
+]

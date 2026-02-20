@@ -16,6 +16,11 @@ services:
     image: pir9-rust:latest
     container_name: pir9-rust
     restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     ports:
       - "8989:8989"
     volumes:

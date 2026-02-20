@@ -19,6 +19,7 @@ export default defineConfig({
         changeOrigin: true,
       },
       '/ws': {
+        // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
         target: 'ws://10.0.0.13:8989',
         ws: true,
       },

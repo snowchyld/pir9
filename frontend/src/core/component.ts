@@ -271,8 +271,10 @@ export abstract class BaseComponent extends HTMLElement {
   private render(): void {
     const focusInfo = this.saveFocusState();
 
-    // Template returns developer-controlled HTML (see SECURITY NOTE at top of file)
+    // Template returns developer-controlled HTML (see SECURITY NOTE at top of file).
+    // Templates are author-controlled; user data must use escapeHtml() — see file header.
     const templateContent = this.template();
+    // nosemgrep: javascript.browser.security.insecure-document-method.insecure-document-method
     this.innerHTML = templateContent;
 
     if (focusInfo) {

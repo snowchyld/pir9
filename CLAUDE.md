@@ -6,6 +6,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 pir9 is a Smart PVR (Personal Video Recorder) for TV and anime, written in Rust. It's a rewrite of Sonarr that maintains API compatibility while leveraging Rust's performance and safety.
 
+## Project Documentation
+
+Structured documentation lives in `.context/` (tool-agnostic) and `.claude/skills/` (Claude Code workflows):
+
+| File | Purpose |
+|------|---------|
+| `.context/glossary.md` | Domain terminology (PVR, quality profiles, cutoff, indexer, etc.) |
+| `.context/boundaries.md` | What's frozen, what's freely modifiable, ownership map |
+| `.context/anti-patterns.md` | Rust + pir9-specific patterns to avoid |
+| `.context/debt.md` | Technical debt registry with priorities and proper solutions |
+| `.context/events.md` | Event bus catalog — all published events and subscribers |
+| `.context/decisions/` | Architecture Decision Records (ADRs) with rationale |
+
+Claude Code skills in `.claude/skills/` provide guided workflows: `/rust-api`, `/download-client`, `/parser-dev`, `/frontend-component`, `/frontend-store`, `/db-migration`, `/docker-infra`, `/security-audit`, `/trace`, `/release`.
+
 ## Build & Development Commands
 
 ```bash
@@ -143,35 +158,13 @@ The API has two versions:
 
 When modifying endpoints, maintain backward compatibility in v3.
 
-## Active Work Items
-
-See `TODO-LINT.md` for current lint issues and feature completion status. This tracks:
-- Unused imports in API v3 modules (WIP endpoints)
-- Dead code analysis by feature area (download queue, history, scheduler jobs, etc.)
-- Approach options for addressing warnings
-
 ## Code Style Preferences
 
 - **Acronyms in enums**: Keep uppercase (SDTV, DVD, HDTV) - use `#[allow(clippy::upper_case_acronyms)]`
 - **Serde casing**: Use `#[serde(rename_all = "camelCase")]` for API types (Sonarr compatibility)
 - **Derive order**: `Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default`
 
-## Adding New Code
-
-### New API endpoint
-1. Add route in `src/api/v3/<resource>.rs` or `src/api/v5/<resource>.rs`
-2. Response types go in same file or `src/api/v3/models.rs`
-3. Business logic goes in `src/core/<domain>/services.rs`
-4. Database access goes in `src/core/datastore/repositories.rs`
-
-### New download client
-1. Implement trait in `src/core/download/clients.rs`
-2. Add variant to `DownloadClientType` enum
-3. Register in client factory
-
-### New notification provider
-1. Add provider in `src/core/notifications/providers/`
-2. Implement `NotificationProvider` trait
+See `.context/anti-patterns.md` for patterns to avoid.
 
 ## Testing
 
@@ -196,9 +189,8 @@ This project uses semver. **Every commit MUST bump the version.**
 5. **Write detailed commit messages** using conventional commits format:
    - First line: `type: short description` (under 72 chars)
    - Blank line, then body explaining what changed and why
-   - End with `Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>`
 
-### Current version: 0.11.1
+### Current version: 0.11.2
 
 ### Commit types
 - `feat:` — new feature or capability
@@ -267,6 +259,8 @@ Hooks produce **zero output on clean files** — findings only, capped at 20 lin
 - Modify v3 API response shapes (breaks Sonarr client compatibility)
 - Use `unwrap()` in non-test code - use `?` or `expect("reason")`
 - Block async runtime with sync I/O
+
+See `.context/boundaries.md` for full ownership map and modification guidelines.
 
 ## Key Types
 
