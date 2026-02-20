@@ -376,7 +376,23 @@ struct RadarrImage {
 #[allow(non_snake_case)]
 struct RadarrMovie {
     TmdbId: Option<i64>,
+    Title: Option<String>,
+    Overview: Option<String>,
+    Year: Option<i32>,
+    Runtime: Option<i32>,
+    Status: Option<String>,
     Images: Vec<RadarrImage>,
+}
+
+/// Full metadata returned from the Radarr metadata proxy
+pub struct RadarrMovieMetadata {
+    pub tmdb_id: i64,
+    pub title: Option<String>,
+    pub overview: Option<String>,
+    pub year: Option<i32>,
+    pub runtime: Option<i32>,
+    pub status: Option<String>,
+    pub images: Vec<MovieImage>,
 }
 
 /// Fetch movie metadata from Radarr's public metadata proxy (no API key required).
@@ -432,6 +448,53 @@ pub async fn fetch_radarr_metadata(imdb_id: &str) -> Option<(i64, Vec<MovieImage
         .collect();
 
     Some((tmdb_id, images))
+}
+
+/// Fetch full movie metadata from Radarr's public metadata proxy
+pub async fn fetch_radarr_full_metadata(imdb_id: &str) -> Option<RadarrMovieMetadata> {
+    let url = format!("https://api.radarr.video/v1/movie/imdb/{}", imdb_id);
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(&url)
+        .header("User-Agent", format!("pir9/{}", env!("CARGO_PKG_VERSION")))
+        .send()
+        .await
+        .ok()?;
+
+    if !resp.status().is_success() {
+        return None;
+    }
+
+    let radarr_list: Vec<RadarrMovie> = resp.json().await.ok()?;
+    let radarr = radarr_list.into_iter().next()?;
+
+    let images: Vec<MovieImage> = radarr
+        .Images
+        .into_iter()
+        .filter_map(|img| {
+            let cover_type = match img.CoverType.as_str() {
+                "Poster" => "poster",
+                "Fanart" => "fanart",
+                _ => return None,
+            };
+            Some(MovieImage {
+                cover_type: cover_type.to_string(),
+                url: img.Url.clone(),
+                remote_url: Some(img.Url),
+            })
+        })
+        .collect();
+
+    Some(RadarrMovieMetadata {
+        tmdb_id: radarr.TmdbId.unwrap_or(0),
+        title: radarr.Title,
+        overview: radarr.Overview,
+        year: radarr.Year,
+        runtime: radarr.Runtime,
+        status: radarr.Status,
+        images,
+    })
 }
 
 /// Fetch poster and fanart images from Radarr metadata API for a given IMDB ID
