@@ -2,11 +2,11 @@
  * Import Lists Settings page
  */
 
-import { BaseComponent, customElement, html, escapeHtml, safeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { httpV3 } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
+import { showError, showSuccess } from '../../stores/app.store';
 import type { ImportListSchema, ProviderField } from './provider-types';
 
 interface ImportList {
@@ -123,7 +123,9 @@ export class ImportListsSettings extends BaseComponent {
           </button>
         </div>
 
-        ${lists.length === 0 ? html`
+        ${
+          lists.length === 0
+            ? html`
           <div class="empty-state">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" color="var(--text-color-muted)">
               <line x1="8" y1="6" x2="21" y2="6"></line>
@@ -136,9 +138,12 @@ export class ImportListsSettings extends BaseComponent {
             <p>No import lists configured</p>
             <p class="hint">Add lists from Trakt, IMDb, or other sources to automatically import series</p>
           </div>
-        ` : html`
+        `
+            : html`
           <div class="lists-grid">
-            ${lists.map((list) => html`
+            ${lists
+              .map(
+                (list) => html`
               <div class="list-card ${list.enableAutomaticAdd ? '' : 'disabled'}">
                 <div class="list-header">
                   <div class="list-icon">
@@ -150,14 +155,22 @@ export class ImportListsSettings extends BaseComponent {
                   </div>
                 </div>
                 <div class="list-features">
-                  ${list.enableAutomaticAdd ? html`
+                  ${
+                    list.enableAutomaticAdd
+                      ? html`
                     <span class="feature enabled">Auto Add</span>
-                  ` : html`
+                  `
+                      : html`
                     <span class="feature disabled">Disabled</span>
-                  `}
-                  ${list.searchForMissingEpisodes ? html`
+                  `
+                  }
+                  ${
+                    list.searchForMissingEpisodes
+                      ? html`
                     <span class="feature enabled">Search</span>
-                  ` : ''}
+                  `
+                      : ''
+                  }
                 </div>
                 <div class="list-actions">
                   <button class="action-btn" onclick="event.stopPropagation(); this.closest('import-lists-settings').handleTest(${list.id})" title="Test">
@@ -179,9 +192,12 @@ export class ImportListsSettings extends BaseComponent {
                   </button>
                 </div>
               </div>
-            `).join('')}
+            `,
+              )
+              .join('')}
           </div>
-        `}
+        `
+        }
       </div>
 
       ${mode === 'select' ? this.renderSelectDialog() : ''}
@@ -196,12 +212,15 @@ export class ImportListsSettings extends BaseComponent {
     const loading = this.schemasLoading.value;
 
     // Group schemas by listType
-    const grouped = schemas.reduce((acc, schema) => {
-      const type = schema.listType || 'other';
-      if (!acc[type]) acc[type] = [];
-      acc[type].push(schema);
-      return acc;
-    }, {} as Record<string, ImportListSchema[]>);
+    const grouped = schemas.reduce(
+      (acc, schema) => {
+        const type = schema.listType || 'other';
+        if (!acc[type]) acc[type] = [];
+        acc[type].push(schema);
+        return acc;
+      },
+      {} as Record<string, ImportListSchema[]>,
+    );
 
     const groupLabels: Record<string, string> = {
       trakt: 'Trakt',
@@ -225,12 +244,15 @@ export class ImportListsSettings extends BaseComponent {
             </button>
           </div>
           <div class="dialog-body">
-            ${loading ? html`
+            ${
+              loading
+                ? html`
               <div class="loading-center">
                 <div class="spinner"></div>
                 <p>Loading available list types...</p>
               </div>
-            ` : html`
+            `
+                : html`
               <div class="info-box">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="12" cy="12" r="10"></circle>
@@ -240,15 +262,20 @@ export class ImportListsSettings extends BaseComponent {
                 <span>Select a list source to configure</span>
               </div>
 
-              ${Object.entries(grouped).map(([type, typeSchemas]) => html`
+              ${Object.entries(grouped)
+                .map(
+                  ([type, typeSchemas]) => html`
                 <div class="provider-section">
                   <h3 class="provider-section-title">${groupLabels[type] || type}</h3>
                   <div class="provider-grid">
                     ${typeSchemas.map((schema) => this.renderSchemaCard(schema)).join('')}
                   </div>
                 </div>
-              `).join('')}
-            `}
+              `,
+                )
+                .join('')}
+            `
+            }
           </div>
           <div class="dialog-footer">
             <button class="btn btn-secondary" onclick="this.closest('import-lists-settings').closeDialog()">
@@ -330,16 +357,22 @@ export class ImportListsSettings extends BaseComponent {
             </button>
           </div>
           <div class="dialog-body">
-            ${testResult ? html`
+            ${
+              testResult
+                ? html`
               <div class="test-result ${testResult.success ? 'success' : 'error'}">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  ${testResult.success
-                    ? '<polyline points="20 6 9 17 4 12"></polyline>'
-                    : '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>'}
+                  ${
+                    testResult.success
+                      ? '<polyline points="20 6 9 17 4 12"></polyline>'
+                      : '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>'
+                  }
                 </svg>
                 <span>${escapeHtml(testResult.message)}</span>
               </div>
-            ` : ''}
+            `
+                : ''
+            }
 
             <form class="provider-form" onsubmit="event.preventDefault()">
               <div class="form-group">
@@ -353,7 +386,7 @@ export class ImportListsSettings extends BaseComponent {
               </div>
 
               ${schema.fields
-                .filter(f => f.hidden !== 'hidden')
+                .filter((f) => f.hidden !== 'hidden')
                 .sort((a, b) => a.order - b.order)
                 .map((field) => this.renderField(field, data))
                 .join('')}
@@ -364,18 +397,26 @@ export class ImportListsSettings extends BaseComponent {
                 <div class="form-group">
                   <label for="qualityProfileId">Quality Profile</label>
                   <select id="qualityProfileId" onchange="this.closest('import-lists-settings').updateField('qualityProfileId', parseInt(this.value))">
-                    ${profiles.map(p => html`
+                    ${profiles
+                      .map(
+                        (p) => html`
                       <option value="${p.id}" ${data.qualityProfileId === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>
-                    `).join('')}
+                    `,
+                      )
+                      .join('')}
                   </select>
                 </div>
 
                 <div class="form-group">
                   <label for="rootFolderPath">Root Folder</label>
                   <select id="rootFolderPath" onchange="this.closest('import-lists-settings').updateField('rootFolderPath', this.value)">
-                    ${rootFolders.map(f => html`
+                    ${rootFolders
+                      .map(
+                        (f) => html`
                       <option value="${f.path}" ${data.rootFolderPath === f.path ? 'selected' : ''}>${escapeHtml(f.path)}</option>
-                    `).join('')}
+                    `,
+                      )
+                      .join('')}
                   </select>
                 </div>
 
@@ -500,9 +541,13 @@ export class ImportListsSettings extends BaseComponent {
           <div class="form-group">
             <label for="${fieldId}">${escapeHtml(field.label)}</label>
             <select id="${fieldId}" onchange="this.closest('import-lists-settings').updateField('${field.name}', this.value)">
-              ${(field.selectOptions || []).map((opt) => html`
+              ${(field.selectOptions || [])
+                .map(
+                  (opt) => html`
                 <option value="${opt.value}" ${String(value) === String(opt.value) ? 'selected' : ''}>${escapeHtml(opt.name)}</option>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </select>
             ${field.helpText ? html`<p class="help-text">${escapeHtml(field.helpText)}</p>` : ''}
           </div>
@@ -535,7 +580,7 @@ export class ImportListsSettings extends BaseComponent {
   }
 
   selectSchema(implementation: string): void {
-    const schema = this.schemas.value.find(s => s.implementation === implementation);
+    const schema = this.schemas.value.find((s) => s.implementation === implementation);
     if (!schema) return;
 
     this.selectedSchema.set(schema);
@@ -556,7 +601,7 @@ export class ImportListsSettings extends BaseComponent {
       seriesType: 'standard',
       seasonFolder: true,
     };
-    schema.fields.forEach(f => {
+    schema.fields.forEach((f) => {
       data[f.name] = f.value;
     });
     this.formData.set(data);
@@ -568,7 +613,7 @@ export class ImportListsSettings extends BaseComponent {
     try {
       const list = await httpV3.get<ImportList>(`/importlist/${id}`);
       const schemas = await httpV3.get<ImportListSchema[]>('/importlist/schema');
-      const schema = schemas.find(s => s.implementation === list.implementation);
+      const schema = schemas.find((s) => s.implementation === list.implementation);
 
       if (!schema) {
         showError('Unknown list type');
@@ -578,9 +623,9 @@ export class ImportListsSettings extends BaseComponent {
       // Merge schema field definitions with list values
       const mergedSchema: ImportListSchema = {
         ...schema,
-        fields: schema.fields.map(f => ({
+        fields: schema.fields.map((f) => ({
           ...f,
-          value: list.fields.find(lf => lf.name === f.name)?.value ?? f.value,
+          value: list.fields.find((lf) => lf.name === f.name)?.value ?? f.value,
         })),
       };
 
@@ -600,7 +645,7 @@ export class ImportListsSettings extends BaseComponent {
         seriesType: list.seriesType,
         seasonFolder: list.seasonFolder,
       };
-      mergedSchema.fields.forEach(f => {
+      mergedSchema.fields.forEach((f) => {
         data[f.name] = f.value;
       });
       this.formData.set(data);
@@ -678,7 +723,7 @@ export class ImportListsSettings extends BaseComponent {
     if (!schema) return {};
 
     const data = this.formData.value;
-    const fields = schema.fields.map(f => ({
+    const fields = schema.fields.map((f) => ({
       name: f.name,
       value: data[f.name],
     }));

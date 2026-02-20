@@ -2,7 +2,14 @@
  * Dropdown menu component
  */
 
-import { BaseComponent, customElement, attribute, html, escapeHtml, safeHtml } from '../../core/component';
+import {
+  attribute,
+  BaseComponent,
+  customElement,
+  escapeHtml,
+  html,
+  safeHtml,
+} from '../../core/component';
 
 export interface MenuItem {
   id: string;
@@ -63,11 +70,15 @@ export class UIDropdownMenu extends BaseComponent {
             </button>
           </slot>
         </div>
-        ${this.open ? html`
+        ${
+          this.open
+            ? html`
           <div class="dropdown-menu ${this.position}">
             ${this._items.map((item) => this.renderItem(item)).join('')}
           </div>
-        ` : ''}
+        `
+            : ''
+        }
       </div>
 
       <style>

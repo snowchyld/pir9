@@ -2,9 +2,9 @@
  * Metadata Settings page
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http } from '../../core/http';
+import { createQuery } from '../../core/query';
 import { showSuccess } from '../../stores/app.store';
 
 interface Metadata {
@@ -46,7 +46,9 @@ export class MetadataSettings extends BaseComponent {
         </p>
 
         <div class="metadata-list">
-          ${metadata.map((m) => html`
+          ${metadata
+            .map(
+              (m) => html`
             <div class="metadata-card ${m.enable ? '' : 'disabled'}" onclick="this.closest('metadata-settings').handleEdit(${m.id})">
               <div class="metadata-info">
                 <div class="metadata-name">${escapeHtml(m.name)}</div>
@@ -58,7 +60,9 @@ export class MetadataSettings extends BaseComponent {
                 </span>
               </div>
             </div>
-          `).join('')}
+          `,
+            )
+            .join('')}
         </div>
       </div>
 

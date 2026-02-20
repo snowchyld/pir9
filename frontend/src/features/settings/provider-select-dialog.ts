@@ -3,7 +3,7 @@
  * Shows available implementations grouped by protocol/type
  */
 
-import { BaseComponent, customElement, html, escapeHtml, safeHtml } from '../../core/component';
+import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { signal } from '../../core/reactive';
 import type { ProviderSchema } from './provider-types';
 
@@ -66,27 +66,24 @@ export class ProviderSelectDialog extends BaseComponent {
     this.close();
   }
 
-  private handleBackdropClick(e: Event): void {
-    if ((e.target as HTMLElement).classList.contains('dialog-backdrop')) {
-      this.close();
-    }
-  }
-
   private groupSchemas(schemas: ProviderSchema[]): Record<string, ProviderSchema[]> {
     const config = this.config.value;
     if (!config || config.groupBy === 'none') {
       return { all: schemas };
     }
 
-    return schemas.reduce((groups, schema) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const key = (schema as any)[config.groupBy!] as string || 'other';
-      if (!groups[key]) {
-        groups[key] = [];
-      }
-      groups[key].push(schema);
-      return groups;
-    }, {} as Record<string, ProviderSchema[]>);
+    return schemas.reduce(
+      (groups, schema) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const key = ((schema as any)[config.groupBy!] as string) || 'other';
+        if (!groups[key]) {
+          groups[key] = [];
+        }
+        groups[key].push(schema);
+        return groups;
+      },
+      {} as Record<string, ProviderSchema[]>,
+    );
   }
 
   protected template(): string {
@@ -112,12 +109,16 @@ export class ProviderSelectDialog extends BaseComponent {
           </div>
 
           <div class="dialog-body">
-            ${isLoading ? html`
+            ${
+              isLoading
+                ? html`
               <div class="loading">
                 <div class="spinner"></div>
                 <p>Loading available options...</p>
               </div>
-            ` : error ? html`
+            `
+                : error
+                  ? html`
               <div class="error-message">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="12" cy="12" r="10"></circle>
@@ -126,7 +127,8 @@ export class ProviderSelectDialog extends BaseComponent {
                 </svg>
                 <p>${escapeHtml(error)}</p>
               </div>
-            ` : html`
+            `
+                  : html`
               <div class="info-box">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="12" cy="12" r="10"></circle>
@@ -136,17 +138,26 @@ export class ProviderSelectDialog extends BaseComponent {
                 <span>Select a provider to configure</span>
               </div>
 
-              ${Object.entries(grouped).map(([group, items]) => html`
-                ${config.groupBy !== 'none' && Object.keys(grouped).length > 1 ? html`
+              ${Object.entries(grouped)
+                .map(
+                  ([group, items]) => html`
+                ${
+                  config.groupBy !== 'none' && Object.keys(grouped).length > 1
+                    ? html`
                   <div class="group-header">
                     <h3>${escapeHtml(config.groupLabels?.[group] || group)}</h3>
                   </div>
-                ` : ''}
+                `
+                    : ''
+                }
                 <div class="provider-grid">
                   ${items.map((schema) => this.renderProviderCard(schema)).join('')}
                 </div>
-              `).join('')}
-            `}
+              `,
+                )
+                .join('')}
+            `
+            }
           </div>
 
           <div class="dialog-footer">
@@ -187,7 +198,7 @@ export class ProviderSelectDialog extends BaseComponent {
     }
   }
 
-  private getProviderIcon(implementation: string): string {
+  private getProviderIcon(_implementation: string): string {
     // Return a generic icon - could be extended with specific icons per provider
     return `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>

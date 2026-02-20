@@ -3,9 +3,9 @@
  * Contains the main layout structure
  */
 
-import { BaseComponent, customElement, html, safeHtml } from './core/component';
+import { BaseComponent, customElement, html } from './core/component';
 import { wsManager } from './core/websocket';
-import { sidebarCollapsed, mobileMenuOpen, closeMobileMenu } from './stores/app.store';
+import { closeMobileMenu, mobileMenuOpen, sidebarCollapsed } from './stores/app.store';
 
 @customElement('app-root')
 export class AppRoot extends BaseComponent {

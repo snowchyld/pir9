@@ -2,9 +2,9 @@
  * System Status page
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http } from '../../core/http';
+import { createQuery } from '../../core/query';
 
 interface SystemStatus {
   appName: string;
@@ -95,11 +95,15 @@ export class SystemStatusPage extends BaseComponent {
       <div class="status-page">
         <h1 class="page-title">System Status</h1>
 
-        ${health.length > 0 ? html`
+        ${
+          health.length > 0
+            ? html`
           <div class="health-section">
             <h2 class="section-title">Health</h2>
             <div class="health-list">
-              ${health.map((h) => html`
+              ${health
+                .map(
+                  (h) => html`
                 <div class="health-item ${h.type}">
                   <div class="health-icon">
                     ${h.type === 'error' ? '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>' : ''}
@@ -110,16 +114,24 @@ export class SystemStatusPage extends BaseComponent {
                     <div class="health-source">${escapeHtml(h.source)}</div>
                     <div class="health-message">${escapeHtml(h.message)}</div>
                   </div>
-                  ${h.wikiUrl ? html`
+                  ${
+                    h.wikiUrl
+                      ? html`
                     <a class="health-wiki" href="${h.wikiUrl}" target="_blank" rel="noopener">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
                     </a>
-                  ` : ''}
+                  `
+                      : ''
+                  }
                 </div>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </div>
           </div>
-        ` : ''}
+        `
+            : ''
+        }
 
         <div class="info-section">
           <h2 class="section-title">About</h2>
@@ -182,9 +194,10 @@ export class SystemStatusPage extends BaseComponent {
         <div class="info-section">
           <h2 class="section-title">Disk Space</h2>
           <div class="disk-list">
-            ${diskSpace.map((disk) => {
-              const usedPercent = ((disk.totalSpace - disk.freeSpace) / disk.totalSpace) * 100;
-              return html`
+            ${diskSpace
+              .map((disk) => {
+                const usedPercent = ((disk.totalSpace - disk.freeSpace) / disk.totalSpace) * 100;
+                return html`
                 <div class="disk-item">
                   <div class="disk-header">
                     <span class="disk-label">${escapeHtml(disk.label || disk.path)}</span>
@@ -199,7 +212,8 @@ export class SystemStatusPage extends BaseComponent {
                   </div>
                 </div>
               `;
-            }).join('')}
+              })
+              .join('')}
           </div>
         </div>
       </div>
@@ -399,6 +413,6 @@ export class SystemStatusPage extends BaseComponent {
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+    return `${parseFloat((bytes / k ** i).toFixed(1))} ${sizes[i]}`;
   }
 }

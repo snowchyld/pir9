@@ -2,7 +2,14 @@
  * Tabs component
  */
 
-import { BaseComponent, customElement, attribute, html, escapeHtml, safeHtml } from '../../core/component';
+import {
+  attribute,
+  BaseComponent,
+  customElement,
+  escapeHtml,
+  html,
+  safeHtml,
+} from '../../core/component';
 
 export interface Tab {
   id: string;

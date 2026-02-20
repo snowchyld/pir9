@@ -3,9 +3,9 @@
  * Handles connection, reconnection, and message routing
  */
 
-import { signal, type Signal } from './reactive';
-import { invalidateQueries, setQueryData, getQueryData } from './query';
-import type { Command, Series } from './http';
+import type { Command } from './http';
+import { getQueryData, invalidateQueries, setQueryData } from './query';
+import { type Signal, signal } from './reactive';
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error';
 
@@ -23,7 +23,12 @@ export interface CommandMessage extends WebSocketMessage {
 }
 
 export interface SeriesMessage extends WebSocketMessage {
-  type: 'series_refreshed' | 'series_scanned' | 'series_updated' | 'series_added' | 'series_deleted';
+  type:
+    | 'series_refreshed'
+    | 'series_scanned'
+    | 'series_updated'
+    | 'series_added'
+    | 'series_deleted';
   series_id: number;
   title: string;
   files_found?: number;
@@ -108,7 +113,7 @@ class WebSocketManager {
     if (!this.handlers.has(type)) {
       this.handlers.set(type, new Set());
     }
-    this.handlers.get(type)!.add(handler);
+    this.handlers.get(type)?.add(handler);
 
     // Return unsubscribe function
     return () => {
@@ -176,10 +181,14 @@ class WebSocketManager {
     this.lastMessage.set(message);
 
     // Notify type-specific handlers
-    this.handlers.get(message.type)?.forEach((handler) => handler(message));
+    this.handlers.get(message.type)?.forEach((handler) => {
+      handler(message);
+    });
 
     // Notify wildcard handlers
-    this.handlers.get('*')?.forEach((handler) => handler(message));
+    this.handlers.get('*')?.forEach((handler) => {
+      handler(message);
+    });
 
     // Handle built-in message types
     this.handleBuiltInMessage(message);
@@ -259,7 +268,13 @@ class WebSocketManager {
   }
 
   private handleSeriesMessage(message: SeriesMessage): void {
-    console.log('[WebSocket] Series event:', message.type, message.title, 'series_id:', message.series_id);
+    console.log(
+      '[WebSocket] Series event:',
+      message.type,
+      message.title,
+      'series_id:',
+      message.series_id,
+    );
 
     // Invalidate ALL series and episode queries
     // TanStack Query uses prefix matching, so ['/series'] will match all series queries
@@ -300,12 +315,13 @@ class WebSocketManager {
 
     // Exponential backoff with jitter
     const delay = Math.min(
-      this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1) +
-        Math.random() * 1000,
-      30000 // Max 30 seconds
+      this.reconnectDelay * 2 ** (this.reconnectAttempts - 1) + Math.random() * 1000,
+      30000, // Max 30 seconds
     );
 
-    console.log(`[WebSocket] Reconnecting in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempts})`);
+    console.log(
+      `[WebSocket] Reconnecting in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempts})`,
+    );
 
     this.reconnectTimer = window.setTimeout(() => {
       this.connect();

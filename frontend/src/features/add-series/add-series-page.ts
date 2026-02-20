@@ -2,12 +2,12 @@
  * Add Series page - search and add new series
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http, type Series } from '../../core/http';
-import { navigate } from '../../router';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
+import { navigate } from '../../router';
+import { showError, showSuccess } from '../../stores/app.store';
 
 interface SearchResult {
   tvdbId: number;
@@ -53,8 +53,7 @@ export class AddSeriesPage extends BaseComponent {
   });
 
   private addSeriesMutation = createMutation({
-    mutationFn: (series: Partial<Series>) =>
-      http.post<Series>('/series', series),
+    mutationFn: (series: Partial<Series>) => http.post<Series>('/series', series),
     onSuccess: (data) => {
       invalidateQueries(['/series']);
       showSuccess('Series added successfully');
@@ -111,16 +110,22 @@ export class AddSeriesPage extends BaseComponent {
 
         ${selected ? this.renderAddForm(selected, rootFolders, qualityProfiles) : ''}
 
-        ${!selected && results.length > 0 ? html`
+        ${
+          !selected && results.length > 0
+            ? html`
           <div class="results-section">
             <h2 class="section-title">Search Results</h2>
             <div class="results-grid">
               ${results.map((result) => this.renderSearchResult(result)).join('')}
             </div>
           </div>
-        ` : ''}
+        `
+            : ''
+        }
 
-        ${!selected && results.length === 0 && this.searchTerm.value && !isSearching ? html`
+        ${
+          !selected && results.length === 0 && this.searchTerm.value && !isSearching
+            ? html`
           <div class="empty-state">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" color="var(--text-color-muted)">
               <circle cx="11" cy="11" r="8"></circle>
@@ -129,7 +134,9 @@ export class AddSeriesPage extends BaseComponent {
             <p>No series found</p>
             <p class="hint">Try a different search term</p>
           </div>
-        ` : ''}
+        `
+            : ''
+        }
 
         <div class="import-link">
           <a href="/add/import" onclick="event.preventDefault(); this.closest('add-series-page').navigateToImport()">
@@ -468,9 +475,12 @@ export class AddSeriesPage extends BaseComponent {
     return html`
       <div class="result-card" onclick="this.closest('add-series-page').selectSeries(${result.tvdbId})">
         <div class="result-poster">
-          ${result.remotePoster ? html`
+          ${
+            result.remotePoster
+              ? html`
             <img src="${result.remotePoster}" alt="${escapeHtml(result.title)}" loading="lazy" />
-          ` : html`
+          `
+              : html`
             <div class="result-poster-placeholder">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
@@ -478,7 +488,8 @@ export class AddSeriesPage extends BaseComponent {
                 <line x1="17" y1="2" x2="17" y2="22"></line>
               </svg>
             </div>
-          `}
+          `
+          }
         </div>
         <div class="result-info">
           <div class="result-title">${escapeHtml(result.title)}</div>
@@ -489,7 +500,11 @@ export class AddSeriesPage extends BaseComponent {
     `;
   }
 
-  private renderAddForm(series: SearchResult, rootFolders: RootFolder[], profiles: QualityProfile[]): string {
+  private renderAddForm(
+    series: SearchResult,
+    rootFolders: RootFolder[],
+    profiles: QualityProfile[],
+  ): string {
     return html`
       <div class="add-form">
         <button class="back-btn" onclick="this.closest('add-series-page').clearSelection()">
@@ -498,9 +513,13 @@ export class AddSeriesPage extends BaseComponent {
 
         <div class="form-header">
           <div class="form-poster">
-            ${series.remotePoster ? html`
+            ${
+              series.remotePoster
+                ? html`
               <img src="${series.remotePoster}" alt="${escapeHtml(series.title)}" />
-            ` : ''}
+            `
+                : ''
+            }
           </div>
           <div class="form-series-info">
             <h2 class="form-title">${escapeHtml(series.title)}</h2>
@@ -513,18 +532,26 @@ export class AddSeriesPage extends BaseComponent {
           <div class="form-group">
             <label class="form-label">Root Folder</label>
             <select class="form-select" id="rootFolder">
-              ${rootFolders.map((folder) => html`
+              ${rootFolders
+                .map(
+                  (folder) => html`
                 <option value="${folder.path}">${escapeHtml(folder.path)}</option>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </select>
           </div>
 
           <div class="form-group">
             <label class="form-label">Quality Profile</label>
             <select class="form-select" id="qualityProfile">
-              ${profiles.map((profile) => html`
+              ${profiles
+                .map(
+                  (profile) => html`
                 <option value="${profile.id}">${escapeHtml(profile.name)}</option>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </select>
           </div>
 
@@ -620,10 +647,15 @@ export class AddSeriesPage extends BaseComponent {
     if (!series) return;
 
     const rootFolder = (this.shadowRoot?.getElementById('rootFolder') as HTMLSelectElement)?.value;
-    const qualityProfileId = parseInt((this.shadowRoot?.getElementById('qualityProfile') as HTMLSelectElement)?.value ?? '0');
+    const qualityProfileId = parseInt(
+      (this.shadowRoot?.getElementById('qualityProfile') as HTMLSelectElement)?.value ?? '0',
+      10,
+    );
     const seriesType = (this.shadowRoot?.getElementById('seriesType') as HTMLSelectElement)?.value;
-    const seasonFolder = (this.shadowRoot?.getElementById('seasonFolder') as HTMLInputElement)?.checked ?? true;
-    const searchOnAdd = (this.shadowRoot?.getElementById('searchOnAdd') as HTMLInputElement)?.checked ?? true;
+    const seasonFolder =
+      (this.shadowRoot?.getElementById('seasonFolder') as HTMLInputElement)?.checked ?? true;
+    const searchOnAdd =
+      (this.shadowRoot?.getElementById('searchOnAdd') as HTMLInputElement)?.checked ?? true;
 
     // Using querySelector on the component itself since we use Light DOM
     const form = this.querySelector('.add-form');
@@ -636,7 +668,7 @@ export class AddSeriesPage extends BaseComponent {
     this.addSeriesMutation.mutate({
       tvdbId: series.tvdbId,
       title: series.title,
-      qualityProfileId: qualityProfileEl ? parseInt(qualityProfileEl.value) : qualityProfileId,
+      qualityProfileId: qualityProfileEl ? parseInt(qualityProfileEl.value, 10) : qualityProfileId,
       rootFolderPath: rootFolderEl?.value ?? rootFolder,
       seriesType: seriesTypeEl?.value ?? seriesType,
       seasonFolder: seasonFolderEl?.checked ?? seasonFolder,

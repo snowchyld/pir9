@@ -2,9 +2,9 @@
  * System Logs page
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http } from '../../core/http';
+import { createQuery } from '../../core/query';
 import { signal } from '../../core/reactive';
 
 interface LogFile {
@@ -36,9 +36,10 @@ export class SystemLogsPage extends BaseComponent {
 
   private logsQuery = createQuery({
     queryKey: ['/log'],
-    queryFn: () => http.get<LogResponse>('/log', {
-      params: { pageSize: 100 },
-    }),
+    queryFn: () =>
+      http.get<LogResponse>('/log', {
+        params: { pageSize: 100 },
+      }),
   });
 
   private logFilesQuery = createQuery({
@@ -60,9 +61,7 @@ export class SystemLogsPage extends BaseComponent {
     const isLoading = this.logsQuery.isLoading.value;
     const level = this.selectedLevel.value;
 
-    const filteredLogs = level === 'all'
-      ? logs
-      : logs.filter((log) => log.level === level);
+    const filteredLogs = level === 'all' ? logs : logs.filter((log) => log.level === level);
 
     if (isLoading) {
       return html`
@@ -105,9 +104,14 @@ export class SystemLogsPage extends BaseComponent {
 
         <div class="logs-section">
           <div class="log-entries">
-            ${filteredLogs.length === 0 ? html`
+            ${
+              filteredLogs.length === 0
+                ? html`
               <div class="empty-state">No log entries found</div>
-            ` : filteredLogs.map((log) => html`
+            `
+                : filteredLogs
+                    .map(
+                      (log) => html`
               <div class="log-entry ${log.level}">
                 <div class="log-header">
                   <span class="log-level ${log.level}">${log.level.toUpperCase()}</span>
@@ -115,19 +119,30 @@ export class SystemLogsPage extends BaseComponent {
                   <span class="log-logger">${escapeHtml(log.logger)}</span>
                 </div>
                 <div class="log-message">${escapeHtml(log.message)}</div>
-                ${log.exception ? html`
+                ${
+                  log.exception
+                    ? html`
                   <pre class="log-exception">${escapeHtml(log.exception)}</pre>
-                ` : ''}
+                `
+                    : ''
+                }
               </div>
-            `).join('')}
+            `,
+                    )
+                    .join('')
+            }
           </div>
         </div>
 
-        ${logFiles.length > 0 ? html`
+        ${
+          logFiles.length > 0
+            ? html`
           <div class="files-section">
             <h2 class="section-title">Log Files</h2>
             <div class="files-list">
-              ${logFiles.map((file) => html`
+              ${logFiles
+                .map(
+                  (file) => html`
                 <div class="file-item">
                   <span class="file-name">${escapeHtml(file.filename)}</span>
                   <span class="file-date">${new Date(file.lastWriteTime).toLocaleString()}</span>
@@ -144,10 +159,14 @@ export class SystemLogsPage extends BaseComponent {
                     </svg>
                   </a>
                 </div>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </div>
           </div>
-        ` : ''}
+        `
+            : ''
+        }
       </div>
 
       <style>

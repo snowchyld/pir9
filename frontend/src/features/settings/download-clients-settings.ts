@@ -2,11 +2,11 @@
  * Download Clients Settings page
  */
 
-import { BaseComponent, customElement, html, escapeHtml, safeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { httpV3 } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
+import { showError, showSuccess } from '../../stores/app.store';
 import type { DownloadClientSchema, ProviderField } from './provider-types';
 
 interface DownloadClient {
@@ -94,7 +94,9 @@ export class DownloadClientsSettings extends BaseComponent {
           </button>
         </div>
 
-        ${clients.length === 0 ? html`
+        ${
+          clients.length === 0
+            ? html`
           <div class="empty-state">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" color="var(--text-color-muted)">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -104,9 +106,12 @@ export class DownloadClientsSettings extends BaseComponent {
             <p>No download clients configured</p>
             <p class="hint">Add a download client to start downloading</p>
           </div>
-        ` : html`
+        `
+            : html`
           <div class="clients-list">
-            ${clients.map((client) => html`
+            ${clients
+              .map(
+                (client) => html`
               <div class="client-card ${client.enable ? '' : 'disabled'}">
                 <div class="client-info">
                   <div class="client-name">
@@ -139,9 +144,12 @@ export class DownloadClientsSettings extends BaseComponent {
                   </button>
                 </div>
               </div>
-            `).join('')}
+            `,
+              )
+              .join('')}
           </div>
-        `}
+        `
+        }
       </div>
 
       ${mode === 'select' ? this.renderSelectDialog() : ''}
@@ -155,8 +163,8 @@ export class DownloadClientsSettings extends BaseComponent {
     const schemas = this.schemas.value;
     const loading = this.schemasLoading.value;
 
-    const usenetSchemas = schemas.filter(s => s.protocol === 'usenet');
-    const torrentSchemas = schemas.filter(s => s.protocol === 'torrent');
+    const usenetSchemas = schemas.filter((s) => s.protocol === 'usenet');
+    const torrentSchemas = schemas.filter((s) => s.protocol === 'torrent');
 
     return html`
       <div class="dialog-backdrop" onclick="if(event.target.classList.contains('dialog-backdrop')) this.closest('download-clients-settings').closeDialog()">
@@ -171,12 +179,15 @@ export class DownloadClientsSettings extends BaseComponent {
             </button>
           </div>
           <div class="dialog-body">
-            ${loading ? html`
+            ${
+              loading
+                ? html`
               <div class="loading-center">
                 <div class="spinner"></div>
                 <p>Loading available clients...</p>
               </div>
-            ` : html`
+            `
+                : html`
               <div class="info-box">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="12" cy="12" r="10"></circle>
@@ -186,20 +197,29 @@ export class DownloadClientsSettings extends BaseComponent {
                 <span>Select a download client to configure</span>
               </div>
 
-              ${usenetSchemas.length > 0 ? html`
+              ${
+                usenetSchemas.length > 0
+                  ? html`
                 <div class="group-header"><h3>Usenet</h3></div>
                 <div class="provider-grid">
                   ${usenetSchemas.map((schema) => this.renderSchemaCard(schema)).join('')}
                 </div>
-              ` : ''}
+              `
+                  : ''
+              }
 
-              ${torrentSchemas.length > 0 ? html`
+              ${
+                torrentSchemas.length > 0
+                  ? html`
                 <div class="group-header"><h3>Torrents</h3></div>
                 <div class="provider-grid">
                   ${torrentSchemas.map((schema) => this.renderSchemaCard(schema)).join('')}
                 </div>
-              ` : ''}
-            `}
+              `
+                  : ''
+              }
+            `
+            }
           </div>
           <div class="dialog-footer">
             <button class="btn btn-secondary" onclick="this.closest('download-clients-settings').closeDialog()">
@@ -249,16 +269,22 @@ export class DownloadClientsSettings extends BaseComponent {
             </button>
           </div>
           <div class="dialog-body">
-            ${testResult ? html`
+            ${
+              testResult
+                ? html`
               <div class="test-result ${testResult.success ? 'success' : 'error'}">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  ${testResult.success
-                    ? '<polyline points="20 6 9 17 4 12"></polyline>'
-                    : '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>'}
+                  ${
+                    testResult.success
+                      ? '<polyline points="20 6 9 17 4 12"></polyline>'
+                      : '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>'
+                  }
                 </svg>
                 <span>${escapeHtml(testResult.message)}</span>
               </div>
-            ` : ''}
+            `
+                : ''
+            }
 
             <form class="provider-form" onsubmit="event.preventDefault()">
               <div class="form-group">
@@ -283,7 +309,7 @@ export class DownloadClientsSettings extends BaseComponent {
               </div>
 
               ${schema.fields
-                .filter(f => f.hidden !== 'hidden')
+                .filter((f) => f.hidden !== 'hidden')
                 .sort((a, b) => a.order - b.order)
                 .map((field) => this.renderField(field, data))
                 .join('')}
@@ -426,11 +452,15 @@ export class DownloadClientsSettings extends BaseComponent {
               id="${fieldId}"
               onchange="this.closest('download-clients-settings').updateField('${field.name}', this.value)"
             >
-              ${(field.selectOptions || []).map((opt) => html`
+              ${(field.selectOptions || [])
+                .map(
+                  (opt) => html`
                 <option value="${opt.value}" ${String(value) === String(opt.value) ? 'selected' : ''}>
                   ${escapeHtml(opt.name)}
                 </option>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </select>
             ${field.helpText ? html`<p class="help-text">${escapeHtml(field.helpText)}</p>` : ''}
           </div>
@@ -468,7 +498,7 @@ export class DownloadClientsSettings extends BaseComponent {
   }
 
   selectSchema(implementation: string): void {
-    const schema = this.schemas.value.find(s => s.implementation === implementation);
+    const schema = this.schemas.value.find((s) => s.implementation === implementation);
     if (!schema) return;
 
     this.selectedSchema.set(schema);
@@ -483,7 +513,7 @@ export class DownloadClientsSettings extends BaseComponent {
       removeCompletedDownloads: true,
       removeFailedDownloads: true,
     };
-    schema.fields.forEach(f => {
+    schema.fields.forEach((f) => {
       data[f.name] = f.value;
     });
     this.formData.set(data);
@@ -495,7 +525,7 @@ export class DownloadClientsSettings extends BaseComponent {
     try {
       const client = await httpV3.get<DownloadClient>(`/downloadclient/${id}`);
       const schemas = await httpV3.get<DownloadClientSchema[]>('/downloadclient/schema');
-      const schema = schemas.find(s => s.implementation === client.implementation);
+      const schema = schemas.find((s) => s.implementation === client.implementation);
 
       if (!schema) {
         showError('Unknown download client type');
@@ -505,9 +535,9 @@ export class DownloadClientsSettings extends BaseComponent {
       // Merge schema field definitions with client values
       const mergedSchema: DownloadClientSchema = {
         ...schema,
-        fields: schema.fields.map(f => ({
+        fields: schema.fields.map((f) => ({
           ...f,
-          value: client.fields.find(cf => cf.name === f.name)?.value ?? f.value,
+          value: client.fields.find((cf) => cf.name === f.name)?.value ?? f.value,
         })),
       };
 
@@ -524,7 +554,7 @@ export class DownloadClientsSettings extends BaseComponent {
         removeCompletedDownloads: client.removeCompletedDownloads ?? true,
         removeFailedDownloads: client.removeFailedDownloads ?? true,
       };
-      mergedSchema.fields.forEach(f => {
+      mergedSchema.fields.forEach((f) => {
         data[f.name] = f.value;
       });
       this.formData.set(data);
@@ -611,7 +641,7 @@ export class DownloadClientsSettings extends BaseComponent {
     if (!schema) return {};
 
     const data = this.formData.value;
-    const fields = schema.fields.map(f => ({
+    const fields = schema.fields.map((f) => ({
       name: f.name,
       value: data[f.name],
     }));

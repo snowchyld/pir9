@@ -16,7 +16,7 @@ export class HttpError extends Error {
   constructor(
     public status: number,
     message: string,
-    public errors?: Record<string, string[]>
+    public errors?: Record<string, string[]>,
   ) {
     super(message);
     this.name = 'HttpError';
@@ -35,7 +35,7 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
 function buildUrl(
   path: string,
   params?: Record<string, string | number | boolean | undefined>,
-  apiBase: string = API_BASE
+  apiBase: string = API_BASE,
 ): string {
   const url = new URL(`${apiBase}${path}`, window.location.origin);
 
@@ -89,11 +89,7 @@ async function handleError(response: Response): Promise<never> {
 /**
  * Core fetch wrapper
  */
-async function request<T>(
-  method: string,
-  path: string,
-  options: RequestOptions = {}
-): Promise<T> {
+async function request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
   const { params, body, headers: customHeaders, apiBase, ...fetchOptions } = options;
 
   const url = buildUrl(path, params, apiBase);
@@ -182,16 +178,14 @@ export const api = {
     list: () => http.get<Series[]>('/series'),
     get: (id: number) => http.get<Series>(`/series/${id}`),
     create: (data: Partial<Series>) => http.post<Series>('/series', data),
-    update: (id: number, data: Partial<Series>) =>
-      http.put<Series>(`/series/${id}`, data),
+    update: (id: number, data: Partial<Series>) => http.put<Series>(`/series/${id}`, data),
     delete: (id: number, params?: { deleteFiles?: boolean }) =>
       http.delete<void>(`/series/${id}`, { params }),
   },
 
   // Episodes
   episode: {
-    list: (seriesId: number) =>
-      http.get<Episode[]>('/episode', { params: { seriesId } }),
+    list: (seriesId: number) => http.get<Episode[]>('/episode', { params: { seriesId } }),
     get: (id: number) => http.get<Episode>(`/episode/${id}`),
   },
 
@@ -226,12 +220,10 @@ export const api = {
     list: () => http.get<Movie[]>('/movie'),
     get: (id: number) => http.get<Movie>(`/movie/${id}`),
     create: (data: Partial<Movie>) => http.post<Movie>('/movie', data),
-    update: (id: number, data: Partial<Movie>) =>
-      http.put<Movie>(`/movie/${id}`, data),
+    update: (id: number, data: Partial<Movie>) => http.put<Movie>(`/movie/${id}`, data),
     delete: (id: number, params?: { deleteFiles?: boolean }) =>
       http.delete<void>(`/movie/${id}`, { params }),
-    lookup: (term: string) =>
-      http.get<MovieLookupResult[]>('/movie/lookup', { params: { term } }),
+    lookup: (term: string) => http.get<MovieLookupResult[]>('/movie/lookup', { params: { term } }),
   },
 
   // System

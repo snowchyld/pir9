@@ -2,23 +2,25 @@
  * Series index page - main grid/table view
  */
 
-import { BaseComponent, customElement, html, escapeHtml, safeHtml } from '../../core/component';
-import { useSeriesQuery } from '../../core/query';
-import {
-  seriesViewMode,
-  seriesSortKey,
-  seriesSortDirection,
-  seriesFilter,
-  searchQuery,
-  setSeriesViewMode,
-  setSeriesSort,
-  setSeriesFilter,
-  type ViewMode,
-  type SeriesSortKey,
-} from '../../stores/app.store';
-import { navigate } from '../../router';
+import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { http, type Series } from '../../core/http';
-import { showSuccess, showError, showInfo } from '../../stores/app.store';
+import { useSeriesQuery } from '../../core/query';
+import { navigate } from '../../router';
+import {
+  type SeriesSortKey,
+  searchQuery,
+  seriesFilter,
+  seriesSortDirection,
+  seriesSortKey,
+  seriesViewMode,
+  setSeriesFilter,
+  setSeriesSort,
+  setSeriesViewMode,
+  showError,
+  showInfo,
+  showSuccess,
+  type ViewMode,
+} from '../../stores/app.store';
 
 @customElement('series-index-page')
 export class SeriesIndexPage extends BaseComponent {
@@ -50,9 +52,8 @@ export class SeriesIndexPage extends BaseComponent {
 
     // Apply search filter
     if (search) {
-      filtered = filtered.filter((s) =>
-        s.title.toLowerCase().includes(search) ||
-        s.network?.toLowerCase().includes(search)
+      filtered = filtered.filter(
+        (s) => s.title.toLowerCase().includes(search) || s.network?.toLowerCase().includes(search),
       );
     }
 
@@ -753,9 +754,10 @@ export class SeriesIndexPage extends BaseComponent {
 
   private renderViewModeButton(mode: ViewMode, label: string): string {
     const active = seriesViewMode.value === mode;
-    const icon = mode === 'posters'
-      ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>'
-      : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>';
+    const icon =
+      mode === 'posters'
+        ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>'
+        : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>';
 
     return html`
       <button
@@ -829,9 +831,7 @@ export class SeriesIndexPage extends BaseComponent {
 
   private renderPosterCard(series: Series): string {
     const poster = series.images?.find((i) => i.coverType === 'poster');
-    const statusClass = series.monitored
-      ? series.status
-      : 'unmonitored';
+    const statusClass = series.monitored ? series.status : 'unmonitored';
 
     return html`
       <div
@@ -839,9 +839,10 @@ export class SeriesIndexPage extends BaseComponent {
         onclick="this.closest('series-index-page').handleSeriesClick('${escapeHtml(series.titleSlug)}')"
       >
         <div class="poster-status ${statusClass}"></div>
-        ${poster
-          ? `<img class="poster-image" src="${escapeHtml(poster.url)}" alt="${escapeHtml(series.title)}" loading="lazy" />`
-          : '<div class="poster-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect><polyline points="17 2 12 7 7 2"></polyline></svg></div>'
+        ${
+          poster
+            ? `<img class="poster-image" src="${escapeHtml(poster.url)}" alt="${escapeHtml(series.title)}" loading="lazy" />`
+            : '<div class="poster-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect><polyline points="17 2 12 7 7 2"></polyline></svg></div>'
         }
         <div class="poster-info">
           <div class="poster-title" title="${escapeHtml(series.title)}">${escapeHtml(series.title)}</div>
@@ -854,9 +855,10 @@ export class SeriesIndexPage extends BaseComponent {
   private renderTable(series: Series[]): string {
     const sortKey = seriesSortKey.value;
     const sortDir = seriesSortDirection.value;
-    const sortIcon = sortDir === 'ascending'
-      ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>'
-      : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+    const sortIcon =
+      sortDir === 'ascending'
+        ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>'
+        : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>';
 
     return html`
       <table class="series-table">
@@ -897,9 +899,10 @@ export class SeriesIndexPage extends BaseComponent {
       <tr onclick="this.closest('series-index-page').handleSeriesClick('${escapeHtml(series.titleSlug)}')">
         <td>
           <svg class="monitored-icon ${series.monitored}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            ${series.monitored
-              ? '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>'
-              : '<circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>'
+            ${
+              series.monitored
+                ? '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>'
+                : '<circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>'
             }
           </svg>
         </td>

@@ -2,7 +2,7 @@
  * Application-level state store
  */
 
-import { signal, computed, persistedSignal } from '../core/reactive';
+import { persistedSignal, signal } from '../core/reactive';
 
 /**
  * Sidebar collapsed state
@@ -70,7 +70,7 @@ export type SeriesSortKey =
 export const seriesSortKey = persistedSignal<SeriesSortKey>('series-sort-key', 'sortTitle');
 export const seriesSortDirection = persistedSignal<'ascending' | 'descending'>(
   'series-sort-direction',
-  'ascending'
+  'ascending',
 );
 
 /**
@@ -125,7 +125,7 @@ export type MovieSortKey =
 export const movieSortKey = persistedSignal<MovieSortKey>('movie-sort-key', 'sortTitle');
 export const movieSortDirection = persistedSignal<'ascending' | 'descending'>(
   'movie-sort-direction',
-  'ascending'
+  'ascending',
 );
 
 export function setMovieSort(key: MovieSortKey, direction?: 'ascending' | 'descending'): void {
@@ -209,10 +209,7 @@ let toastId = 0;
 /**
  * Show a toast notification
  */
-export function showToast(
-  toast: Omit<Toast, 'id'>,
-  duration = 5000
-): string {
+export function showToast(toast: Omit<Toast, 'id'>, duration = 5000): string {
   const id = `toast-${++toastId}`;
 
   toasts.update((t) => [...t, { ...toast, id, duration }]);

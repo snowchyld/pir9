@@ -2,11 +2,11 @@
  * Tags Settings page
  */
 
-import { BaseComponent, customElement, html, escapeHtml, safeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { httpV3 } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
+import { showError, showSuccess } from '../../stores/app.store';
 
 interface Tag {
   id: number;
@@ -83,7 +83,9 @@ export class TagsSettings extends BaseComponent {
           </button>
         </div>
 
-        ${tags.length === 0 ? html`
+        ${
+          tags.length === 0
+            ? html`
           <div class="empty-state">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" color="var(--text-color-muted)">
               <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
@@ -92,7 +94,8 @@ export class TagsSettings extends BaseComponent {
             <p>No tags created</p>
             <p class="hint">Create tags to organize series, restrict indexers, and more</p>
           </div>
-        ` : html`
+        `
+            : html`
           <table class="tags-table">
             <thead>
               <tr>
@@ -106,7 +109,9 @@ export class TagsSettings extends BaseComponent {
               </tr>
             </thead>
             <tbody>
-              ${tags.map((tag) => html`
+              ${tags
+                .map(
+                  (tag) => html`
                 <tr onclick="this.closest('tags-settings').handleEdit(${tag.id})">
                   <td>
                     <span class="tag-badge">${escapeHtml(tag.label)}</span>
@@ -129,10 +134,13 @@ export class TagsSettings extends BaseComponent {
                     </button>
                   </td>
                 </tr>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </tbody>
           </table>
-        `}
+        `
+        }
       </div>
 
       ${mode !== 'closed' ? this.renderDialog() : ''}
@@ -200,7 +208,7 @@ export class TagsSettings extends BaseComponent {
 
   async handleEdit(id: number): Promise<void> {
     const tags = this.tagsQuery.data.value ?? [];
-    const tag = tags.find(t => t.id === id);
+    const tag = tags.find((t) => t.id === id);
     if (!tag) return;
 
     this.labelInput.set(tag.label);
@@ -243,7 +251,7 @@ export class TagsSettings extends BaseComponent {
 
   handleDelete(id: number): void {
     const tags = this.tagsQuery.data.value ?? [];
-    const tag = tags.find(t => t.id === id);
+    const tag = tags.find((t) => t.id === id);
 
     // Check if tag is in use
     if (tag) {
@@ -255,7 +263,11 @@ export class TagsSettings extends BaseComponent {
         (tag.importListIds?.length || 0);
 
       if (usageCount > 0) {
-        if (!confirm(`This tag is in use by ${usageCount} item(s). Are you sure you want to delete it?`)) {
+        if (
+          !confirm(
+            `This tag is in use by ${usageCount} item(s). Are you sure you want to delete it?`,
+          )
+        ) {
           return;
         }
       } else if (!confirm('Are you sure you want to delete this tag?')) {

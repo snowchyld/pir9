@@ -2,7 +2,7 @@
  * Checkbox component
  */
 
-import { BaseComponent, customElement, attribute, html, escapeHtml } from '../../core/component';
+import { attribute, BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 
 @customElement('ui-checkbox')
 export class UICheckbox extends BaseComponent {

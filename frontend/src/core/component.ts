@@ -35,10 +35,7 @@ export function escapeHtml(str: string | number | boolean | null | undefined): s
  * Use escapeHtml() explicitly for user-provided data to prevent XSS
  * Handles safeHtml() wrapped values by extracting the inner HTML
  */
-export function html(
-  strings: TemplateStringsArray,
-  ...values: unknown[]
-): string {
+export function html(strings: TemplateStringsArray, ...values: unknown[]): string {
   return strings.reduce((result, str, i) => {
     const value = values[i - 1];
     // Handle safeHtml wrapped values
@@ -62,7 +59,7 @@ export function safeHtml(content: string): { __safeHtml: string } {
  * @param tagName - The custom element tag name (must contain a hyphen)
  */
 export function customElement(tagName: string) {
-  return function <T extends Constructor<HTMLElement>>(target: T): T {
+  return <T extends Constructor<HTMLElement>>(target: T): T => {
     if (!registry.has(tagName)) {
       registry.set(tagName, target);
       customElements.define(tagName, target);
@@ -75,10 +72,7 @@ export function customElement(tagName: string) {
  * Decorator to mark a property as reactive (triggers re-render on change)
  */
 export function reactive() {
-  return function (
-    target: BaseComponent,
-    propertyKey: string
-  ): void {
+  return (target: BaseComponent, propertyKey: string): void => {
     const privateKey = `__${propertyKey}`;
 
     Object.defineProperty(target, propertyKey, {
@@ -106,10 +100,7 @@ export function reactive() {
 export function attribute(options?: { type?: 'string' | 'number' | 'boolean' }) {
   const type = options?.type ?? 'string';
 
-  return function (
-    target: BaseComponent,
-    propertyKey: string
-  ): void {
+  return (target: BaseComponent, propertyKey: string): void => {
     const attrName = propertyKey.replace(/([A-Z])/g, '-$1').toLowerCase();
 
     // Add to observed attributes
@@ -171,11 +162,7 @@ export abstract class BaseComponent extends HTMLElement {
   private _effectCleanups: Array<() => void> = [];
 
   static get observedAttributes(): string[] {
-    return this._observedAttrs ?? [];
-  }
-
-  constructor() {
-    super();
+    return BaseComponent._observedAttrs ?? [];
   }
 
   /**
@@ -193,7 +180,9 @@ export abstract class BaseComponent extends HTMLElement {
    */
   disconnectedCallback(): void {
     this._isConnected = false;
-    this._effectCleanups.forEach((cleanup) => cleanup());
+    this._effectCleanups.forEach((cleanup) => {
+      cleanup();
+    });
     this._effectCleanups = [];
     this.onDestroy();
   }
@@ -201,11 +190,7 @@ export abstract class BaseComponent extends HTMLElement {
   /**
    * Called when an observed attribute changes
    */
-  attributeChangedCallback(
-    name: string,
-    oldValue: string | null,
-    newValue: string | null
-  ): void {
+  attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
     if (oldValue === newValue) return;
 
     const ctor = this.constructor as typeof BaseComponent;
@@ -300,7 +285,12 @@ export abstract class BaseComponent extends HTMLElement {
   /**
    * Save the currently focused element's info if it's inside this component
    */
-  private saveFocusState(): { selector: string; selectionStart: number | null; selectionEnd: number | null; scrollTop: number } | null {
+  private saveFocusState(): {
+    selector: string;
+    selectionStart: number | null;
+    selectionEnd: number | null;
+    scrollTop: number;
+  } | null {
     const active = document.activeElement;
     if (!active || !this.contains(active) || active === this) return null;
 
@@ -330,7 +320,12 @@ export abstract class BaseComponent extends HTMLElement {
   /**
    * Restore focus to the matching element after re-render
    */
-  private restoreFocusState(info: { selector: string; selectionStart: number | null; selectionEnd: number | null; scrollTop: number }): void {
+  private restoreFocusState(info: {
+    selector: string;
+    selectionStart: number | null;
+    selectionEnd: number | null;
+    scrollTop: number;
+  }): void {
     const el = this.querySelector<HTMLElement>(info.selector);
     if (!el) return;
 
@@ -385,7 +380,7 @@ export abstract class BaseComponent extends HTMLElement {
   protected emit<T = unknown>(
     eventName: string,
     detail?: T,
-    options?: Partial<CustomEventInit<T>>
+    options?: Partial<CustomEventInit<T>>,
   ): boolean {
     return this.dispatchEvent(
       new CustomEvent(eventName, {
@@ -393,7 +388,7 @@ export abstract class BaseComponent extends HTMLElement {
         composed: true,
         detail,
         ...options,
-      })
+      }),
     );
   }
 
@@ -418,9 +413,7 @@ export abstract class BaseComponent extends HTMLElement {
 /**
  * Define multiple custom elements at once
  */
-export function defineComponents(
-  ...components: Array<Constructor<HTMLElement>>
-): void {
+export function defineComponents(...components: Array<Constructor<HTMLElement>>): void {
   // Components register themselves via @customElement decorator
   // This function exists for explicit registration if needed
   components.forEach((Component) => {

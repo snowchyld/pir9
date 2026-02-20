@@ -2,9 +2,9 @@
  * Quality Settings page - Quality definitions
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http } from '../../core/http';
+import { createQuery } from '../../core/query';
 import { showSuccess } from '../../stores/app.store';
 
 interface QualityDefinition {
@@ -64,7 +64,9 @@ export class QualitySettings extends BaseComponent {
             </tr>
           </thead>
           <tbody>
-            ${qualities.map((q) => html`
+            ${qualities
+              .map(
+                (q) => html`
               <tr>
                 <td>
                   <span class="quality-name">${escapeHtml(q.quality.name)}</span>
@@ -101,7 +103,9 @@ export class QualitySettings extends BaseComponent {
                   />
                 </td>
               </tr>
-            `).join('')}
+            `,
+              )
+              .join('')}
           </tbody>
         </table>
       </div>

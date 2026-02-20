@@ -3,11 +3,11 @@
  * Provides sync controls, stats display, and search functionality for IMDB data
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
+import { showError, showSuccess } from '../../stores/app.store';
 
 interface ImdbStats {
   seriesCount: number;
@@ -241,7 +241,9 @@ export class ImdbSettings extends BaseComponent {
             Refresh Status
           </button>
 
-          ${this.isSyncRunning(syncStatus) ? html`
+          ${
+            this.isSyncRunning(syncStatus)
+              ? html`
             <button
               class="danger-btn"
               onclick="this.closest('imdb-settings').handleCancelStale()"
@@ -249,7 +251,9 @@ export class ImdbSettings extends BaseComponent {
             >
               ${this.cancelStaleMutation.isLoading.value ? 'Cancelling...' : 'Cancel Stale Sync'}
             </button>
-          ` : ''}
+          `
+              : ''
+          }
         </div>
 
         ${this.renderSyncStatus(syncStatus)}
@@ -685,8 +689,12 @@ export class ImdbSettings extends BaseComponent {
   private renderDatasetStatus(name: string, dataset: SyncDataset | null): string {
     if (!dataset) return '';
 
-    const statusClass = dataset.status === 'completed' ? 'status-completed' :
-                        dataset.status === 'running' ? 'status-running' : 'status-error';
+    const statusClass =
+      dataset.status === 'completed'
+        ? 'status-completed'
+        : dataset.status === 'running'
+          ? 'status-running'
+          : 'status-error';
 
     return html`
       <div class="sync-dataset">
@@ -723,14 +731,16 @@ export class ImdbSettings extends BaseComponent {
     return html`
       <div class="search-results">
         <div class="search-results-count">${results.length} result${results.length !== 1 ? 's' : ''} found</div>
-        ${results.map(series => this.renderSeriesCard(series)).join('')}
+        ${results.map((series) => this.renderSeriesCard(series)).join('')}
       </div>
     `;
   }
 
   private renderSeriesCard(series: ImdbSeries): string {
     const years = series.startYear
-      ? (series.endYear ? `${series.startYear}-${series.endYear}` : `${series.startYear}-`)
+      ? series.endYear
+        ? `${series.startYear}-${series.endYear}`
+        : `${series.startYear}-`
       : 'Unknown';
 
     return html`
@@ -744,19 +754,27 @@ export class ImdbSettings extends BaseComponent {
           <div class="result-meta">
             <span>${years}</span>
             <span>${escapeHtml(series.imdbIdFormatted)}</span>
-            ${series.rating ? html`
+            ${
+              series.rating
+                ? html`
               <span class="result-rating">
                 <svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
                 ${series.rating.toFixed(1)}
               </span>
-            ` : ''}
+            `
+                : ''
+            }
             ${series.votes ? html`<span>(${this.formatNumber(series.votes)} votes)</span>` : ''}
           </div>
-          ${series.genres.length > 0 ? html`
+          ${
+            series.genres.length > 0
+              ? html`
             <div class="result-genres">
-              ${series.genres.map(g => html`<span class="genre-tag">${escapeHtml(g)}</span>`).join('')}
+              ${series.genres.map((g) => html`<span class="genre-tag">${escapeHtml(g)}</span>`).join('')}
             </div>
-          ` : ''}
+          `
+              : ''
+          }
         </div>
       </div>
     `;
@@ -807,9 +825,11 @@ export class ImdbSettings extends BaseComponent {
 
     this.isSearching.set(true);
     try {
-      const results = await http.get<ImdbSeries[]>(`/imdb/search?term=${encodeURIComponent(term)}&limit=25`);
+      const results = await http.get<ImdbSeries[]>(
+        `/imdb/search?term=${encodeURIComponent(term)}&limit=25`,
+      );
       this.searchResults.set(results);
-    } catch (e) {
+    } catch (_e) {
       showError('Search failed');
       this.searchResults.set([]);
     } finally {

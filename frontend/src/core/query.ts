@@ -4,17 +4,17 @@
  */
 
 import {
-  QueryClient,
-  QueryObserver,
   MutationObserver,
-  type QueryKey,
-  type QueryObserverOptions,
   type MutationObserverOptions,
-  type QueryObserverResult,
   type MutationObserverResult,
+  QueryClient,
+  type QueryKey,
+  QueryObserver,
+  type QueryObserverOptions,
+  type QueryObserverResult,
 } from '@tanstack/query-core';
-import { signal, type Signal } from './reactive';
-import { http, type HttpError } from './http';
+import { http } from './http';
+import { type Signal, signal } from './reactive';
 
 /**
  * Singleton query client instance
@@ -64,7 +64,7 @@ export interface MutationState<TData, TVariables> {
  * Create a reactive query
  */
 export function createQuery<TData>(
-  options: Omit<QueryObserverOptions<TData, Error, TData, TData, QueryKey>, 'queryClient'>
+  options: Omit<QueryObserverOptions<TData, Error, TData, TData, QueryKey>, 'queryClient'>,
 ): QueryState<TData> {
   const data = signal<TData | undefined>(undefined);
   const error = signal<Error | null>(null);
@@ -73,13 +73,10 @@ export function createQuery<TData>(
   const isError = signal(false);
   const isSuccess = signal(false);
 
-  const observer = new QueryObserver<TData, Error, TData, TData, QueryKey>(
-    queryClient,
-    options
-  );
+  const observer = new QueryObserver<TData, Error, TData, TData, QueryKey>(queryClient, options);
 
   // Update signals when query state changes
-  const unsubscribe = observer.subscribe((result: QueryObserverResult<TData, Error>) => {
+  observer.subscribe((result: QueryObserverResult<TData, Error>) => {
     data.set(result.data);
     error.set(result.error);
     isLoading.set(result.isLoading);
@@ -114,7 +111,7 @@ export function createQuery<TData>(
 export function createMutation<TData, TVariables>(
   options: Omit<MutationObserverOptions<TData, Error, TVariables, unknown>, 'mutationFn'> & {
     mutationFn: (variables: TVariables) => Promise<TData>;
-  }
+  },
 ): MutationState<TData, TVariables> {
   const data = signal<TData | undefined>(undefined);
   const error = signal<Error | null>(null);
@@ -122,10 +119,7 @@ export function createMutation<TData, TVariables>(
   const isError = signal(false);
   const isSuccess = signal(false);
 
-  const observer = new MutationObserver<TData, Error, TVariables, unknown>(
-    queryClient,
-    options
-  );
+  const observer = new MutationObserver<TData, Error, TVariables, unknown>(queryClient, options);
 
   // Update signals when mutation state changes
   observer.subscribe((result: MutationObserverResult<TData, Error, TVariables, unknown>) => {
@@ -162,7 +156,7 @@ export function invalidateQueries(queryKey: QueryKey): Promise<void> {
  */
 export function setQueryData<TData>(
   queryKey: QueryKey,
-  updater: TData | ((old: TData | undefined) => TData | undefined)
+  updater: TData | ((old: TData | undefined) => TData | undefined),
 ): void {
   queryClient.setQueryData(queryKey, updater);
 }
@@ -178,7 +172,7 @@ export function getQueryData<TData>(queryKey: QueryKey): TData | undefined {
  * Prefetch query data
  */
 export function prefetchQuery<TData>(
-  options: Omit<QueryObserverOptions<TData, Error, TData, TData, QueryKey>, 'queryClient'>
+  options: Omit<QueryObserverOptions<TData, Error, TData, TData, QueryKey>, 'queryClient'>,
 ): Promise<void> {
   return queryClient.prefetchQuery(options);
 }
@@ -255,9 +249,10 @@ export function useCalendarQuery(start: string, end: string) {
 export function useQueueQuery() {
   return createQuery({
     queryKey: ['/queue'],
-    queryFn: () => http.get<import('./http').QueueResponse>('/queue', {
-      params: { pageSize: 10000 },
-    }),
+    queryFn: () =>
+      http.get<import('./http').QueueResponse>('/queue', {
+        params: { pageSize: 10000 },
+      }),
     refetchInterval: 5000, // Poll every 5 seconds
   });
 }

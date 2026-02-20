@@ -2,7 +2,7 @@
  * Select dropdown component
  */
 
-import { BaseComponent, customElement, attribute, html, escapeHtml } from '../../core/component';
+import { attribute, BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 
 export interface SelectOption {
   value: string;
@@ -45,7 +45,9 @@ export class UISelect extends BaseComponent {
           onchange="this.closest('ui-select').handleChange(event)"
         >
           ${this.placeholder ? `<option value="" disabled ${!this.value ? 'selected' : ''}>${escapeHtml(this.placeholder)}</option>` : ''}
-          ${this._options.map((opt) => `
+          ${this._options
+            .map(
+              (opt) => `
             <option
               value="${escapeHtml(opt.value)}"
               ${opt.disabled ? 'disabled' : ''}
@@ -53,7 +55,9 @@ export class UISelect extends BaseComponent {
             >
               ${escapeHtml(opt.label)}
             </option>
-          `).join('')}
+          `,
+            )
+            .join('')}
         </select>
         <div class="select-icon">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

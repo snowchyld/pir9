@@ -2,11 +2,11 @@
  * History page showing download history
  */
 
-import { BaseComponent, customElement, html, escapeHtml, safeHtml } from '../../core/component';
+import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
+import { type HistoryRecord, type HistoryResponse, http } from '../../core/http';
 import { createQuery } from '../../core/query';
-import { http, type HistoryResponse, type HistoryRecord } from '../../core/http';
-import { navigate } from '../../router';
 import { signal } from '../../core/reactive';
+import { navigate } from '../../router';
 
 @customElement('history-page')
 export class HistoryPage extends BaseComponent {
@@ -335,10 +335,14 @@ export class HistoryPage extends BaseComponent {
 
   private getEventIcon(eventType: string): string {
     const icons: Record<string, string> = {
-      grabbed: '<svg class="event-icon grabbed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>',
-      downloadFolderImported: '<svg class="event-icon imported" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>',
-      downloadFailed: '<svg class="event-icon failed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
-      episodeFileDeleted: '<svg class="event-icon deleted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>',
+      grabbed:
+        '<svg class="event-icon grabbed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>',
+      downloadFolderImported:
+        '<svg class="event-icon imported" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>',
+      downloadFailed:
+        '<svg class="event-icon failed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
+      episodeFileDeleted:
+        '<svg class="event-icon deleted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>',
     };
     return icons[eventType] ?? icons.grabbed;
   }
@@ -381,7 +385,11 @@ export class HistoryPage extends BaseComponent {
       pages.push('...');
     }
 
-    for (let i = Math.max(2, currentPage - 1); i <= Math.min(totalPages - 1, currentPage + 1); i++) {
+    for (
+      let i = Math.max(2, currentPage - 1);
+      i <= Math.min(totalPages - 1, currentPage + 1);
+      i++
+    ) {
       if (!pages.includes(i)) {
         pages.push(i);
       }
@@ -407,11 +415,13 @@ export class HistoryPage extends BaseComponent {
             <polyline points="15 18 9 12 15 6"></polyline>
           </svg>
         </button>
-        ${pages.map((p) =>
-          typeof p === 'number'
-            ? `<button class="page-btn ${p === currentPage ? 'active' : ''}" onclick="this.closest('history-page').goToPage(${p})">${p}</button>`
-            : `<span class="page-ellipsis">${p}</span>`
-        ).join('')}
+        ${pages
+          .map((p) =>
+            typeof p === 'number'
+              ? `<button class="page-btn ${p === currentPage ? 'active' : ''}" onclick="this.closest('history-page').goToPage(${p})">${p}</button>`
+              : `<span class="page-ellipsis">${p}</span>`,
+          )
+          .join('')}
         <button
           class="page-btn"
           ?disabled="${currentPage === totalPages}"

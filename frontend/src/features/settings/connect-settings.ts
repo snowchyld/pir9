@@ -2,11 +2,11 @@
  * Connect Settings page - Notifications
  */
 
-import { BaseComponent, customElement, html, escapeHtml, safeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { httpV3 } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
+import { showError, showSuccess } from '../../stores/app.store';
 import type { NotificationSchema, ProviderField } from './provider-types';
 
 interface Notification {
@@ -103,7 +103,9 @@ export class ConnectSettings extends BaseComponent {
           </button>
         </div>
 
-        ${notifications.length === 0 ? html`
+        ${
+          notifications.length === 0
+            ? html`
           <div class="empty-state">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" color="var(--text-color-muted)">
               <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
@@ -112,9 +114,12 @@ export class ConnectSettings extends BaseComponent {
             <p>No connections configured</p>
             <p class="hint">Add connections to get notified about grabs, downloads, and more</p>
           </div>
-        ` : html`
+        `
+            : html`
           <div class="connections-list">
-            ${notifications.map((n) => html`
+            ${notifications
+              .map(
+                (n) => html`
               <div class="connection-card">
                 <div class="connection-info">
                   <div class="connection-name">${escapeHtml(n.name)}</div>
@@ -147,9 +152,12 @@ export class ConnectSettings extends BaseComponent {
                   </button>
                 </div>
               </div>
-            `).join('')}
+            `,
+              )
+              .join('')}
           </div>
-        `}
+        `
+        }
       </div>
 
       ${mode === 'select' ? this.renderSelectDialog() : ''}
@@ -176,12 +184,15 @@ export class ConnectSettings extends BaseComponent {
             </button>
           </div>
           <div class="dialog-body">
-            ${loading ? html`
+            ${
+              loading
+                ? html`
               <div class="loading-center">
                 <div class="spinner"></div>
                 <p>Loading available connections...</p>
               </div>
-            ` : html`
+            `
+                : html`
               <div class="info-box">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="12" cy="12" r="10"></circle>
@@ -194,7 +205,8 @@ export class ConnectSettings extends BaseComponent {
               <div class="provider-grid">
                 ${schemas.map((schema) => this.renderSchemaCard(schema)).join('')}
               </div>
-            `}
+            `
+            }
           </div>
           <div class="dialog-footer">
             <button class="btn btn-secondary" onclick="this.closest('connect-settings').closeDialog()">
@@ -226,7 +238,10 @@ export class ConnectSettings extends BaseComponent {
       Webhook: `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>`,
       Pushover: `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>`,
     };
-    return icons[implementation] || `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>`;
+    return (
+      icons[implementation] ||
+      `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>`
+    );
   }
 
   private renderEditDialog(): string {
@@ -252,16 +267,22 @@ export class ConnectSettings extends BaseComponent {
             </button>
           </div>
           <div class="dialog-body">
-            ${testResult ? html`
+            ${
+              testResult
+                ? html`
               <div class="test-result ${testResult.success ? 'success' : 'error'}">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  ${testResult.success
-                    ? '<polyline points="20 6 9 17 4 12"></polyline>'
-                    : '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>'}
+                  ${
+                    testResult.success
+                      ? '<polyline points="20 6 9 17 4 12"></polyline>'
+                      : '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>'
+                  }
                 </svg>
                 <span>${escapeHtml(testResult.message)}</span>
               </div>
-            ` : ''}
+            `
+                : ''
+            }
 
             <form class="provider-form" onsubmit="event.preventDefault()">
               <div class="form-group">
@@ -275,14 +296,16 @@ export class ConnectSettings extends BaseComponent {
               </div>
 
               ${schema.fields
-                .filter(f => f.hidden !== 'hidden')
+                .filter((f) => f.hidden !== 'hidden')
                 .sort((a, b) => a.order - b.order)
                 .map((field) => this.renderField(field, data))
                 .join('')}
 
               <fieldset class="form-fieldset">
                 <legend>Notification Triggers</legend>
-                ${schema.supportsOnGrab ? html`
+                ${
+                  schema.supportsOnGrab
+                    ? html`
                   <div class="form-group form-group-checkbox">
                     <label>
                       <input type="checkbox" ${data.onGrab ? 'checked' : ''} onchange="this.closest('connect-settings').updateField('onGrab', this.checked)" />
@@ -290,8 +313,12 @@ export class ConnectSettings extends BaseComponent {
                     </label>
                     <p class="help-text">Notify when episodes are grabbed</p>
                   </div>
-                ` : ''}
-                ${schema.supportsOnDownload ? html`
+                `
+                    : ''
+                }
+                ${
+                  schema.supportsOnDownload
+                    ? html`
                   <div class="form-group form-group-checkbox">
                     <label>
                       <input type="checkbox" ${data.onDownload ? 'checked' : ''} onchange="this.closest('connect-settings').updateField('onDownload', this.checked)" />
@@ -299,8 +326,12 @@ export class ConnectSettings extends BaseComponent {
                     </label>
                     <p class="help-text">Notify when episodes are downloaded</p>
                   </div>
-                ` : ''}
-                ${schema.supportsOnUpgrade ? html`
+                `
+                    : ''
+                }
+                ${
+                  schema.supportsOnUpgrade
+                    ? html`
                   <div class="form-group form-group-checkbox">
                     <label>
                       <input type="checkbox" ${data.onUpgrade ? 'checked' : ''} onchange="this.closest('connect-settings').updateField('onUpgrade', this.checked)" />
@@ -308,8 +339,12 @@ export class ConnectSettings extends BaseComponent {
                     </label>
                     <p class="help-text">Notify when episodes are upgraded</p>
                   </div>
-                ` : ''}
-                ${schema.supportsOnSeriesAdd ? html`
+                `
+                    : ''
+                }
+                ${
+                  schema.supportsOnSeriesAdd
+                    ? html`
                   <div class="form-group form-group-checkbox">
                     <label>
                       <input type="checkbox" ${data.onSeriesAdd ? 'checked' : ''} onchange="this.closest('connect-settings').updateField('onSeriesAdd', this.checked)" />
@@ -317,8 +352,12 @@ export class ConnectSettings extends BaseComponent {
                     </label>
                     <p class="help-text">Notify when series are added</p>
                   </div>
-                ` : ''}
-                ${schema.supportsOnSeriesDelete ? html`
+                `
+                    : ''
+                }
+                ${
+                  schema.supportsOnSeriesDelete
+                    ? html`
                   <div class="form-group form-group-checkbox">
                     <label>
                       <input type="checkbox" ${data.onSeriesDelete ? 'checked' : ''} onchange="this.closest('connect-settings').updateField('onSeriesDelete', this.checked)" />
@@ -326,8 +365,12 @@ export class ConnectSettings extends BaseComponent {
                     </label>
                     <p class="help-text">Notify when series are deleted</p>
                   </div>
-                ` : ''}
-                ${schema.supportsOnHealthIssue ? html`
+                `
+                    : ''
+                }
+                ${
+                  schema.supportsOnHealthIssue
+                    ? html`
                   <div class="form-group form-group-checkbox">
                     <label>
                       <input type="checkbox" ${data.onHealthIssue ? 'checked' : ''} onchange="this.closest('connect-settings').updateField('onHealthIssue', this.checked)" />
@@ -335,8 +378,12 @@ export class ConnectSettings extends BaseComponent {
                     </label>
                     <p class="help-text">Notify on health check failures</p>
                   </div>
-                ` : ''}
-                ${schema.supportsOnApplicationUpdate ? html`
+                `
+                    : ''
+                }
+                ${
+                  schema.supportsOnApplicationUpdate
+                    ? html`
                   <div class="form-group form-group-checkbox">
                     <label>
                       <input type="checkbox" ${data.onApplicationUpdate ? 'checked' : ''} onchange="this.closest('connect-settings').updateField('onApplicationUpdate', this.checked)" />
@@ -344,7 +391,9 @@ export class ConnectSettings extends BaseComponent {
                     </label>
                     <p class="help-text">Notify when pir9 updates</p>
                   </div>
-                ` : ''}
+                `
+                    : ''
+                }
               </fieldset>
             </form>
           </div>
@@ -415,9 +464,13 @@ export class ConnectSettings extends BaseComponent {
           <div class="form-group">
             <label for="${fieldId}">${escapeHtml(field.label)}</label>
             <select id="${fieldId}" onchange="this.closest('connect-settings').updateField('${field.name}', this.value)">
-              ${(field.selectOptions || []).map((opt) => html`
+              ${(field.selectOptions || [])
+                .map(
+                  (opt) => html`
                 <option value="${opt.value}" ${String(value) === String(opt.value) ? 'selected' : ''}>${escapeHtml(opt.name)}</option>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </select>
             ${field.helpText ? html`<p class="help-text">${escapeHtml(field.helpText)}</p>` : ''}
           </div>
@@ -450,7 +503,7 @@ export class ConnectSettings extends BaseComponent {
   }
 
   selectSchema(implementation: string): void {
-    const schema = this.schemas.value.find(s => s.implementation === implementation);
+    const schema = this.schemas.value.find((s) => s.implementation === implementation);
     if (!schema) return;
 
     this.selectedSchema.set(schema);
@@ -475,7 +528,7 @@ export class ConnectSettings extends BaseComponent {
       onApplicationUpdate: false,
       onManualInteractionRequired: false,
     };
-    schema.fields.forEach(f => {
+    schema.fields.forEach((f) => {
       data[f.name] = f.value;
     });
     this.formData.set(data);
@@ -487,7 +540,7 @@ export class ConnectSettings extends BaseComponent {
     try {
       const notification = await httpV3.get<Notification>(`/notification/${id}`);
       const schemas = await httpV3.get<NotificationSchema[]>('/notification/schema');
-      const schema = schemas.find(s => s.implementation === notification.implementation);
+      const schema = schemas.find((s) => s.implementation === notification.implementation);
 
       if (!schema) {
         showError('Unknown connection type');
@@ -497,9 +550,9 @@ export class ConnectSettings extends BaseComponent {
       // Merge schema field definitions with notification values
       const mergedSchema: NotificationSchema = {
         ...schema,
-        fields: schema.fields.map(f => ({
+        fields: schema.fields.map((f) => ({
           ...f,
-          value: notification.fields.find(nf => nf.name === f.name)?.value ?? f.value,
+          value: notification.fields.find((nf) => nf.name === f.name)?.value ?? f.value,
         })),
       };
 
@@ -526,7 +579,7 @@ export class ConnectSettings extends BaseComponent {
         onApplicationUpdate: notification.onApplicationUpdate,
         onManualInteractionRequired: notification.onManualInteractionRequired,
       };
-      mergedSchema.fields.forEach(f => {
+      mergedSchema.fields.forEach((f) => {
         data[f.name] = f.value;
       });
       this.formData.set(data);
@@ -558,7 +611,10 @@ export class ConnectSettings extends BaseComponent {
       const result = await response.json();
 
       if (response.ok && result.isValid !== false) {
-        this.testResult.set({ success: true, message: result.message || 'Test notification sent!' });
+        this.testResult.set({
+          success: true,
+          message: result.message || 'Test notification sent!',
+        });
       } else {
         this.testResult.set({ success: false, message: result.message || 'Test failed' });
       }
@@ -604,7 +660,7 @@ export class ConnectSettings extends BaseComponent {
     if (!schema) return {};
 
     const data = this.formData.value;
-    const fields = schema.fields.map(f => ({
+    const fields = schema.fields.map((f) => ({
       name: f.name,
       value: data[f.name],
     }));

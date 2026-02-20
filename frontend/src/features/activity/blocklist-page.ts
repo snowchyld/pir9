@@ -2,10 +2,10 @@
  * Blocklist page showing blocked releases
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
+import { showError, showSuccess } from '../../stores/app.store';
 
 interface BlocklistItem {
   id: number;
@@ -75,14 +75,18 @@ export class BlocklistPage extends BaseComponent {
           </div>
 
           <div class="toolbar-right">
-            ${items.length > 0 ? html`
+            ${
+              items.length > 0
+                ? html`
               <button
                 class="clear-btn"
                 onclick="this.closest('blocklist-page').handleClearAll()"
               >
                 Clear All
               </button>
-            ` : ''}
+            `
+                : ''
+            }
             <button
               class="refresh-btn"
               onclick="this.closest('blocklist-page').handleRefresh()"

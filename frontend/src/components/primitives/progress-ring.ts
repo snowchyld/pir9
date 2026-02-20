@@ -28,10 +28,10 @@ export class ProgressRing extends BaseComponent {
         this._max = parseFloat(value) || 100;
         break;
       case 'size':
-        this._size = parseInt(value) || 80;
+        this._size = parseInt(value, 10) || 80;
         break;
       case 'stroke-width':
-        this._strokeWidth = parseInt(value) || 6;
+        this._strokeWidth = parseInt(value, 10) || 6;
         break;
       case 'label':
         this._label = value;
@@ -52,9 +52,6 @@ export class ProgressRing extends BaseComponent {
     const circumference = 2 * Math.PI * radius;
     const offset = circumference - (percentage / 100) * circumference;
     const center = this._size / 2;
-
-    const colorVar = `var(--color-${this._color})`;
-    const glowVar = `var(--glow-${this._color})`;
 
     return html`
       <div class="progress-ring-container">

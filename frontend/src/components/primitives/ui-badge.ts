@@ -2,7 +2,7 @@
  * Badge/label component
  */
 
-import { BaseComponent, customElement, attribute, html } from '../../core/component';
+import { attribute, BaseComponent, customElement, html } from '../../core/component';
 
 export type BadgeVariant = 'default' | 'primary' | 'success' | 'danger' | 'warning' | 'info';
 

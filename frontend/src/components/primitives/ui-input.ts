@@ -2,7 +2,7 @@
  * Input component with validation states
  */
 
-import { BaseComponent, customElement, attribute, html, escapeHtml } from '../../core/component';
+import { attribute, BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 
 export type InputType = 'text' | 'password' | 'email' | 'number' | 'search' | 'tel' | 'url';
 

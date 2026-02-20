@@ -2,11 +2,11 @@
  * Calendar page showing upcoming episodes
  */
 
-import { BaseComponent, customElement, html, escapeHtml, safeHtml } from '../../core/component';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
+import { type CalendarEvent, http } from '../../core/http';
 import { createQuery } from '../../core/query';
-import { http, type CalendarEvent } from '../../core/http';
-import { navigate } from '../../router';
 import { signal } from '../../core/reactive';
+import { navigate } from '../../router';
 
 type CalendarView = 'month' | 'week' | 'agenda';
 
@@ -496,7 +496,10 @@ export class CalendarPage extends BaseComponent {
       cells += html`
         <div class="day-cell ${isToday ? 'today' : ''} ${isOtherMonth ? 'other-month' : ''}">
           <div class="day-number">${cellDate.getDate()}</div>
-          ${dayEvents.slice(0, 3).map((e) => this.renderEventCard(e)).join('')}
+          ${dayEvents
+            .slice(0, 3)
+            .map((e) => this.renderEventCard(e))
+            .join('')}
           ${dayEvents.length > 3 ? `<div class="event-card">+${dayEvents.length - 3} more</div>` : ''}
         </div>
       `;
@@ -527,7 +530,7 @@ export class CalendarPage extends BaseComponent {
       if (!groupedByDate.has(dateStr)) {
         groupedByDate.set(dateStr, []);
       }
-      groupedByDate.get(dateStr)!.push(event);
+      groupedByDate.get(dateStr)?.push(event);
     }
 
     let content = '';
@@ -576,9 +579,10 @@ export class CalendarPage extends BaseComponent {
         onclick="this.closest('calendar-page').handleEventClick('${escapeHtml(event.series.titleSlug)}')"
       >
         <span class="agenda-time">${time}</span>
-        ${poster
-          ? `<img class="agenda-poster" src="${escapeHtml(poster.url)}" alt="" />`
-          : '<div class="agenda-poster"></div>'
+        ${
+          poster
+            ? `<img class="agenda-poster" src="${escapeHtml(poster.url)}" alt="" />`
+            : '<div class="agenda-poster"></div>'
         }
         <div class="agenda-info">
           <div class="agenda-series">${escapeHtml(event.series.title)}</div>
@@ -598,7 +602,7 @@ export class CalendarPage extends BaseComponent {
       if (!map.has(dateStr)) {
         map.set(dateStr, []);
       }
-      map.get(dateStr)!.push(event);
+      map.get(dateStr)?.push(event);
     }
     return map;
   }

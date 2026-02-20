@@ -2,7 +2,7 @@
  * Dialog/Modal component
  */
 
-import { BaseComponent, customElement, attribute, html, escapeHtml } from '../../core/component';
+import { attribute, BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 
 @customElement('ui-dialog')
 export class UIDialog extends BaseComponent {
@@ -44,7 +44,9 @@ export class UIDialog extends BaseComponent {
     return html`
       <div class="dialog-backdrop" onclick="this.closest('ui-dialog').handleBackdropClick(event)">
         <div class="dialog ${sizeClasses[this.size]}" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
-          ${this.title ? `
+          ${
+            this.title
+              ? `
             <div class="dialog-header">
               <h2 id="dialog-title" class="dialog-title">${escapeHtml(this.title)}</h2>
               <button class="dialog-close" onclick="this.closest('ui-dialog').close()" aria-label="Close">
@@ -54,7 +56,9 @@ export class UIDialog extends BaseComponent {
                 </svg>
               </button>
             </div>
-          ` : ''}
+          `
+              : ''
+          }
           <div class="dialog-body">
             <slot></slot>
           </div>

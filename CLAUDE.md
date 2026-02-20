@@ -19,7 +19,9 @@ cargo test -- --nocapture                # Show test output
 
 # Lint
 cargo clippy -- -D warnings              # Rust linting
-cd frontend && npm run lint           # Frontend linting
+cd frontend && npm run lint              # Frontend linting (Biome)
+cd frontend && npm run lint:fix          # Auto-fix frontend lint issues
+cd frontend && npm run typecheck         # TypeScript type checking
 
 # Run locally
 RUST_LOG=debug cargo run --release       # Run with debug logging
@@ -94,6 +96,7 @@ Infrastructure (src/core/datastore/, messaging.rs, scheduler.rs)
 ### Frontend
 
 - **frontend/**: Modern frontend using TypeScript, Web Components, Vite, and TanStack Query
+- **Linting**: Biome (linter + formatter) — config in `frontend/biome.json`
 
 ## Tech Stack
 
@@ -205,6 +208,24 @@ This project uses semver. **Every commit MUST bump the version.**
 - `chore:` — build, CI, tooling, or maintenance
 - `perf:` — performance improvement
 - `test:` — adding or fixing tests
+
+## Frontend Linting
+
+After modifying any frontend TypeScript files, **always run linting**:
+
+```bash
+cd frontend && npm run lint              # Check for issues
+cd frontend && npm run lint:fix          # Auto-fix issues
+cd frontend && npm run typecheck         # Verify types
+```
+
+Biome enforces:
+- Import sorting (alphabetical)
+- No unused imports or variables
+- `const` over `let` when variable is never reassigned
+- No implicit `any` types (warning)
+- No implicit return values in `forEach` callbacks — use block body `{ }`
+- Consistent formatting (2-space indent, single quotes, trailing commas)
 
 ## Do NOT
 

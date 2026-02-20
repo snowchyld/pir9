@@ -2,7 +2,7 @@
  * Progress bar component
  */
 
-import { BaseComponent, customElement, attribute, html, escapeHtml } from '../../core/component';
+import { attribute, BaseComponent, customElement, html } from '../../core/component';
 
 @customElement('ui-progress')
 export class UIProgress extends BaseComponent {

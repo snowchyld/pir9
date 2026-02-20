@@ -40,9 +40,13 @@ export function signal<T>(initialValue: T): Signal<T> {
 
   const notify = () => {
     if (batchDepth > 0) {
-      subscribers.forEach((sub) => pendingEffects.add(sub));
+      subscribers.forEach((sub) => {
+        pendingEffects.add(sub);
+      });
     } else {
-      subscribers.forEach((sub) => sub());
+      subscribers.forEach((sub) => {
+        sub();
+      });
     }
   };
 
@@ -83,9 +87,13 @@ export function computed<T>(fn: () => T): Computed<T> {
   const recompute = () => {
     dirty = true;
     if (batchDepth > 0) {
-      subscribers.forEach((sub) => pendingEffects.add(sub));
+      subscribers.forEach((sub) => {
+        pendingEffects.add(sub);
+      });
     } else {
-      subscribers.forEach((sub) => sub());
+      subscribers.forEach((sub) => {
+        sub();
+      });
     }
   };
 
@@ -122,7 +130,9 @@ export function computed<T>(fn: () => T): Computed<T> {
 /**
  * Create a side effect that runs when its dependencies change
  */
+// biome-ignore lint/suspicious/noConfusingVoidType: void is intentional — effect callbacks may return nothing or a cleanup function
 export function effect(fn: () => void | CleanupFn): CleanupFn {
+  // biome-ignore lint/suspicious/noConfusingVoidType: matches fn() return type above
   let cleanup: void | CleanupFn;
 
   const execute = () => {
@@ -161,7 +171,9 @@ export function batch(fn: () => void): void {
     if (batchDepth === 0) {
       const effects = [...pendingEffects];
       pendingEffects.clear();
-      effects.forEach((effect) => effect());
+      effects.forEach((effect) => {
+        effect();
+      });
     }
   }
 }
@@ -169,10 +181,7 @@ export function batch(fn: () => void): void {
 /**
  * Create a signal from localStorage with automatic persistence
  */
-export function persistedSignal<T>(
-  key: string,
-  initialValue: T
-): Signal<T> {
+export function persistedSignal<T>(key: string, initialValue: T): Signal<T> {
   const stored = localStorage.getItem(key);
   const initial = stored ? (JSON.parse(stored) as T) : initialValue;
   const sig = signal(initial);

@@ -2,25 +2,24 @@
  * Movies index page - main grid/table view
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
+import { http, type Movie } from '../../core/http';
 import { useMoviesQuery } from '../../core/query';
+import { navigate } from '../../router';
 import {
-  movieViewMode,
-  movieSortKey,
-  movieSortDirection,
+  type MovieSortKey,
   movieFilter,
+  movieSortDirection,
+  movieSortKey,
+  movieViewMode,
   searchQuery,
-  setMovieViewMode,
-  setMovieSort,
   setMovieFilter,
-  showSuccess,
+  setMovieSort,
+  setMovieViewMode,
   showError,
   showInfo,
   type ViewMode,
-  type MovieSortKey,
 } from '../../stores/app.store';
-import { navigate } from '../../router';
-import { http, type Movie } from '../../core/http';
 
 @customElement('movies-index-page')
 export class MoviesIndexPage extends BaseComponent {
@@ -52,22 +51,28 @@ export class MoviesIndexPage extends BaseComponent {
     let filtered = movies;
 
     if (search) {
-      filtered = filtered.filter((m) =>
-        m.title.toLowerCase().includes(search) ||
-        m.studio?.toLowerCase().includes(search)
+      filtered = filtered.filter(
+        (m) => m.title.toLowerCase().includes(search) || m.studio?.toLowerCase().includes(search),
       );
     }
 
     if (filter !== 'all') {
       filtered = filtered.filter((m) => {
         switch (filter) {
-          case 'monitored': return m.monitored;
-          case 'unmonitored': return !m.monitored;
-          case 'released': return m.status === 'released';
-          case 'inCinemas': return m.status === 'inCinemas';
-          case 'announced': return m.status === 'announced';
-          case 'missing': return m.monitored && !m.hasFile;
-          default: return true;
+          case 'monitored':
+            return m.monitored;
+          case 'unmonitored':
+            return !m.monitored;
+          case 'released':
+            return m.status === 'released';
+          case 'inCinemas':
+            return m.status === 'inCinemas';
+          case 'announced':
+            return m.status === 'announced';
+          case 'missing':
+            return m.monitored && !m.hasFile;
+          default:
+            return true;
         }
       });
     }
@@ -131,8 +136,9 @@ export class MoviesIndexPage extends BaseComponent {
               </svg>
             </button>
 
-            ${this.refreshCommandId
-              ? html`<button
+            ${
+              this.refreshCommandId
+                ? html`<button
                   class="refresh-all-btn stop"
                   onclick="this.closest('movies-index-page').handleStopRefresh()"
                   title="Stop refreshing movie metadata"
@@ -142,7 +148,7 @@ export class MoviesIndexPage extends BaseComponent {
                   </svg>
                   <span>Stop Refresh</span>
                 </button>`
-              : html`<button
+                : html`<button
                   class="refresh-all-btn"
                   onclick="this.closest('movies-index-page').handleRefreshAll()"
                   title="Refresh all movie metadata from IMDB"
@@ -579,16 +585,18 @@ export class MoviesIndexPage extends BaseComponent {
       <div class="poster-card"
            onclick="this.closest('movies-index-page').handleMovieClick(${movie.id})">
         <div class="poster-status ${statusClass}"></div>
-        ${posterImage
-          ? `<img class="poster-image" src="${escapeHtml(posterImage.url)}" alt="${escapeHtml(movie.title)}" loading="lazy">`
-          : `<div class="poster-placeholder">
+        ${
+          posterImage
+            ? `<img class="poster-image" src="${escapeHtml(posterImage.url)}" alt="${escapeHtml(movie.title)}" loading="lazy">`
+            : `<div class="poster-placeholder">
               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
                 <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
                 <line x1="7" y1="2" x2="7" y2="22"></line>
                 <line x1="17" y1="2" x2="17" y2="22"></line>
                 <line x1="2" y1="12" x2="22" y2="12"></line>
               </svg>
-            </div>`}
+            </div>`
+        }
         <div class="poster-info">
           <div class="poster-title">${escapeHtml(movie.title)}</div>
           <div class="poster-year">${movie.year || ''}</div>
@@ -612,7 +620,9 @@ export class MoviesIndexPage extends BaseComponent {
           </tr>
         </thead>
         <tbody>
-          ${movies.map((m) => html`
+          ${movies
+            .map(
+              (m) => html`
             <tr onclick="this.closest('movies-index-page').handleMovieClick(${m.id})">
               <td class="movie-title-cell">${escapeHtml(m.title)}</td>
               <td>${m.year || '-'}</td>
@@ -622,7 +632,9 @@ export class MoviesIndexPage extends BaseComponent {
               <td>${m.imdbRating ? m.imdbRating.toFixed(1) : '-'}</td>
               <td>${this.formatSize(m.statistics?.sizeOnDisk ?? 0)}</td>
             </tr>
-          `).join('')}
+          `,
+            )
+            .join('')}
         </tbody>
       </table>
     `;
@@ -673,8 +685,10 @@ export class MoviesIndexPage extends BaseComponent {
   private renderViewModeButton(mode: ViewMode, label: string): string {
     const active = movieViewMode.value === mode;
     const icons: Record<string, string> = {
-      posters: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>',
-      table: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>',
+      posters:
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>',
+      table:
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>',
     };
 
     return html`
@@ -690,14 +704,22 @@ export class MoviesIndexPage extends BaseComponent {
 
   private getSortValue(movie: Movie, key: MovieSortKey): string | number {
     switch (key) {
-      case 'sortTitle': return movie.sortTitle || movie.title.toLowerCase();
-      case 'status': return movie.status;
-      case 'studio': return movie.studio || '';
-      case 'added': return movie.added || '';
-      case 'year': return movie.year || 0;
-      case 'sizeOnDisk': return movie.statistics?.sizeOnDisk ?? 0;
-      case 'ratings': return movie.imdbRating ?? 0;
-      default: return movie.sortTitle || '';
+      case 'sortTitle':
+        return movie.sortTitle || movie.title.toLowerCase();
+      case 'status':
+        return movie.status;
+      case 'studio':
+        return movie.studio || '';
+      case 'added':
+        return movie.added || '';
+      case 'year':
+        return movie.year || 0;
+      case 'sizeOnDisk':
+        return movie.statistics?.sizeOnDisk ?? 0;
+      case 'ratings':
+        return movie.imdbRating ?? 0;
+      default:
+        return movie.sortTitle || '';
     }
   }
 
@@ -705,7 +727,7 @@ export class MoviesIndexPage extends BaseComponent {
     if (bytes === 0) return '-';
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
+    return `${(bytes / 1024 ** i).toFixed(1)} ${units[i]}`;
   }
 
   // Event handlers

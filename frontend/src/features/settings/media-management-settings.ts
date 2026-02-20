@@ -2,10 +2,10 @@
  * Media Management Settings page
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
+import { showError, showSuccess } from '../../stores/app.store';
 
 interface NamingConfig {
   renameEpisodes: boolean;
@@ -54,10 +54,15 @@ export class MediaManagementSettings extends BaseComponent {
   });
 
   private saveMutation = createMutation({
-    mutationFn: (data: { naming?: Partial<NamingConfig>; mediaManagement?: Partial<MediaManagementConfig> }) =>
+    mutationFn: (data: {
+      naming?: Partial<NamingConfig>;
+      mediaManagement?: Partial<MediaManagementConfig>;
+    }) =>
       Promise.all([
         data.naming ? http.put('/config/naming', data.naming) : Promise.resolve(),
-        data.mediaManagement ? http.put('/config/mediamanagement', data.mediaManagement) : Promise.resolve(),
+        data.mediaManagement
+          ? http.put('/config/mediamanagement', data.mediaManagement)
+          : Promise.resolve(),
       ]),
     onSuccess: () => {
       invalidateQueries(['/config/naming', '/config/mediamanagement']);
@@ -379,7 +384,9 @@ export class MediaManagementSettings extends BaseComponent {
     }
 
     this.saveMutation.mutate({
-      naming: hasNamingChanges ? { ...this.namingQuery.data.value, ...this.pendingNamingChanges } : undefined,
+      naming: hasNamingChanges
+        ? { ...this.namingQuery.data.value, ...this.pendingNamingChanges }
+        : undefined,
       mediaManagement: hasMediaManagementChanges
         ? { ...this.mediaManagementQuery.data.value, ...this.pendingMediaManagementChanges }
         : undefined,

@@ -3,10 +3,10 @@
  */
 
 import { BaseComponent, customElement, html } from '../../core/component';
-import { createQuery } from '../../core/query';
 import { http } from '../../core/http';
-import { themePreference, setTheme, type Theme } from '../../stores/theme.store';
+import { createQuery } from '../../core/query';
 import { showSuccess } from '../../stores/app.store';
+import { setTheme, type Theme, themePreference } from '../../stores/theme.store';
 
 interface UIConfig {
   firstDayOfWeek: number;

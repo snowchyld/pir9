@@ -2,11 +2,11 @@
  * Custom Formats Settings page
  */
 
-import { BaseComponent, customElement, html, escapeHtml, safeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { httpV3 } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
+import { showError, showSuccess } from '../../stores/app.store';
 
 interface SelectOption {
   value: unknown;
@@ -116,7 +116,9 @@ export class CustomFormatsSettings extends BaseComponent {
           </button>
         </div>
 
-        ${formats.length === 0 ? html`
+        ${
+          formats.length === 0
+            ? html`
           <div class="empty-state">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" color="var(--text-color-muted)">
               <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
@@ -126,27 +128,43 @@ export class CustomFormatsSettings extends BaseComponent {
             <p>No custom formats configured</p>
             <p class="hint">Custom formats allow fine-grained control over quality preferences</p>
           </div>
-        ` : html`
+        `
+            : html`
           <div class="formats-grid">
-            ${formats.map((format) => html`
+            ${formats
+              .map(
+                (format) => html`
               <div class="format-card">
                 <div class="format-content" onclick="this.closest('custom-formats-settings').handleEdit(${format.id})">
                   <div class="format-header">
                     <span class="format-name">${escapeHtml(format.name)}</span>
-                    ${format.includeCustomFormatWhenRenaming ? html`
+                    ${
+                      format.includeCustomFormatWhenRenaming
+                        ? html`
                       <span class="rename-badge">In Rename</span>
-                    ` : ''}
+                    `
+                        : ''
+                    }
                   </div>
                   <div class="format-specs">
                     ${format.specifications.length} specification${format.specifications.length !== 1 ? 's' : ''}
                   </div>
                   <div class="spec-list">
-                    ${format.specifications.slice(0, 3).map((spec) => html`
+                    ${format.specifications
+                      .slice(0, 3)
+                      .map(
+                        (spec) => html`
                       <span class="spec-badge ${spec.negate ? 'negate' : ''} ${spec.required ? 'required' : ''}">${escapeHtml(spec.name)}</span>
-                    `).join('')}
-                    ${format.specifications.length > 3 ? html`
+                    `,
+                      )
+                      .join('')}
+                    ${
+                      format.specifications.length > 3
+                        ? html`
                       <span class="spec-more">+${format.specifications.length - 3} more</span>
-                    ` : ''}
+                    `
+                        : ''
+                    }
                   </div>
                 </div>
                 <div class="format-actions">
@@ -158,9 +176,12 @@ export class CustomFormatsSettings extends BaseComponent {
                   </button>
                 </div>
               </div>
-            `).join('')}
+            `,
+              )
+              .join('')}
           </div>
-        `}
+        `
+        }
       </div>
 
       ${mode === 'edit' ? this.renderEditDialog() : ''}
@@ -225,14 +246,19 @@ export class CustomFormatsSettings extends BaseComponent {
                   </button>
                 </div>
 
-                ${data.specifications.length === 0 ? html`
+                ${
+                  data.specifications.length === 0
+                    ? html`
                   <div class="specs-empty">
                     <p>No specifications added</p>
                     <p class="hint">Add specifications to define matching criteria</p>
                   </div>
-                ` : html`
+                `
+                    : html`
                   <div class="specs-list">
-                    ${data.specifications.map((spec, index) => html`
+                    ${data.specifications
+                      .map(
+                        (spec, index) => html`
                       <div class="spec-row">
                         <div class="spec-info" onclick="this.closest('custom-formats-settings').handleEditSpec(${index})">
                           <span class="spec-name">${escapeHtml(spec.name || spec.implementationName)}</span>
@@ -249,9 +275,12 @@ export class CustomFormatsSettings extends BaseComponent {
                           </svg>
                         </button>
                       </div>
-                    `).join('')}
+                    `,
+                      )
+                      .join('')}
                   </div>
-                `}
+                `
+                }
               </div>
             </form>
           </div>
@@ -297,11 +326,15 @@ export class CustomFormatsSettings extends BaseComponent {
               <span>Select a specification type</span>
             </div>
             <div class="spec-type-grid">
-              ${schemas.map((schema) => html`
+              ${schemas
+                .map(
+                  (schema) => html`
                 <button class="spec-type-card" onclick="this.closest('custom-formats-settings').selectSpecType('${escapeHtml(schema.implementation)}')">
                   <span class="spec-type-name">${escapeHtml(schema.implementationName)}</span>
                 </button>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </div>
           </div>
           <div class="dialog-footer">
@@ -400,11 +433,15 @@ export class CustomFormatsSettings extends BaseComponent {
               id="${fieldId}"
               onchange="this.closest('custom-formats-settings').updateSpecFieldValue(${index}, this.value)"
             >
-              ${(field.selectOptions || []).map((opt) => html`
+              ${(field.selectOptions || [])
+                .map(
+                  (opt) => html`
                 <option value="${String(opt.value)}" ${String(field.value) === String(opt.value) ? 'selected' : ''}>
                   ${escapeHtml(opt.name)}
                 </option>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </select>
             ${field.helpText ? html`<p class="help-text">${escapeHtml(field.helpText)}</p>` : ''}
           </div>
@@ -495,7 +532,7 @@ export class CustomFormatsSettings extends BaseComponent {
   }
 
   selectSpecType(implementation: string): void {
-    const schema = this.specSchemas.value.find(s => s.implementation === implementation);
+    const schema = this.specSchemas.value.find((s) => s.implementation === implementation);
     if (!schema) return;
 
     const newSpec: Specification = {
@@ -505,7 +542,7 @@ export class CustomFormatsSettings extends BaseComponent {
       implementationName: schema.implementationName,
       negate: false,
       required: false,
-      fields: schema.fields.map(f => ({ ...f })),
+      fields: schema.fields.map((f) => ({ ...f })),
     };
 
     this.specFormData.set(newSpec);
@@ -519,11 +556,11 @@ export class CustomFormatsSettings extends BaseComponent {
     if (!spec) return;
 
     // Merge with schema to get full field definitions
-    const schema = this.specSchemas.value.find(s => s.implementation === spec.implementation);
+    const schema = this.specSchemas.value.find((s) => s.implementation === spec.implementation);
     if (schema) {
-      spec.fields = schema.fields.map(f => ({
+      spec.fields = schema.fields.map((f) => ({
         ...f,
-        value: spec.fields.find(sf => sf.name === f.name)?.value ?? f.value,
+        value: spec.fields.find((sf) => sf.name === f.name)?.value ?? f.value,
       }));
     }
 

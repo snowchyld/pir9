@@ -2,10 +2,10 @@
  * General Settings page
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createQuery } from '../../core/query';
+import { showSuccess } from '../../stores/app.store';
 
 interface HostConfig {
   bindAddress: string;
@@ -18,31 +18,6 @@ interface HostConfig {
   sslCertPath: string;
   sslCertPassword: string;
   launchBrowser: boolean;
-}
-
-interface SecurityConfig {
-  authenticationMethod: string;
-  authenticationRequired: string;
-  username: string;
-  password: string;
-  apiKey: string;
-  certificateValidation: string;
-}
-
-interface ProxyConfig {
-  proxyEnabled: boolean;
-  proxyType: string;
-  proxyHostname: string;
-  proxyPort: number;
-  proxyUsername: string;
-  proxyPassword: string;
-  proxyBypassFilter: string;
-  proxyBypassLocalAddresses: boolean;
-}
-
-interface LoggingConfig {
-  logLevel: string;
-  analyticsEnabled: boolean;
 }
 
 @customElement('general-settings')
@@ -409,7 +384,11 @@ export class GeneralSettings extends BaseComponent {
   }
 
   handleRegenerateApiKey(): void {
-    if (confirm('Are you sure you want to regenerate the API key? All existing applications will need to be updated.')) {
+    if (
+      confirm(
+        'Are you sure you want to regenerate the API key? All existing applications will need to be updated.',
+      )
+    ) {
       showSuccess('API key regenerated');
     }
   }

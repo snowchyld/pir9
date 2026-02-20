@@ -2,11 +2,11 @@
  * Queue page showing download progress
  */
 
-import { BaseComponent, customElement, html, escapeHtml, safeHtml } from '../../core/component';
-import { useQueueQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { http, type QueueItem, type QueueResponse } from '../../core/http';
+import { createMutation, invalidateQueries, useQueueQuery } from '../../core/query';
 import { navigate } from '../../router';
-import { showSuccess, showError } from '../../stores/app.store';
+import { showError, showSuccess } from '../../stores/app.store';
 
 type QueueSortKey = 'status' | 'title' | 'episode' | 'protocol' | 'progress' | 'timeleft';
 
@@ -338,9 +338,10 @@ export class QueuePage extends BaseComponent {
     }
 
     const sorted = this.sortItems(items);
-    const sortIcon = this.sortDirection === 'asc'
-      ? '<svg class="sort-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>'
-      : '<svg class="sort-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+    const sortIcon =
+      this.sortDirection === 'asc'
+        ? '<svg class="sort-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>'
+        : '<svg class="sort-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>';
 
     const th = (label: string, key: QueueSortKey): string => {
       const isSorted = this.sortKey === key;
@@ -396,9 +397,10 @@ export class QueuePage extends BaseComponent {
           </div>
         </td>
         <td class="title-cell">
-          ${hasDbSeries
-            ? `<a class="title-link" href="/series/${item.seriesId}" onclick="event.preventDefault(); this.closest('queue-page').handleSeriesClick(${item.seriesId})" title="${escapeHtml(seriesTitle)}">${escapeHtml(this.truncate(seriesTitle, 32))}</a>`
-            : `<span title="${escapeHtml(seriesTitle)}">${escapeHtml(this.truncate(seriesTitle, 32))}</span>`
+          ${
+            hasDbSeries
+              ? `<a class="title-link" href="/series/${item.seriesId}" onclick="event.preventDefault(); this.closest('queue-page').handleSeriesClick(${item.seriesId})" title="${escapeHtml(seriesTitle)}">${escapeHtml(this.truncate(seriesTitle, 32))}</a>`
+              : `<span title="${escapeHtml(seriesTitle)}">${escapeHtml(this.truncate(seriesTitle, 32))}</span>`
           }
         </td>
         <td class="episode-cell" title="${escapeHtml(episodeLabel)}">
@@ -459,9 +461,7 @@ export class QueuePage extends BaseComponent {
       case 'title':
         return (item.series?.title ?? item.title).toLowerCase();
       case 'episode':
-        return item.episode
-          ? item.episode.seasonNumber * 10000 + item.episode.episodeNumber
-          : 0;
+        return item.episode ? item.episode.seasonNumber * 10000 + item.episode.episodeNumber : 0;
       case 'protocol':
         return item.protocol;
       case 'progress':
@@ -496,16 +496,20 @@ export class QueuePage extends BaseComponent {
 
   private getStatusIcon(status: string): string {
     const icons: Record<string, string> = {
-      downloading: '<svg class="status-icon downloading animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>',
-      paused: '<svg class="status-icon paused" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>',
-      queued: '<svg class="status-icon queued" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
-      error: '<svg class="status-icon error" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
+      downloading:
+        '<svg class="status-icon downloading animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>',
+      paused:
+        '<svg class="status-icon paused" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>',
+      queued:
+        '<svg class="status-icon queued" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
+      error:
+        '<svg class="status-icon error" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
     };
     return icons[status.toLowerCase()] ?? icons.queued;
   }
 
   private truncate(text: string, max: number): string {
-    return text.length > max ? text.slice(0, max) + '\u2026' : text;
+    return text.length > max ? `${text.slice(0, max)}\u2026` : text;
   }
 
   private formatSize(bytes: number): string {
@@ -513,7 +517,7 @@ export class QueuePage extends BaseComponent {
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+    return `${parseFloat((bytes / k ** i).toFixed(1))} ${sizes[i]}`;
   }
 
   handleRefresh(): void {

@@ -2,11 +2,11 @@
  * Series edit dialog - for editing series settings
  */
 
-import { BaseComponent, customElement, html, escapeHtml, safeHtml } from '../../core/component';
-import { signal } from '../../core/reactive';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { http, type Series } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createQuery, invalidateQueries } from '../../core/query';
+import { signal } from '../../core/reactive';
+import { showError, showSuccess } from '../../stores/app.store';
 
 interface QualityProfile {
   id: number;
@@ -44,19 +44,6 @@ export class SeriesEditDialog extends BaseComponent {
   private rootFoldersQuery = createQuery({
     queryKey: ['/rootfolder'],
     queryFn: () => http.get<RootFolder[]>('/rootfolder'),
-  });
-
-  private updateMutation = createMutation({
-    mutationFn: (data: { id: number; series: Partial<Series> }) =>
-      http.put<Series>(`/series/${data.id}`, data.series),
-    onSuccess: () => {
-      invalidateQueries(['/series']);
-      showSuccess('Series updated successfully');
-      this.close();
-    },
-    onError: (error) => {
-      this.errors.set([error instanceof Error ? error.message : 'Failed to update series']);
-    },
   });
 
   protected onInit(): void {
@@ -97,32 +84,6 @@ export class SeriesEditDialog extends BaseComponent {
     }
   }
 
-  private async handleSave(): Promise<void> {
-    const series = this.series.value;
-    const data = this.formData.value;
-    if (!series || !data) return;
-
-    this.isSaving.set(true);
-    this.errors.set([]);
-
-    try {
-      // Build the update payload - include all required fields
-      const payload: Partial<Series> = {
-        ...series,
-        monitored: data.monitored,
-        seasonFolder: data.seasonFolder,
-        qualityProfileId: data.qualityProfileId,
-        seriesType: data.seriesType,
-        path: data.path,
-        tags: data.tags,
-      };
-
-      await this.updateMutation.mutateAsync({ id: series.id, series: payload });
-    } finally {
-      this.isSaving.set(false);
-    }
-  }
-
   handleFieldChange(name: string, value: unknown): void {
     this.updateField(name as keyof SeriesFormData, value as never);
   }
@@ -159,11 +120,15 @@ export class SeriesEditDialog extends BaseComponent {
           </div>
 
           <div class="dialog-body">
-            ${errors.length > 0 ? html`
+            ${
+              errors.length > 0
+                ? html`
               <div class="error-box">
                 ${errors.map((e) => html`<p>${escapeHtml(e)}</p>`).join('')}
               </div>
-            ` : ''}
+            `
+                : ''
+            }
 
             <form class="edit-form" onsubmit="event.preventDefault()">
               <!-- Monitored -->
@@ -199,11 +164,15 @@ export class SeriesEditDialog extends BaseComponent {
                   id="qualityProfileId"
                   onchange="this.closest('series-edit-dialog').handleFieldChange('qualityProfileId', parseInt(this.value))"
                 >
-                  ${qualityProfiles.map((p) => html`
+                  ${qualityProfiles
+                    .map(
+                      (p) => html`
                     <option value="${p.id}" ${data.qualityProfileId === p.id ? 'selected' : ''}>
                       ${escapeHtml(p.name)}
                     </option>
-                  `).join('')}
+                  `,
+                    )
+                    .join('')}
                 </select>
               </div>
 
@@ -233,10 +202,14 @@ export class SeriesEditDialog extends BaseComponent {
                   />
                 </div>
                 <p class="help-text">Location of series files on disk</p>
-                ${rootFolders.length > 0 ? html`
+                ${
+                  rootFolders.length > 0
+                    ? html`
                   <div class="root-folder-hint">
                     <span class="hint-label">Root folders:</span>
-                    ${rootFolders.map((f) => html`
+                    ${rootFolders
+                      .map(
+                        (f) => html`
                       <button
                         type="button"
                         class="root-folder-btn"
@@ -244,9 +217,13 @@ export class SeriesEditDialog extends BaseComponent {
                       >
                         ${escapeHtml(f.path)}
                       </button>
-                    `).join('')}
+                    `,
+                      )
+                      .join('')}
                   </div>
-                ` : ''}
+                `
+                    : ''
+                }
               </div>
             </form>
           </div>
@@ -266,10 +243,14 @@ export class SeriesEditDialog extends BaseComponent {
               onclick="this.closest('series-edit-dialog').handleSave()"
               ${isSaving ? 'disabled' : ''}
             >
-              ${isSaving ? html`
+              ${
+                isSaving
+                  ? html`
                 <span class="btn-spinner"></span>
                 Saving...
-              ` : 'Save'}
+              `
+                  : 'Save'
+              }
             </button>
           </div>
         </div>
@@ -284,9 +265,10 @@ export class SeriesEditDialog extends BaseComponent {
     if (!series) return;
 
     // Append the series title to the root path
-    const newPath = rootPath.endsWith('/') || rootPath.endsWith('\\')
-      ? `${rootPath}${series.title}`
-      : `${rootPath}/${series.title}`;
+    const newPath =
+      rootPath.endsWith('/') || rootPath.endsWith('\\')
+        ? `${rootPath}${series.title}`
+        : `${rootPath}/${series.title}`;
 
     this.updateField('path', newPath);
   }
@@ -297,7 +279,8 @@ export class SeriesEditDialog extends BaseComponent {
 
     // For now, show a confirmation - could be expanded to a proper delete dialog
     if (confirm(`Are you sure you want to delete "${series.title}"? This cannot be undone.`)) {
-      http.delete(`/series/${series.id}`, { params: { deleteFiles: false } })
+      http
+        .delete(`/series/${series.id}`, { params: { deleteFiles: false } })
         .then(() => {
           invalidateQueries(['/series']);
           showSuccess('Series deleted');

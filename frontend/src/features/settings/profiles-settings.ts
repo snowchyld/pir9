@@ -2,11 +2,11 @@
  * Profiles Settings page - Quality Profiles & Release Profiles
  */
 
-import { BaseComponent, customElement, html, escapeHtml, safeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { httpV3 } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
+import { showError, showSuccess } from '../../stores/app.store';
 
 interface QualityItem {
   id?: number;
@@ -114,7 +114,8 @@ export class ProfilesSettings extends BaseComponent {
   protected template(): string {
     const qualityProfiles = this.qualityProfilesQuery.data.value ?? [];
     const releaseProfiles = this.releaseProfilesQuery.data.value ?? [];
-    const isLoading = this.qualityProfilesQuery.isLoading.value || this.releaseProfilesQuery.isLoading.value;
+    const isLoading =
+      this.qualityProfilesQuery.isLoading.value || this.releaseProfilesQuery.isLoading.value;
     const mode = this.dialogMode.value;
 
     if (isLoading) {
@@ -139,11 +140,16 @@ export class ProfilesSettings extends BaseComponent {
         </div>
 
         <div class="profiles-grid">
-          ${qualityProfiles.length === 0 ? html`
+          ${
+            qualityProfiles.length === 0
+              ? html`
             <div class="empty-state">
               <p>No quality profiles configured</p>
             </div>
-          ` : qualityProfiles.map((profile) => html`
+          `
+              : qualityProfiles
+                  .map(
+                    (profile) => html`
             <div class="profile-card">
               <div class="profile-content" onclick="this.closest('profiles-settings').handleEditQualityProfile(${profile.id})">
                 <div class="profile-name">${escapeHtml(profile.name)}</div>
@@ -163,7 +169,10 @@ export class ProfilesSettings extends BaseComponent {
                 </button>
               </div>
             </div>
-          `).join('')}
+          `,
+                  )
+                  .join('')
+          }
         </div>
       </div>
 
@@ -180,12 +189,17 @@ export class ProfilesSettings extends BaseComponent {
         </div>
 
         <div class="profiles-list">
-          ${releaseProfiles.length === 0 ? html`
+          ${
+            releaseProfiles.length === 0
+              ? html`
             <div class="empty-state">
               <p>No release profiles configured</p>
               <p class="hint">Release profiles let you filter releases by terms they must or must not contain</p>
             </div>
-          ` : releaseProfiles.map((profile) => html`
+          `
+              : releaseProfiles
+                  .map(
+                    (profile) => html`
             <div class="release-profile-row">
               <div class="profile-content" onclick="this.closest('profiles-settings').handleEditReleaseProfile(${profile.id})">
                 <div class="profile-info">
@@ -195,12 +209,20 @@ export class ProfilesSettings extends BaseComponent {
                   </span>
                 </div>
                 <div class="profile-terms">
-                  ${profile.required && profile.required.length > 0 ? html`
+                  ${
+                    profile.required && profile.required.length > 0
+                      ? html`
                     <span class="term-badge required">Must contain: ${profile.required.length} term${profile.required.length !== 1 ? 's' : ''}</span>
-                  ` : ''}
-                  ${profile.ignored && profile.ignored.length > 0 ? html`
+                  `
+                      : ''
+                  }
+                  ${
+                    profile.ignored && profile.ignored.length > 0
+                      ? html`
                     <span class="term-badge ignored">Must not contain: ${profile.ignored.length} term${profile.ignored.length !== 1 ? 's' : ''}</span>
-                  ` : ''}
+                  `
+                      : ''
+                  }
                 </div>
               </div>
               <div class="profile-actions">
@@ -212,7 +234,10 @@ export class ProfilesSettings extends BaseComponent {
                 </button>
               </div>
             </div>
-          `).join('')}
+          `,
+                  )
+                  .join('')
+          }
         </div>
       </div>
 
@@ -282,7 +307,9 @@ export class ProfilesSettings extends BaseComponent {
                 </div>
               </div>
 
-              ${data.upgradeAllowed ? html`
+              ${
+                data.upgradeAllowed
+                  ? html`
                 <div class="form-row">
                   <div class="form-group">
                     <label for="qp-cutoff">Upgrade Until</label>
@@ -295,7 +322,9 @@ export class ProfilesSettings extends BaseComponent {
                     <p class="help-text">Once this quality is reached, no further upgrades will be attempted</p>
                   </div>
                 </div>
-              ` : ''}
+              `
+                  : ''
+              }
 
               <div class="qualities-section">
                 <h3>Qualities</h3>
@@ -356,11 +385,12 @@ export class ProfilesSettings extends BaseComponent {
   }
 
   private renderQualityItems(items: QualityItem[]): string {
-    return items.map((item, index) => {
-      const name = item.quality?.name || item.name || 'Unknown';
-      const isGroup = item.items && item.items.length > 0 && !item.quality;
+    return items
+      .map((item, index) => {
+        const name = item.quality?.name || item.name || 'Unknown';
+        const isGroup = item.items && item.items.length > 0 && !item.quality;
 
-      return html`
+        return html`
         <div class="quality-item ${isGroup ? 'quality-group' : ''}">
           <div class="quality-row">
             <label class="quality-checkbox">
@@ -370,14 +400,22 @@ export class ProfilesSettings extends BaseComponent {
                 onchange="this.closest('profiles-settings').toggleQuality(${index}, this.checked)"
               />
               <span class="quality-name">${escapeHtml(name)}</span>
-              ${item.quality ? html`
+              ${
+                item.quality
+                  ? html`
                 <span class="quality-resolution">${item.quality.resolution}p</span>
-              ` : ''}
+              `
+                  : ''
+              }
             </label>
           </div>
-          ${isGroup ? html`
+          ${
+            isGroup
+              ? html`
             <div class="quality-group-items">
-              ${item.items.map((subItem, subIndex) => html`
+              ${item.items
+                .map(
+                  (subItem, subIndex) => html`
                 <div class="quality-row sub-item">
                   <label class="quality-checkbox">
                     <input
@@ -386,17 +424,26 @@ export class ProfilesSettings extends BaseComponent {
                       onchange="this.closest('profiles-settings').toggleSubQuality(${index}, ${subIndex}, this.checked)"
                     />
                     <span class="quality-name">${escapeHtml(subItem.quality?.name || 'Unknown')}</span>
-                    ${subItem.quality ? html`
+                    ${
+                      subItem.quality
+                        ? html`
                       <span class="quality-resolution">${subItem.quality.resolution}p</span>
-                    ` : ''}
+                    `
+                        : ''
+                    }
                   </label>
                 </div>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </div>
-          ` : ''}
+          `
+              : ''
+          }
         </div>
       `;
-    }).join('');
+      })
+      .join('');
   }
 
   private renderReleaseDialog(): string {
@@ -524,7 +571,7 @@ export class ProfilesSettings extends BaseComponent {
     items[index] = { ...items[index], allowed };
     // Also toggle children if it's a group
     if (items[index].items && items[index].items.length > 0) {
-      items[index].items = items[index].items.map(sub => ({ ...sub, allowed }));
+      items[index].items = items[index].items.map((sub) => ({ ...sub, allowed }));
     }
     this.qualityFormData.set({ ...current, items });
   }
@@ -536,7 +583,7 @@ export class ProfilesSettings extends BaseComponent {
     subItems[subIndex] = { ...subItems[subIndex], allowed };
     items[parentIndex] = { ...items[parentIndex], items: subItems };
     // Update parent group state based on children
-    const anyAllowed = subItems.some(s => s.allowed);
+    const anyAllowed = subItems.some((s) => s.allowed);
     items[parentIndex].allowed = anyAllowed;
     this.qualityFormData.set({ ...current, items });
   }
@@ -622,8 +669,14 @@ export class ProfilesSettings extends BaseComponent {
         id: this.editingId.value || 0,
         name: data.name || null,
         enabled: data.enabled,
-        required: data.required.split('\n').map(s => s.trim()).filter(Boolean),
-        ignored: data.ignored.split('\n').map(s => s.trim()).filter(Boolean),
+        required: data.required
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean),
+        ignored: data.ignored
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean),
         indexerId: 0,
         tags: [],
       };

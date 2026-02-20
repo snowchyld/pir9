@@ -4,7 +4,7 @@
  */
 
 import Navigo from 'navigo';
-import { signal, type Signal } from './core/reactive';
+import { type Signal, signal } from './core/reactive';
 
 export interface RouteParams {
   [key: string]: string;
@@ -56,12 +56,24 @@ export const routes: Route[] = [
 
   // Settings
   { path: '/settings', component: 'settings-page', title: 'Settings' },
-  { path: '/settings/mediamanagement', component: 'media-management-settings', title: 'Media Management' },
+  {
+    path: '/settings/mediamanagement',
+    component: 'media-management-settings',
+    title: 'Media Management',
+  },
   { path: '/settings/profiles', component: 'profiles-settings', title: 'Profiles' },
   { path: '/settings/quality', component: 'quality-settings', title: 'Quality' },
-  { path: '/settings/customformats', component: 'custom-formats-settings', title: 'Custom Formats' },
+  {
+    path: '/settings/customformats',
+    component: 'custom-formats-settings',
+    title: 'Custom Formats',
+  },
   { path: '/settings/indexers', component: 'indexers-settings', title: 'Indexers' },
-  { path: '/settings/downloadclients', component: 'download-clients-settings', title: 'Download Clients' },
+  {
+    path: '/settings/downloadclients',
+    component: 'download-clients-settings',
+    title: 'Download Clients',
+  },
   { path: '/settings/importlists', component: 'import-lists-settings', title: 'Import Lists' },
   { path: '/settings/connect', component: 'connect-settings', title: 'Connect' },
   { path: '/settings/metadata', component: 'metadata-settings', title: 'Metadata' },
@@ -157,13 +169,9 @@ export function initializeRouter(): Navigo {
 
   // Register routes
   routes.forEach((route) => {
-    router!.on(route.path, (match) => {
+    router?.on(route.path, (match) => {
       if (match) {
-        renderRoute(
-          route,
-          match.data ?? {},
-          match.queryString ?? ''
-        );
+        renderRoute(route, match.data ?? {}, match.queryString ?? '');
       }
     });
   });
@@ -176,7 +184,7 @@ export function initializeRouter(): Navigo {
   // Wait for router-outlet to exist before resolving
   // Custom elements need time to upgrade and render
   waitForOutlet().then(() => {
-    router!.resolve();
+    router?.resolve();
   });
 
   return router;
@@ -266,13 +274,7 @@ export function isActive(path: string, exact = false): boolean {
  */
 export function handleLinkClick(event: MouseEvent): void {
   // Only handle left clicks without modifiers
-  if (
-    event.button !== 0 ||
-    event.metaKey ||
-    event.ctrlKey ||
-    event.shiftKey ||
-    event.altKey
-  ) {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
     return;
   }
 
@@ -311,7 +313,7 @@ export function installLinkHandler(): void {
  */
 export function buildUrl(
   path: string,
-  params?: Record<string, string | number | boolean | undefined>
+  params?: Record<string, string | number | boolean | undefined>,
 ): string {
   const url = new URL(path, window.location.origin);
 

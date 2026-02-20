@@ -2,11 +2,11 @@
  * Indexers Settings page
  */
 
-import { BaseComponent, customElement, html, escapeHtml, safeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { httpV3 } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
+import { showError, showSuccess } from '../../stores/app.store';
 import type { IndexerSchema, ProviderField } from './provider-types';
 
 interface Indexer {
@@ -97,7 +97,9 @@ export class IndexersSettings extends BaseComponent {
           </button>
         </div>
 
-        ${indexers.length === 0 ? html`
+        ${
+          indexers.length === 0
+            ? html`
           <div class="empty-state">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" color="var(--text-color-muted)">
               <circle cx="11" cy="11" r="8"></circle>
@@ -106,9 +108,12 @@ export class IndexersSettings extends BaseComponent {
             <p>No indexers configured</p>
             <p class="hint">Add an indexer to start searching for releases</p>
           </div>
-        ` : html`
+        `
+            : html`
           <div class="indexers-list">
-            ${indexers.map((indexer) => html`
+            ${indexers
+              .map(
+                (indexer) => html`
               <div class="indexer-card">
                 <div class="indexer-info">
                   <div class="indexer-name">${escapeHtml(indexer.name)}</div>
@@ -142,9 +147,12 @@ export class IndexersSettings extends BaseComponent {
                   </button>
                 </div>
               </div>
-            `).join('')}
+            `,
+              )
+              .join('')}
           </div>
-        `}
+        `
+        }
       </div>
 
       ${mode === 'select' ? this.renderSelectDialog() : ''}
@@ -158,8 +166,8 @@ export class IndexersSettings extends BaseComponent {
     const schemas = this.schemas.value;
     const loading = this.schemasLoading.value;
 
-    const usenetSchemas = schemas.filter(s => s.protocol === 'usenet');
-    const torrentSchemas = schemas.filter(s => s.protocol === 'torrent');
+    const usenetSchemas = schemas.filter((s) => s.protocol === 'usenet');
+    const torrentSchemas = schemas.filter((s) => s.protocol === 'torrent');
 
     return html`
       <div class="dialog-backdrop" onclick="if(event.target.classList.contains('dialog-backdrop')) this.closest('indexers-settings').closeDialog()">
@@ -174,12 +182,15 @@ export class IndexersSettings extends BaseComponent {
             </button>
           </div>
           <div class="dialog-body">
-            ${loading ? html`
+            ${
+              loading
+                ? html`
               <div class="loading-center">
                 <div class="spinner"></div>
                 <p>Loading available indexers...</p>
               </div>
-            ` : html`
+            `
+                : html`
               <div class="info-box">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="12" cy="12" r="10"></circle>
@@ -189,20 +200,29 @@ export class IndexersSettings extends BaseComponent {
                 <span>Select an indexer to configure</span>
               </div>
 
-              ${usenetSchemas.length > 0 ? html`
+              ${
+                usenetSchemas.length > 0
+                  ? html`
                 <div class="group-header"><h3>Usenet</h3></div>
                 <div class="provider-grid">
                   ${usenetSchemas.map((schema) => this.renderSchemaCard(schema)).join('')}
                 </div>
-              ` : ''}
+              `
+                  : ''
+              }
 
-              ${torrentSchemas.length > 0 ? html`
+              ${
+                torrentSchemas.length > 0
+                  ? html`
                 <div class="group-header"><h3>Torrents</h3></div>
                 <div class="provider-grid">
                   ${torrentSchemas.map((schema) => this.renderSchemaCard(schema)).join('')}
                 </div>
-              ` : ''}
-            `}
+              `
+                  : ''
+              }
+            `
+            }
           </div>
           <div class="dialog-footer">
             <button class="btn btn-secondary" onclick="this.closest('indexers-settings').closeDialog()">
@@ -251,16 +271,22 @@ export class IndexersSettings extends BaseComponent {
             </button>
           </div>
           <div class="dialog-body">
-            ${testResult ? html`
+            ${
+              testResult
+                ? html`
               <div class="test-result ${testResult.success ? 'success' : 'error'}">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  ${testResult.success
-                    ? '<polyline points="20 6 9 17 4 12"></polyline>'
-                    : '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>'}
+                  ${
+                    testResult.success
+                      ? '<polyline points="20 6 9 17 4 12"></polyline>'
+                      : '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>'
+                  }
                 </svg>
                 <span>${escapeHtml(testResult.message)}</span>
               </div>
-            ` : ''}
+            `
+                : ''
+            }
 
             <form class="provider-form" onsubmit="event.preventDefault()">
               <div class="form-group">
@@ -311,7 +337,7 @@ export class IndexersSettings extends BaseComponent {
 
               <!-- Dynamic fields from schema -->
               ${schema.fields
-                .filter(f => f.hidden !== 'hidden')
+                .filter((f) => f.hidden !== 'hidden')
                 .sort((a, b) => a.order - b.order)
                 .map((field) => this.renderField(field, data))
                 .join('')}
@@ -428,11 +454,15 @@ export class IndexersSettings extends BaseComponent {
               id="${fieldId}"
               onchange="this.closest('indexers-settings').updateField('${field.name}', this.value)"
             >
-              ${(field.selectOptions || []).map((opt) => html`
+              ${(field.selectOptions || [])
+                .map(
+                  (opt) => html`
                 <option value="${opt.value}" ${String(value) === String(opt.value) ? 'selected' : ''}>
                   ${escapeHtml(opt.name)}
                 </option>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </select>
             ${field.helpText ? html`<p class="help-text">${escapeHtml(field.helpText)}</p>` : ''}
           </div>
@@ -470,7 +500,7 @@ export class IndexersSettings extends BaseComponent {
   }
 
   selectSchema(implementation: string): void {
-    const schema = this.schemas.value.find(s => s.implementation === implementation);
+    const schema = this.schemas.value.find((s) => s.implementation === implementation);
     if (!schema) return;
 
     this.selectedSchema.set(schema);
@@ -485,7 +515,7 @@ export class IndexersSettings extends BaseComponent {
       enableInteractiveSearch: schema.supportsSearch ?? true,
       priority: 25,
     };
-    schema.fields.forEach(f => {
+    schema.fields.forEach((f) => {
       data[f.name] = f.value;
     });
     this.formData.set(data);
@@ -497,7 +527,7 @@ export class IndexersSettings extends BaseComponent {
     try {
       const indexer = await httpV3.get<Indexer>(`/indexer/${id}`);
       const schemas = await httpV3.get<IndexerSchema[]>('/indexer/schema');
-      const schema = schemas.find(s => s.implementation === indexer.implementation);
+      const schema = schemas.find((s) => s.implementation === indexer.implementation);
 
       if (!schema) {
         showError('Unknown indexer type');
@@ -507,9 +537,9 @@ export class IndexersSettings extends BaseComponent {
       // Merge schema field definitions with indexer values
       const mergedSchema: IndexerSchema = {
         ...schema,
-        fields: schema.fields.map(f => ({
+        fields: schema.fields.map((f) => ({
           ...f,
-          value: indexer.fields.find(cf => cf.name === f.name)?.value ?? f.value,
+          value: indexer.fields.find((cf) => cf.name === f.name)?.value ?? f.value,
         })),
       };
 
@@ -526,7 +556,7 @@ export class IndexersSettings extends BaseComponent {
         enableInteractiveSearch: indexer.enableInteractiveSearch,
         priority: indexer.priority,
       };
-      mergedSchema.fields.forEach(f => {
+      mergedSchema.fields.forEach((f) => {
         data[f.name] = f.value;
       });
       this.formData.set(data);
@@ -613,7 +643,7 @@ export class IndexersSettings extends BaseComponent {
     if (!schema) return {};
 
     const data = this.formData.value;
-    const fields = schema.fields.map(f => ({
+    const fields = schema.fields.map((f) => ({
       name: f.name,
       value: data[f.name],
     }));

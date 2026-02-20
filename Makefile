@@ -61,7 +61,7 @@ help:
 	@echo ""
 	@echo "Testing:"
 	@echo "  make test           - Run Rust tests"
-	@echo "  make lint           - Run linters (cargo clippy + eslint)"
+	@echo "  make lint           - Run linters (cargo clippy + biome)"
 	@echo ""
 	@echo "Configuration:"
 	@echo "  REGISTRY=$(REGISTRY)"

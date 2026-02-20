@@ -3,7 +3,7 @@
  */
 
 import { BaseComponent, customElement, html } from '../../core/component';
-import { navigate, getCurrentPath } from '../../router';
+import { getCurrentPath, navigate } from '../../router';
 
 interface SettingsSection {
   id: string;

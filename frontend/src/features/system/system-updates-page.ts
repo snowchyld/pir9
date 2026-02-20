@@ -2,10 +2,10 @@
  * System Updates page
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery, createMutation } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery } from '../../core/query';
+import { showError, showSuccess } from '../../stores/app.store';
 
 interface Update {
   version: string;
@@ -71,7 +71,9 @@ export class SystemUpdatesPage extends BaseComponent {
           </div>
         </div>
 
-        ${availableUpdate ? html`
+        ${
+          availableUpdate
+            ? html`
           <div class="update-section available">
             <div class="update-header">
               <div class="update-info">
@@ -81,7 +83,9 @@ export class SystemUpdatesPage extends BaseComponent {
                   <span class="version-date">${new Date(availableUpdate.releaseDate).toLocaleDateString()}</span>
                 </div>
               </div>
-              ${availableUpdate.installable ? html`
+              ${
+                availableUpdate.installable
+                  ? html`
                 <button
                   class="install-btn"
                   onclick="this.closest('system-updates-page').handleInstall()"
@@ -93,21 +97,32 @@ export class SystemUpdatesPage extends BaseComponent {
                   </svg>
                   Install Update
                 </button>
-              ` : ''}
+              `
+                  : ''
+              }
             </div>
 
-            ${availableUpdate.changes?.changes?.length > 0 ? html`
+            ${
+              availableUpdate.changes?.changes?.length > 0
+                ? html`
               <div class="changelog">
                 <h3 class="changelog-title">Changes</h3>
                 <ul class="changes-list">
-                  ${availableUpdate.changes.changes.map((change) => html`
+                  ${availableUpdate.changes.changes
+                    .map(
+                      (change) => html`
                     <li>${escapeHtml(change)}</li>
-                  `).join('')}
+                  `,
+                    )
+                    .join('')}
                 </ul>
               </div>
-            ` : ''}
+            `
+                : ''
+            }
           </div>
-        ` : html`
+        `
+            : html`
           <div class="update-section uptodate">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
@@ -115,12 +130,17 @@ export class SystemUpdatesPage extends BaseComponent {
             </svg>
             <p>You're running the latest version</p>
           </div>
-        `}
+        `
+        }
 
         <div class="history-section">
           <h2 class="section-title">Recent Updates</h2>
           <div class="history-list">
-            ${updates.filter((u) => u.installed || !u.latest).slice(0, 10).map((update) => html`
+            ${updates
+              .filter((u) => u.installed || !u.latest)
+              .slice(0, 10)
+              .map(
+                (update) => html`
               <div class="history-item ${update.installed ? 'installed' : ''}">
                 <div class="history-version">
                   <span class="version-number">${escapeHtml(update.version)}</span>
@@ -128,7 +148,9 @@ export class SystemUpdatesPage extends BaseComponent {
                 </div>
                 <div class="history-date">${new Date(update.releaseDate).toLocaleDateString()}</div>
               </div>
-            `).join('')}
+            `,
+              )
+              .join('')}
           </div>
         </div>
       </div>

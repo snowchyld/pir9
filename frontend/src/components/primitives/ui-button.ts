@@ -2,7 +2,7 @@
  * Button component with variants
  */
 
-import { BaseComponent, customElement, attribute, html } from '../../core/component';
+import { attribute, BaseComponent, customElement, html } from '../../core/component';
 
 export type ButtonVariant = 'default' | 'primary' | 'danger' | 'success' | 'warning' | 'ghost';
 export type ButtonSize = 'sm' | 'md' | 'lg';
@@ -16,12 +16,10 @@ export class UIButton extends BaseComponent {
   @attribute() type: 'button' | 'submit' | 'reset' = 'button';
 
   protected template(): string {
-    const classes = this.cx(
-      'btn',
-      `btn-${this.variant}`,
-      `btn-${this.size}`,
-      { 'btn-loading': this.loading, 'btn-disabled': this.disabled }
-    );
+    const classes = this.cx('btn', `btn-${this.variant}`, `btn-${this.size}`, {
+      'btn-loading': this.loading,
+      'btn-disabled': this.disabled,
+    });
 
     return html`
       <button

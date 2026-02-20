@@ -2,12 +2,12 @@
  * Cutoff Unmet page - episodes below quality cutoff
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery, createMutation } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http } from '../../core/http';
-import { navigate } from '../../router';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery } from '../../core/query';
 import { signal } from '../../core/reactive';
+import { navigate } from '../../router';
+import { showError, showSuccess } from '../../stores/app.store';
 
 interface CutoffEpisode {
   id: number;
@@ -90,7 +90,9 @@ export class CutoffUnmetPage extends BaseComponent {
           </div>
 
           <div class="toolbar-right">
-            ${episodes.length > 0 ? html`
+            ${
+              episodes.length > 0
+                ? html`
               <button
                 class="search-all-btn"
                 onclick="this.closest('cutoff-unmet-page').handleSearchAll()"
@@ -101,7 +103,9 @@ export class CutoffUnmetPage extends BaseComponent {
                 </svg>
                 Search All
               </button>
-            ` : ''}
+            `
+                : ''
+            }
             <button
               class="refresh-btn"
               onclick="this.closest('cutoff-unmet-page').handleRefresh()"

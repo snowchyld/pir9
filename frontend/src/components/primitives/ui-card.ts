@@ -2,7 +2,7 @@
  * Card container component
  */
 
-import { BaseComponent, customElement, attribute, html } from '../../core/component';
+import { attribute, BaseComponent, customElement, html } from '../../core/component';
 
 @customElement('ui-card')
 export class UICard extends BaseComponent {

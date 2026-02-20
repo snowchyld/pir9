@@ -2,8 +2,8 @@
  * Base styles and Tailwind imports
  */
 
-@import 'tailwindcss';
-@import './themes.css';
+@import "tailwindcss";
+@import "./themes.css";
 
 /* Custom base styles */
 @layer base {
@@ -14,8 +14,9 @@
   }
 
   html {
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-      'Helvetica Neue', Arial, sans-serif;
+    font-family:
+      system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+      sans-serif;
     font-size: 14px;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
@@ -53,18 +54,35 @@
   }
 
   /* Headings */
-  h1, h2, h3, h4, h5, h6 {
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
     margin: 0;
     font-weight: 600;
     line-height: 1.25;
   }
 
-  h1 { font-size: 2rem; }
-  h2 { font-size: 1.5rem; }
-  h3 { font-size: 1.25rem; }
-  h4 { font-size: 1rem; }
-  h5 { font-size: 0.875rem; }
-  h6 { font-size: 0.75rem; }
+  h1 {
+    font-size: 2rem;
+  }
+  h2 {
+    font-size: 1.5rem;
+  }
+  h3 {
+    font-size: 1.25rem;
+  }
+  h4 {
+    font-size: 1rem;
+  }
+  h5 {
+    font-size: 0.875rem;
+  }
+  h6 {
+    font-size: 0.75rem;
+  }
 
   /* Paragraphs */
   p {
@@ -72,7 +90,8 @@
   }
 
   /* Lists */
-  ul, ol {
+  ul,
+  ol {
     margin: 0;
     padding: 0;
     list-style: none;
@@ -350,7 +369,8 @@
 
   /* Pulse - subtle attention grabber */
   @keyframes pulse {
-    0%, 100% {
+    0%,
+    100% {
       opacity: 1;
     }
     50% {
@@ -364,7 +384,8 @@
 
   /* Glow pulse - for primary actions */
   @keyframes glowPulse {
-    0%, 100% {
+    0%,
+    100% {
       box-shadow: 0 0 5px rgba(93, 156, 236, 0.2);
     }
     50% {
@@ -385,7 +406,8 @@
 
   /* Float - for decorative elements */
   @keyframes float {
-    0%, 100% {
+    0%,
+    100% {
       transform: translateY(0);
     }
     50% {
@@ -414,12 +436,24 @@
   }
 
   /* Staggered children animation delays */
-  .stagger-1 { animation-delay: 50ms; }
-  .stagger-2 { animation-delay: 100ms; }
-  .stagger-3 { animation-delay: 150ms; }
-  .stagger-4 { animation-delay: 200ms; }
-  .stagger-5 { animation-delay: 250ms; }
-  .stagger-6 { animation-delay: 300ms; }
+  .stagger-1 {
+    animation-delay: 50ms;
+  }
+  .stagger-2 {
+    animation-delay: 100ms;
+  }
+  .stagger-3 {
+    animation-delay: 150ms;
+  }
+  .stagger-4 {
+    animation-delay: 200ms;
+  }
+  .stagger-5 {
+    animation-delay: 250ms;
+  }
+  .stagger-6 {
+    animation-delay: 300ms;
+  }
 }
 
 /* Component layer for custom component styles */
@@ -544,7 +578,7 @@
   }
 
   .skeleton-poster {
-    aspect-ratio: 2/3;
+    aspect-ratio: 2 / 3;
     width: 100%;
     border-radius: 0.5rem;
   }
@@ -590,7 +624,7 @@
   }
 
   .progress-bar-fill::after {
-    content: '';
+    content: "";
     position: absolute;
     inset: 0;
     background: var(--progress-bar-shimmer);
@@ -623,8 +657,9 @@
 
   /* Smooth lift on hover */
   .hover-lift {
-    transition: transform var(--transition-normal) var(--ease-out-expo),
-                box-shadow var(--transition-normal) var(--ease-out-expo);
+    transition:
+      transform var(--transition-normal) var(--ease-out-expo),
+      box-shadow var(--transition-normal) var(--ease-out-expo);
   }
 
   .hover-lift:hover {
@@ -665,10 +700,10 @@
   }
 
   .btn::before {
-    content: '';
+    content: "";
     position: absolute;
     inset: 0;
-    background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, transparent 50%);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, transparent 50%);
     opacity: 0;
     transition: opacity var(--transition-fast) var(--ease-out-expo);
   }
@@ -680,7 +715,7 @@
   .btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
-    transform: none !important;
+    transform: none;
   }
 
   .btn:active:not(:disabled) {
@@ -812,7 +847,9 @@
   .input:focus {
     background-color: var(--bg-input-focus);
     border-color: var(--border-input-focus);
-    box-shadow: var(--shadow-input-focus), 0 0 0 1px var(--border-input-focus);
+    box-shadow:
+      var(--shadow-input-focus),
+      0 0 0 1px var(--border-input-focus);
     outline: none;
   }
 
@@ -828,7 +865,9 @@
   }
 
   .input-error:focus {
-    box-shadow: var(--shadow-input-error), 0 0 0 1px var(--border-input-error);
+    box-shadow:
+      var(--shadow-input-error),
+      0 0 0 1px var(--border-input-error);
   }
 
   .input-warning {
@@ -836,7 +875,9 @@
   }
 
   .input-warning:focus {
-    box-shadow: var(--shadow-input-warning), 0 0 0 1px var(--border-input-warning);
+    box-shadow:
+      var(--shadow-input-warning),
+      0 0 0 1px var(--border-input-warning);
   }
 
   /* Select dropdown - glass style */
@@ -849,7 +890,7 @@
     padding-right: 2.5rem;
   }
 
-  [data-theme='light'] .select {
+  [data-theme="light"] .select {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='rgba(0,0,0,0.6)' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
   }
 
@@ -883,7 +924,7 @@
   }
 
   .checkbox:checked::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 5px;
     top: 2px;
@@ -895,7 +936,7 @@
   }
 
   .radio:checked::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 50%;
     top: 50%;
@@ -1093,24 +1134,14 @@
   /* ===== DIVIDER ===== */
   .divider {
     height: 1px;
-    background: linear-gradient(
-      90deg,
-      transparent 0%,
-      var(--border-color) 50%,
-      transparent 100%
-    );
+    background: linear-gradient(90deg, transparent 0%, var(--border-color) 50%, transparent 100%);
     margin: 1rem 0;
   }
 
   .divider-vertical {
     width: 1px;
     height: 100%;
-    background: linear-gradient(
-      180deg,
-      transparent 0%,
-      var(--border-color) 50%,
-      transparent 100%
-    );
+    background: linear-gradient(180deg, transparent 0%, var(--border-color) 50%, transparent 100%);
     margin: 0 1rem;
   }
 

@@ -2,9 +2,9 @@
  * System Events page
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http } from '../../core/http';
+import { createQuery } from '../../core/query';
 import { signal } from '../../core/reactive';
 
 interface CommandRecord {
@@ -85,9 +85,12 @@ export class SystemEventsPage extends BaseComponent {
         </div>
 
         <div class="events-section">
-          ${events.length === 0 ? html`
+          ${
+            events.length === 0
+              ? html`
             <div class="empty-state">No events found</div>
-          ` : html`
+          `
+              : html`
             <table class="events-table">
               <thead>
                 <tr>
@@ -99,7 +102,9 @@ export class SystemEventsPage extends BaseComponent {
                 </tr>
               </thead>
               <tbody>
-                ${events.map((event) => html`
+                ${events
+                  .map(
+                    (event) => html`
                   <tr>
                     <td class="command-name">${escapeHtml(event.commandName)}</td>
                     <td class="message-cell">${escapeHtml(event.message || '-')}</td>
@@ -109,10 +114,13 @@ export class SystemEventsPage extends BaseComponent {
                       <span class="status-badge ${event.status}">${event.status}</span>
                     </td>
                   </tr>
-                `).join('')}
+                `,
+                  )
+                  .join('')}
               </tbody>
             </table>
-          `}
+          `
+          }
         </div>
 
         ${totalPages > 1 ? this.renderPagination(currentPage, totalPages) : ''}

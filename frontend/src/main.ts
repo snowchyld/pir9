@@ -6,9 +6,9 @@
 // Import styles first
 import './styles/base.css';
 
+import { initializeWebSocket } from './core/websocket';
 // Core systems
 import { initializeRouter, installLinkHandler } from './router';
-import { initializeWebSocket } from './core/websocket';
 
 // Stores (side effects run on import)
 import './stores/theme.store';

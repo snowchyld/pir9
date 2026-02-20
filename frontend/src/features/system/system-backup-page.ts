@@ -2,10 +2,10 @@
  * System Backup page
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
+import { showError, showSuccess } from '../../stores/app.store';
 
 interface Backup {
   id: number;
@@ -80,7 +80,9 @@ export class SystemBackupPage extends BaseComponent {
         </div>
 
         <div class="backup-section">
-          ${backups.length === 0 ? html`
+          ${
+            backups.length === 0
+              ? html`
             <div class="empty-state">
               <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" color="var(--text-color-muted)">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -89,7 +91,8 @@ export class SystemBackupPage extends BaseComponent {
               </svg>
               <p>No backups found</p>
             </div>
-          ` : html`
+          `
+              : html`
             <table class="backup-table">
               <thead>
                 <tr>
@@ -101,7 +104,9 @@ export class SystemBackupPage extends BaseComponent {
                 </tr>
               </thead>
               <tbody>
-                ${backups.map((backup) => html`
+                ${backups
+                  .map(
+                    (backup) => html`
                   <tr>
                     <td class="backup-name">${escapeHtml(backup.name)}</td>
                     <td>
@@ -134,10 +139,13 @@ export class SystemBackupPage extends BaseComponent {
                       </button>
                     </td>
                   </tr>
-                `).join('')}
+                `,
+                  )
+                  .join('')}
               </tbody>
             </table>
-          `}
+          `
+          }
         </div>
       </div>
 
@@ -301,7 +309,7 @@ export class SystemBackupPage extends BaseComponent {
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+    return `${parseFloat((bytes / k ** i).toFixed(1))} ${sizes[i]}`;
   }
 
   handleCreateBackup(): void {

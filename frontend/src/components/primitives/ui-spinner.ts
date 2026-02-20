@@ -2,7 +2,7 @@
  * Loading spinner component
  */
 
-import { BaseComponent, customElement, attribute, html } from '../../core/component';
+import { attribute, BaseComponent, customElement, html } from '../../core/component';
 
 export type SpinnerSize = 'sm' | 'md' | 'lg';
 

@@ -2,7 +2,14 @@
  * Data table component with sorting
  */
 
-import { BaseComponent, customElement, attribute, html, escapeHtml, safeHtml } from '../../core/component';
+import {
+  attribute,
+  BaseComponent,
+  customElement,
+  escapeHtml,
+  html,
+  safeHtml,
+} from '../../core/component';
 
 export interface TableColumn<T = unknown> {
   key: string;
@@ -55,11 +62,12 @@ export class UITable extends BaseComponent {
             </tr>
           </thead>
           <tbody>
-            ${this.loading
-              ? this.renderLoading()
-              : this._data.length === 0
-                ? this.renderEmpty()
-                : this._data.map((row, idx) => this.renderRow(row, idx)).join('')
+            ${
+              this.loading
+                ? this.renderLoading()
+                : this._data.length === 0
+                  ? this.renderEmpty()
+                  : this._data.map((row, idx) => this.renderRow(row, idx)).join('')
             }
           </tbody>
         </table>
@@ -164,14 +172,16 @@ export class UITable extends BaseComponent {
     const classes = this.cx(
       col.sortable && 'sortable',
       isSorted && 'sorted',
-      col.align && `align-${col.align}`
+      col.align && `align-${col.align}`,
     );
 
-    const sortIcon = col.sortable ? `
+    const sortIcon = col.sortable
+      ? `
       <svg class="sort-icon ${isSorted && this.sortDirection === 'desc' ? 'desc' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <polyline points="18 15 12 9 6 15"></polyline>
       </svg>
-    ` : '';
+    `
+      : '';
 
     return html`
       <th
@@ -192,14 +202,16 @@ export class UITable extends BaseComponent {
 
     return html`
       <tr onclick="this.closest('ui-table').handleRowClick(${index})">
-        ${this._columns.map((col) => {
-          const value = rowObj[col.key];
-          const content = col.render
-            ? col.render(value, row, index)
-            : escapeHtml(String(value ?? ''));
+        ${this._columns
+          .map((col) => {
+            const value = rowObj[col.key];
+            const content = col.render
+              ? col.render(value, row, index)
+              : escapeHtml(String(value ?? ''));
 
-          return `<td class="${col.align ? `align-${col.align}` : ''}">${content}</td>`;
-        }).join('')}
+            return `<td class="${col.align ? `align-${col.align}` : ''}">${content}</td>`;
+          })
+          .join('')}
       </tr>
     `;
   }

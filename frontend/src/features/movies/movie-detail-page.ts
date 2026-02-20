@@ -2,12 +2,12 @@
  * Movie Detail page - shows movie info with file status
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http, type Movie } from '../../core/http';
-import { navigate } from '../../router';
-import { showSuccess, showError, showInfo } from '../../stores/app.store';
+import { createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
+import { navigate } from '../../router';
+import { showError, showInfo, showSuccess } from '../../stores/app.store';
 
 @customElement('movie-detail-page')
 export class MovieDetailPage extends BaseComponent {
@@ -34,7 +34,7 @@ export class MovieDetailPage extends BaseComponent {
     const idAttr = this.getAttribute('id');
     if (idAttr) {
       const id = parseInt(idAttr, 10);
-      if (!isNaN(id)) {
+      if (!Number.isNaN(id)) {
         this.movieId.set(id);
         this.createQueries(id);
       }
@@ -44,7 +44,7 @@ export class MovieDetailPage extends BaseComponent {
   attributeChangedCallback(name: string, _oldValue: string | null, newValue: string | null): void {
     if (name === 'id' && newValue) {
       const id = parseInt(newValue, 10);
-      if (!isNaN(id) && id !== this.movieId.value) {
+      if (!Number.isNaN(id) && id !== this.movieId.value) {
         this.movieId.set(id);
         this.createQueries(id);
       }
@@ -91,16 +91,18 @@ export class MovieDetailPage extends BaseComponent {
 
           <div class="header-content">
             <div class="poster-container">
-              ${posterImage
-                ? `<img class="detail-poster" src="${escapeHtml(posterImage.url)}" alt="${escapeHtml(movie.title)}">`
-                : `<div class="detail-poster-placeholder">
+              ${
+                posterImage
+                  ? `<img class="detail-poster" src="${escapeHtml(posterImage.url)}" alt="${escapeHtml(movie.title)}">`
+                  : `<div class="detail-poster-placeholder">
                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
                       <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
                       <line x1="7" y1="2" x2="7" y2="22"></line>
                       <line x1="17" y1="2" x2="17" y2="22"></line>
                       <line x1="2" y1="12" x2="22" y2="12"></line>
                     </svg>
-                  </div>`}
+                  </div>`
+              }
             </div>
 
             <div class="header-info">
@@ -112,26 +114,38 @@ export class MovieDetailPage extends BaseComponent {
                 ${movie.certification ? `<span class="meta-item">${escapeHtml(movie.certification)}</span>` : ''}
                 ${movie.studio ? `<span class="meta-item">${escapeHtml(movie.studio)}</span>` : ''}
               </div>
-              ${movie.genres.length > 0 ? `
+              ${
+                movie.genres.length > 0
+                  ? `
                 <div class="genres">
                   ${movie.genres.map((g) => `<span class="genre-tag">${escapeHtml(g)}</span>`).join('')}
                 </div>
-              ` : ''}
+              `
+                  : ''
+              }
               ${movie.overview ? `<p class="overview">${escapeHtml(movie.overview)}</p>` : ''}
 
               <div class="stats-row">
-                ${movie.imdbRating ? `
+                ${
+                  movie.imdbRating
+                    ? `
                   <div class="stat">
                     <span class="stat-value">${movie.imdbRating.toFixed(1)}</span>
                     <span class="stat-label">IMDB</span>
                   </div>
-                ` : ''}
-                ${movie.imdbVotes ? `
+                `
+                    : ''
+                }
+                ${
+                  movie.imdbVotes
+                    ? `
                   <div class="stat">
                     <span class="stat-value">${this.formatNumber(movie.imdbVotes)}</span>
                     <span class="stat-label">Votes</span>
                   </div>
-                ` : ''}
+                `
+                    : ''
+                }
                 <div class="stat">
                   <span class="stat-value">${this.formatSize(movie.statistics?.sizeOnDisk ?? 0)}</span>
                   <span class="stat-label">Size</span>
@@ -160,18 +174,26 @@ export class MovieDetailPage extends BaseComponent {
               <span class="info-label">Monitored</span>
               <span class="info-value">${movie.monitored ? 'Yes' : 'No'}</span>
             </div>
-            ${movie.releaseDate ? `
+            ${
+              movie.releaseDate
+                ? `
               <div class="info-item">
                 <span class="info-label">Release Date</span>
                 <span class="info-value">${movie.releaseDate}</span>
               </div>
-            ` : ''}
-            ${movie.imdbId ? `
+            `
+                : ''
+            }
+            ${
+              movie.imdbId
+                ? `
               <div class="info-item">
                 <span class="info-label">IMDB</span>
                 <span class="info-value">${escapeHtml(movie.imdbId)}</span>
               </div>
-            ` : ''}
+            `
+                : ''
+            }
             <div class="info-item">
               <span class="info-label">Added</span>
               <span class="info-value">${new Date(movie.added).toLocaleDateString()}</span>
@@ -470,7 +492,7 @@ export class MovieDetailPage extends BaseComponent {
     if (bytes === 0) return '-';
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
+    return `${(bytes / 1024 ** i).toFixed(1)} ${units[i]}`;
   }
 
   private formatNumber(num: number): string {

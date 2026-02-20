@@ -2,11 +2,11 @@
  * Import Movie page - import existing movies from disk
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
+import { showError, showSuccess } from '../../stores/app.store';
 
 interface RootFolder {
   id: number;
@@ -75,8 +75,7 @@ export class ImportMoviePage extends BaseComponent {
   });
 
   private importMutation = createMutation({
-    mutationFn: (movies: Record<string, unknown>[]) =>
-      http.post('/movie/import', movies),
+    mutationFn: (movies: Record<string, unknown>[]) => http.post('/movie/import', movies),
     onSuccess: (_data, variables) => {
       const count = (variables as Record<string, unknown>[]).length;
       invalidateQueries(['/movie', '/rootfolder']);
@@ -128,7 +127,9 @@ export class ImportMoviePage extends BaseComponent {
           <p class="step-description">Choose a root folder containing movies you want to import.</p>
 
           <div class="root-folders-grid">
-            ${rootFolders.map((folder) => html`
+            ${rootFolders
+              .map(
+                (folder) => html`
               <div
                 class="root-folder-card ${selected === folder.path ? 'selected' : ''}"
                 onclick="this.closest('import-movie-page').selectRootFolder('${escapeHtml(folder.path)}')"
@@ -146,7 +147,9 @@ export class ImportMoviePage extends BaseComponent {
                   </div>
                 </div>
               </div>
-            `).join('')}
+            `,
+              )
+              .join('')}
 
             <div
               class="root-folder-card add-new"
@@ -165,12 +168,18 @@ export class ImportMoviePage extends BaseComponent {
             </div>
           </div>
 
-          ${this.showAddRootFolder.value ? html`
+          ${
+            this.showAddRootFolder.value
+              ? html`
             <div class="add-root-folder-form">
-              ${this.pendingRootFolders.value.length > 0 ? html`
+              ${
+                this.pendingRootFolders.value.length > 0
+                  ? html`
                 <div class="pending-folders">
                   <div class="pending-label">Folders to add:</div>
-                  ${this.pendingRootFolders.value.map((path, index) => html`
+                  ${this.pendingRootFolders.value
+                    .map(
+                      (path, index) => html`
                     <div class="pending-folder-item">
                       <span class="pending-path">${escapeHtml(path)}</span>
                       <button class="btn-remove-pending" onclick="this.closest('import-movie-page').removePendingFolder(${index})">
@@ -180,9 +189,13 @@ export class ImportMoviePage extends BaseComponent {
                         </svg>
                       </button>
                     </div>
-                  `).join('')}
+                  `,
+                    )
+                    .join('')}
                 </div>
-              ` : ''}
+              `
+                  : ''
+              }
               <div class="form-row">
                 <div class="path-input-wrapper">
                   <input
@@ -210,10 +223,14 @@ export class ImportMoviePage extends BaseComponent {
                 </button>
               </div>
             </div>
-          ` : ''}
+          `
+              : ''
+          }
         </div>
 
-        ${folders.length > 0 ? html`
+        ${
+          folders.length > 0
+            ? html`
           <div class="step-section">
             <h2 class="step-title">2. Select Movies to Import</h2>
             <p class="step-description">Select the movie folders you want to import.</p>
@@ -230,7 +247,9 @@ export class ImportMoviePage extends BaseComponent {
             </div>
 
             <div class="folders-list">
-              ${folders.map((folder) => html`
+              ${folders
+                .map(
+                  (folder) => html`
                 <div class="folder-row ${selectedSet.has(folder.path) ? 'selected' : ''}">
                   <input
                     type="checkbox"
@@ -239,15 +258,19 @@ export class ImportMoviePage extends BaseComponent {
                     onchange="this.closest('import-movie-page').toggleFolder('${escapeHtml(folder.path)}')"
                   />
                   <div class="folder-poster">
-                    ${folder.remotePoster ? html`
+                    ${
+                      folder.remotePoster
+                        ? html`
                       <img src="${folder.remotePoster}" alt="${escapeHtml(folder.title ?? folder.name)}" loading="lazy" />
-                    ` : html`
+                    `
+                        : html`
                       <div class="poster-placeholder">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                           <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
                         </svg>
                       </div>
-                    `}
+                    `
+                    }
                   </div>
                   <div class="folder-details">
                     <div class="folder-name">${escapeHtml(folder.title ?? folder.name)}</div>
@@ -255,7 +278,9 @@ export class ImportMoviePage extends BaseComponent {
                   </div>
                   ${folder.year ? html`<div class="folder-year">${folder.year}</div>` : ''}
                 </div>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </div>
           </div>
 
@@ -266,9 +291,13 @@ export class ImportMoviePage extends BaseComponent {
               <div class="form-group">
                 <label class="form-label">Quality Profile</label>
                 <select class="form-select" id="importQualityProfile">
-                  ${profiles.map((profile) => html`
+                  ${profiles
+                    .map(
+                      (profile) => html`
                     <option value="${profile.id}">${escapeHtml(profile.name)}</option>
-                  `).join('')}
+                  `,
+                    )
+                    .join('')}
                 </select>
               </div>
 
@@ -291,9 +320,13 @@ export class ImportMoviePage extends BaseComponent {
               Import ${selectedSet.size} Movie${selectedSet.size !== 1 ? 's' : ''}
             </button>
           </div>
-        ` : ''}
+        `
+            : ''
+        }
 
-        ${selected && folders.length === 0 ? html`
+        ${
+          selected && folders.length === 0
+            ? html`
           <div class="empty-state">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" color="var(--text-color-muted)">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
@@ -301,7 +334,9 @@ export class ImportMoviePage extends BaseComponent {
             <p>No unmapped folders found</p>
             <p class="hint">All movies in this root folder have already been imported</p>
           </div>
-        ` : ''}
+        `
+            : ''
+        }
       </div>
 
       <style>
@@ -768,7 +803,7 @@ export class ImportMoviePage extends BaseComponent {
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+    return `${parseFloat((bytes / k ** i).toFixed(1))} ${sizes[i]}`;
   }
 
   async selectRootFolder(path: string): Promise<void> {
@@ -791,7 +826,9 @@ export class ImportMoviePage extends BaseComponent {
         folder.unmappedFolders.map(async (f) => {
           const searchTerm = this.parseMovieName(f.name);
           try {
-            const results = await http.get<MovieLookupResult[]>(`/movie/lookup?term=${encodeURIComponent(searchTerm)}`);
+            const results = await http.get<MovieLookupResult[]>(
+              `/movie/lookup?term=${encodeURIComponent(searchTerm)}`,
+            );
             if (results.length > 0) {
               const match = results[0];
               return {
@@ -801,20 +838,22 @@ export class ImportMoviePage extends BaseComponent {
                 title: match.title,
                 year: match.year,
                 overview: match.overview,
-                remotePoster: match.images?.find((img: { coverType: string }) => img.coverType === 'poster')?.url,
+                remotePoster: match.images?.find(
+                  (img: { coverType: string }) => img.coverType === 'poster',
+                )?.url,
               };
             }
           } catch {
             // Lookup failed, keep original
           }
           return { path: f.path, name: f.name };
-        })
+        }),
       );
 
       this.unmappedFolders.set(updatedPreviews);
       // Auto-select all folders that have a match
-      const matched = updatedPreviews.filter(p => p.imdbId);
-      this.selectedFolders.set(new Set(matched.map(p => p.path)));
+      const matched = updatedPreviews.filter((p) => p.imdbId);
+      this.selectedFolders.set(new Set(matched.map((p) => p.path)));
     } else {
       this.unmappedFolders.set([]);
     }
@@ -857,7 +896,9 @@ export class ImportMoviePage extends BaseComponent {
     const rootFolder = this.selectedRootFolder.value;
 
     const section = this.querySelector('.step-section:last-of-type');
-    const qualityProfileEl = section?.querySelector('#importQualityProfile') as HTMLSelectElement | null;
+    const qualityProfileEl = section?.querySelector(
+      '#importQualityProfile',
+    ) as HTMLSelectElement | null;
     const monitoredEl = section?.querySelector('#importMonitored') as HTMLInputElement | null;
 
     const moviesToImport = selectedPaths.map((path) => {
@@ -866,7 +907,7 @@ export class ImportMoviePage extends BaseComponent {
         path,
         title: folder?.title ?? folder?.name,
         imdbId: folder?.imdbId,
-        qualityProfileId: qualityProfileEl ? parseInt(qualityProfileEl.value) : 1,
+        qualityProfileId: qualityProfileEl ? parseInt(qualityProfileEl.value, 10) : 1,
         rootFolderPath: rootFolder,
         monitored: monitoredEl?.checked ?? true,
         year: folder?.year,
@@ -925,14 +966,14 @@ export class ImportMoviePage extends BaseComponent {
         queryPath = lastSlash > 0 ? path.substring(0, lastSlash) : '/';
       }
 
-      const response = await http.get<FilesystemResponse>(`/filesystem?path=${encodeURIComponent(queryPath)}`);
+      const response = await http.get<FilesystemResponse>(
+        `/filesystem?path=${encodeURIComponent(queryPath)}`,
+      );
 
       let filtered = response.directories;
       if (!path.endsWith('/')) {
         const searchTerm = path.substring(path.lastIndexOf('/') + 1).toLowerCase();
-        filtered = response.directories.filter(d =>
-          d.name.toLowerCase().startsWith(searchTerm)
-        );
+        filtered = response.directories.filter((d) => d.name.toLowerCase().startsWith(searchTerm));
       }
 
       this.currentSuggestions = filtered.slice(0, 10);
@@ -969,7 +1010,10 @@ export class ImportMoviePage extends BaseComponent {
       svg.setAttribute('stroke', 'currentColor');
       svg.setAttribute('stroke-width', '2');
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path.setAttribute('d', 'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z');
+      path.setAttribute(
+        'd',
+        'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z',
+      );
       svg.appendChild(path);
       item.appendChild(svg);
 
@@ -1021,10 +1065,10 @@ export class ImportMoviePage extends BaseComponent {
   selectSuggestion(path: string): void {
     const input = this.querySelector('#rootFolderPathInput') as HTMLInputElement;
     if (input) {
-      input.value = path + '/';
+      input.value = `${path}/`;
       input.focus();
     }
-    this.fetchSuggestions(path + '/');
+    this.fetchSuggestions(`${path}/`);
   }
 
   queueRootFolder(): void {
@@ -1043,7 +1087,7 @@ export class ImportMoviePage extends BaseComponent {
     }
 
     const existingFolders = this.rootFoldersQuery.data.value ?? [];
-    if (existingFolders.some(f => f.path === path)) {
+    if (existingFolders.some((f) => f.path === path)) {
       showError('This root folder already exists');
       return;
     }

@@ -106,4 +106,9 @@ export interface ImportListSchema extends ProviderSchema {
   listOrder: number;
 }
 
-export type AnyProviderSchema = DownloadClientSchema | IndexerSchema | NotificationSchema | ImportListSchema | ProviderSchema;
+export type AnyProviderSchema =
+  | DownloadClientSchema
+  | IndexerSchema
+  | NotificationSchema
+  | ImportListSchema
+  | ProviderSchema;

@@ -2,7 +2,7 @@
  * Theme store for managing light/dark mode
  */
 
-import { persistedSignal, computed, effect } from '../core/reactive';
+import { computed, effect, persistedSignal } from '../core/reactive';
 
 export type Theme = 'light' | 'dark' | 'system';
 
@@ -59,12 +59,10 @@ export function toggleTheme(): void {
  * Listen for system theme changes
  */
 if (typeof window !== 'undefined') {
-  window
-    .matchMedia('(prefers-color-scheme: dark)')
-    .addEventListener('change', (e) => {
-      if (themePreference.value === 'system') {
-        // Trigger re-evaluation of resolved theme
-        themePreference.set('system');
-      }
-    });
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (_e) => {
+    if (themePreference.value === 'system') {
+      // Trigger re-evaluation of resolved theme
+      themePreference.set('system');
+    }
+  });
 }

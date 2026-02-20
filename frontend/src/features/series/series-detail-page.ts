@@ -2,13 +2,12 @@
  * Series Detail page - shows series info with seasons and episodes
  */
 
-import { BaseComponent, customElement, html, escapeHtml, safeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
-import { http, type Series, type Episode } from '../../core/http';
-import { navigate } from '../../router';
-import { showSuccess, showError } from '../../stores/app.store';
-import { signal } from '../../core/reactive';
 import type { ReleaseSearchModal } from '../../components/release-search-modal';
+import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
+import { type Episode, http, type Series } from '../../core/http';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
+import { signal } from '../../core/reactive';
+import { showError, showSuccess } from '../../stores/app.store';
 import type { SeriesEditDialog } from './series-edit-dialog';
 
 // Ensure the dialog component is registered
@@ -87,8 +86,7 @@ export class SeriesDetailPage extends BaseComponent {
   });
 
   private refreshMetadataMutation = createMutation({
-    mutationFn: (seriesId: number) =>
-      http.post('/command', { name: 'RefreshSeries', seriesId }),
+    mutationFn: (seriesId: number) => http.post('/command', { name: 'RefreshSeries', seriesId }),
     onSuccess: () => {
       showSuccess('Metadata refresh queued - syncing episodes from TVDB');
       // Data will be invalidated via WebSocket events when refresh completes
@@ -99,8 +97,7 @@ export class SeriesDetailPage extends BaseComponent {
   });
 
   private rescanMutation = createMutation({
-    mutationFn: (seriesId: number) =>
-      http.post('/command', { name: 'RescanSeries', seriesId }),
+    mutationFn: (seriesId: number) => http.post('/command', { name: 'RescanSeries', seriesId }),
     onSuccess: () => {
       const id = this.seriesId.value;
       if (id) {
@@ -147,7 +144,7 @@ export class SeriesDetailPage extends BaseComponent {
           showError(`Series not found: ${slug}`);
         }
       }
-    } catch (error) {
+    } catch (_error) {
       showError('Failed to load series');
     }
   }
@@ -188,12 +185,15 @@ export class SeriesDetailPage extends BaseComponent {
       <div class="series-detail">
         <div class="series-header">
           <div class="series-poster">
-            ${series.images?.find((i) => i.coverType === 'poster')?.url ? html`
+            ${
+              series.images?.find((i) => i.coverType === 'poster')?.url
+                ? html`
               <img
                 src="${series.images.find((i) => i.coverType === 'poster')?.url ?? ''}"
                 alt="${escapeHtml(series.title)}"
               />
-            ` : html`
+            `
+                : html`
               <div class="poster-placeholder">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
                   <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
@@ -206,7 +206,8 @@ export class SeriesDetailPage extends BaseComponent {
                   <line x1="17" y1="7" x2="22" y2="7"></line>
                 </svg>
               </div>
-            `}
+            `
+            }
           </div>
 
           <div class="series-info">
@@ -658,7 +659,7 @@ export class SeriesDetailPage extends BaseComponent {
     return seasons.sort((a, b) => b.seasonNumber - a.seasonNumber);
   }
 
-  private renderSeason(season: SeasonEpisodes, series: Series): string {
+  private renderSeason(season: SeasonEpisodes, _series: Series): string {
     const isExpanded = this.expandedSeasons.value.has(season.seasonNumber);
     const seasonLabel = season.seasonNumber === 0 ? 'Specials' : `Season ${season.seasonNumber}`;
 
@@ -680,23 +681,28 @@ export class SeriesDetailPage extends BaseComponent {
           </div>
         </div>
 
-        ${isExpanded ? html`
+        ${
+          isExpanded
+            ? html`
           <div class="episodes-list">
             ${season.episodes.map((ep) => this.renderEpisode(ep)).join('')}
           </div>
-        ` : ''}
+        `
+            : ''
+        }
       </div>
     `;
   }
 
   private renderEpisode(episode: Episode): string {
     const isAired = episode.airDateUtc ? new Date(episode.airDateUtc) <= new Date() : false;
-    const status = episode.hasFile ? 'downloaded' : (isAired ? 'missing' : 'unaired');
-    const statusIcon = status === 'downloaded'
-      ? '<svg class="episode-status-icon downloaded" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>'
-      : (status === 'missing'
-        ? '<svg class="episode-status-icon missing" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>'
-        : '<svg class="episode-status-icon unaired" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>');
+    const status = episode.hasFile ? 'downloaded' : isAired ? 'missing' : 'unaired';
+    const statusIcon =
+      status === 'downloaded'
+        ? '<svg class="episode-status-icon downloaded" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>'
+        : status === 'missing'
+          ? '<svg class="episode-status-icon missing" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>'
+          : '<svg class="episode-status-icon unaired" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
 
     return html`
       <div class="episode-row">
@@ -724,7 +730,9 @@ export class SeriesDetailPage extends BaseComponent {
               <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
             </svg>
           </button>
-          ${isAired && !episode.hasFile ? html`
+          ${
+            isAired && !episode.hasFile
+              ? html`
             <button
               class="episode-action-btn auto-search"
               onclick="event.stopPropagation(); this.closest('series-detail-page').searchEpisode(${episode.id})"
@@ -734,7 +742,9 @@ export class SeriesDetailPage extends BaseComponent {
                 <polygon points="5 3 19 12 5 21 5 3"></polygon>
               </svg>
             </button>
-          ` : ''}
+          `
+              : ''
+          }
         </div>
       </div>
     `;
@@ -745,7 +755,7 @@ export class SeriesDetailPage extends BaseComponent {
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+    return `${parseFloat((bytes / k ** i).toFixed(1))} ${sizes[i]}`;
   }
 
   toggleSeason(seasonNumber: number): void {
@@ -766,7 +776,12 @@ export class SeriesDetailPage extends BaseComponent {
     this.searchMutation.mutate({ episodeIds: [episodeId] });
   }
 
-  openInteractiveSearch(episodeId: number, seasonNumber: number, episodeNumber: number, episodeTitle: string): void {
+  openInteractiveSearch(
+    episodeId: number,
+    seasonNumber: number,
+    episodeNumber: number,
+    episodeTitle: string,
+  ): void {
     const series = this.seriesQuery?.data.value;
     if (!series) return;
 

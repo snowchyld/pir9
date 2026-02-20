@@ -2,11 +2,11 @@
  * Application header with search and actions
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { toggleMobileMenu, searchQuery, setSearchQuery } from '../../stores/app.store';
-import { toggleTheme, resolvedTheme } from '../../stores/theme.store';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { useSystemStatusQuery } from '../../core/query';
-import { navigate, currentRoute } from '../../router';
+import { currentRoute, navigate } from '../../router';
+import { searchQuery, setSearchQuery, toggleMobileMenu } from '../../stores/app.store';
+import { resolvedTheme, toggleTheme } from '../../stores/theme.store';
 
 @customElement('app-header')
 export class AppHeader extends BaseComponent {
@@ -67,7 +67,9 @@ export class AppHeader extends BaseComponent {
             oninput="this.closest('app-header').handleSearch(event)"
             onkeydown="this.closest('app-header').handleSearchKeydown(event)"
           />
-          ${query ? html`
+          ${
+            query
+              ? html`
             <button
               class="search-clear"
               onclick="this.closest('app-header').handleClearSearch()"
@@ -78,7 +80,9 @@ export class AppHeader extends BaseComponent {
                 <line x1="6" y1="6" x2="18" y2="18"></line>
               </svg>
             </button>
-          ` : ''}
+          `
+              : ''
+          }
         </div>
 
         <!-- Actions -->
@@ -101,7 +105,9 @@ export class AppHeader extends BaseComponent {
             onclick="this.closest('app-header').handleThemeToggle()"
             title="Toggle theme"
           >
-            ${theme === 'dark' ? html`
+            ${
+              theme === 'dark'
+                ? html`
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="5"></circle>
                 <line x1="12" y1="1" x2="12" y2="3"></line>
@@ -113,19 +119,25 @@ export class AppHeader extends BaseComponent {
                 <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
                 <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
               </svg>
-            ` : html`
+            `
+                : html`
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
               </svg>
-            `}
+            `
+            }
           </button>
 
           <!-- Version badge -->
-          ${status ? html`
+          ${
+            status
+              ? html`
             <span class="version-badge" title="Version ${escapeHtml(status.version)}">
               ${escapeHtml(status.version)}
             </span>
-          ` : ''}
+          `
+              : ''
+          }
         </div>
       </header>
 

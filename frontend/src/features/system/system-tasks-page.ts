@@ -2,10 +2,10 @@
  * System Tasks page
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http } from '../../core/http';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
+import { showError, showSuccess } from '../../stores/app.store';
 
 interface ScheduledTask {
   id: number;
@@ -26,8 +26,7 @@ export class SystemTasksPage extends BaseComponent {
   });
 
   private runTaskMutation = createMutation({
-    mutationFn: (taskName: string) =>
-      http.post('/command', { name: taskName }),
+    mutationFn: (taskName: string) => http.post('/command', { name: taskName }),
     onSuccess: () => {
       invalidateQueries(['/system/task']);
       showSuccess('Task started');
@@ -84,7 +83,9 @@ export class SystemTasksPage extends BaseComponent {
               </tr>
             </thead>
             <tbody>
-              ${tasks.map((task) => html`
+              ${tasks
+                .map(
+                  (task) => html`
                 <tr>
                   <td class="task-name">${escapeHtml(task.name)}</td>
                   <td>${this.formatInterval(task.interval)}</td>
@@ -107,7 +108,9 @@ export class SystemTasksPage extends BaseComponent {
                     </button>
                   </td>
                 </tr>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </tbody>
           </table>
         </div>

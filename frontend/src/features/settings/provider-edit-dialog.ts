@@ -3,9 +3,9 @@
  * Renders dynamic form fields based on the schema
  */
 
-import { BaseComponent, customElement, html, escapeHtml, safeHtml } from '../../core/component';
+import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { signal } from '../../core/reactive';
-import type { ProviderSchema, ProviderField } from './provider-types';
+import type { ProviderField, ProviderSchema } from './provider-types';
 
 export interface ProviderEditDialogConfig {
   title: string;
@@ -99,106 +99,6 @@ export class ProviderEditDialog extends BaseComponent {
     this.testResult.set(null); // Clear test result on change
   }
 
-  private async handleTest(): Promise<void> {
-    const config = this.config.value;
-    if (!config) return;
-
-    this.isTesting.set(true);
-    this.testResult.set(null);
-
-    try {
-      const payload = this.buildPayload();
-      const response = await fetch(`/api/v3${config.apiEndpoint}/test`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      const result = await response.json();
-
-      if (response.ok && result.isValid !== false) {
-        this.testResult.set({
-          success: true,
-          message: result.message || 'Connection successful!'
-        });
-      } else {
-        this.testResult.set({
-          success: false,
-          message: result.message || 'Connection test failed'
-        });
-      }
-    } catch (err) {
-      this.testResult.set({
-        success: false,
-        message: err instanceof Error ? err.message : 'Test failed'
-      });
-    } finally {
-      this.isTesting.set(false);
-    }
-  }
-
-  private async handleSave(): Promise<void> {
-    const config = this.config.value;
-    if (!config) return;
-
-    this.isSaving.set(true);
-    this.errors.set([]);
-
-    try {
-      const payload = this.buildPayload();
-      const method = config.existingId ? 'PUT' : 'POST';
-      const url = config.existingId
-        ? `/api/v3${config.apiEndpoint}/${config.existingId}`
-        : `/api/v3${config.apiEndpoint}`;
-
-      const response = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Failed to save');
-      }
-
-      config.onSave();
-      this.close();
-    } catch (err) {
-      this.errors.set([err instanceof Error ? err.message : 'Failed to save']);
-    } finally {
-      this.isSaving.set(false);
-    }
-  }
-
-  private buildPayload(): Record<string, unknown> {
-    const config = this.config.value;
-    if (!config) return {};
-
-    const data = this.formData.value;
-
-    // Build fields array from form data
-    const fields = config.schema.fields.map((field) => ({
-      name: field.name,
-      value: data[field.name],
-    }));
-
-    return {
-      id: config.existingId || 0,
-      name: data.name,
-      enable: data.enable,
-      implementation: data.implementation,
-      implementationName: data.implementationName,
-      configContract: data.configContract,
-      fields,
-      tags: data.tags || [],
-      protocol: data.protocol,
-      priority: data.priority,
-      removeCompletedDownloads: data.removeCompletedDownloads,
-      removeFailedDownloads: data.removeFailedDownloads,
-    };
-  }
-
   protected template(): string {
     const config = this.config.value;
     if (!config) return '';
@@ -223,22 +123,32 @@ export class ProviderEditDialog extends BaseComponent {
           </div>
 
           <div class="dialog-body">
-            ${errors.length > 0 ? html`
+            ${
+              errors.length > 0
+                ? html`
               <div class="error-box">
                 ${errors.map((e) => html`<p>${escapeHtml(e)}</p>`).join('')}
               </div>
-            ` : ''}
+            `
+                : ''
+            }
 
-            ${testResult ? html`
+            ${
+              testResult
+                ? html`
               <div class="test-result ${testResult.success ? 'success' : 'error'}">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  ${testResult.success
-                    ? '<polyline points="20 6 9 17 4 12"></polyline>'
-                    : '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>'}
+                  ${
+                    testResult.success
+                      ? '<polyline points="20 6 9 17 4 12"></polyline>'
+                      : '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>'
+                  }
                 </svg>
                 <span>${escapeHtml(testResult.message)}</span>
               </div>
-            ` : ''}
+            `
+                : ''
+            }
 
             <form class="provider-form" onsubmit="event.preventDefault()">
               <!-- Name field -->
@@ -272,7 +182,9 @@ export class ProviderEditDialog extends BaseComponent {
                 .join('')}
 
               <!-- Priority (if applicable) -->
-              ${'priority' in data ? html`
+              ${
+                'priority' in data
+                  ? html`
                 <div class="form-group">
                   <label for="priority">Priority</label>
                   <input
@@ -285,10 +197,14 @@ export class ProviderEditDialog extends BaseComponent {
                   />
                   <p class="help-text">Lower values are higher priority</p>
                 </div>
-              ` : ''}
+              `
+                  : ''
+              }
 
               <!-- Download handling options (for download clients) -->
-              ${'removeCompletedDownloads' in data ? html`
+              ${
+                'removeCompletedDownloads' in data
+                  ? html`
                 <fieldset class="form-fieldset">
                   <legend>Completed Download Handling</legend>
 
@@ -316,7 +232,9 @@ export class ProviderEditDialog extends BaseComponent {
                     <p class="help-text">Remove failed downloads from download client history</p>
                   </div>
                 </fieldset>
-              ` : ''}
+              `
+                  : ''
+              }
             </form>
           </div>
 
@@ -326,10 +244,14 @@ export class ProviderEditDialog extends BaseComponent {
               onclick="this.closest('provider-edit-dialog').handleTest()"
               ${isTesting ? 'disabled' : ''}
             >
-              ${isTesting ? html`
+              ${
+                isTesting
+                  ? html`
                 <span class="btn-spinner"></span>
                 Testing...
-              ` : 'Test'}
+              `
+                  : 'Test'
+              }
             </button>
 
             <div class="footer-spacer"></div>
@@ -342,10 +264,14 @@ export class ProviderEditDialog extends BaseComponent {
               onclick="this.closest('provider-edit-dialog').handleSave()"
               ${isSaving ? 'disabled' : ''}
             >
-              ${isSaving ? html`
+              ${
+                isSaving
+                  ? html`
                 <span class="btn-spinner"></span>
                 Saving...
-              ` : 'Save'}
+              `
+                  : 'Save'
+              }
             </button>
           </div>
         </div>
@@ -430,11 +356,15 @@ export class ProviderEditDialog extends BaseComponent {
               id="${fieldId}"
               onchange="this.closest('provider-edit-dialog').handleFieldChange('${field.name}', this.value)"
             >
-              ${(field.selectOptions || []).map((opt) => html`
+              ${(field.selectOptions || [])
+                .map(
+                  (opt) => html`
                 <option value="${opt.value}" ${String(value) === String(opt.value) ? 'selected' : ''}>
                   ${escapeHtml(opt.name)}
                 </option>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </select>
             ${field.helpText ? html`<p class="help-text">${escapeHtml(field.helpText)}</p>` : ''}
           </div>

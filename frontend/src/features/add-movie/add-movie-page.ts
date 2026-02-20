@@ -2,12 +2,12 @@
  * Add Movie page - search IMDB and add new movies
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../../core/component';
-import { createQuery, createMutation, invalidateQueries } from '../../core/query';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http, type Movie, type MovieLookupResult } from '../../core/http';
-import { navigate } from '../../router';
-import { showSuccess, showError } from '../../stores/app.store';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
+import { navigate } from '../../router';
+import { showError, showSuccess } from '../../stores/app.store';
 
 interface RootFolder {
   id: number;
@@ -38,8 +38,7 @@ export class AddMoviePage extends BaseComponent {
   });
 
   private addMovieMutation = createMutation({
-    mutationFn: (movie: Partial<Movie>) =>
-      http.post<Movie>('/movie', movie),
+    mutationFn: (movie: Partial<Movie>) => http.post<Movie>('/movie', movie),
     onSuccess: (data) => {
       invalidateQueries(['/movie']);
       showSuccess('Movie added successfully');
@@ -96,16 +95,22 @@ export class AddMoviePage extends BaseComponent {
 
         ${selected ? this.renderAddForm(selected, rootFolders, qualityProfiles) : ''}
 
-        ${!selected && results.length > 0 ? html`
+        ${
+          !selected && results.length > 0
+            ? html`
           <div class="results-section">
             <h2 class="section-title">Search Results</h2>
             <div class="results-grid">
               ${results.map((result, i) => this.renderSearchResult(result, i)).join('')}
             </div>
           </div>
-        ` : ''}
+        `
+            : ''
+        }
 
-        ${!selected && results.length === 0 && this.searchTerm.value && !isSearching ? html`
+        ${
+          !selected && results.length === 0 && this.searchTerm.value && !isSearching
+            ? html`
           <div class="empty-state">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" color="var(--text-color-muted)">
               <circle cx="11" cy="11" r="8"></circle>
@@ -114,7 +119,9 @@ export class AddMoviePage extends BaseComponent {
             <p>No movies found</p>
             <p class="hint">Try a different search term</p>
           </div>
-        ` : ''}
+        `
+            : ''
+        }
 
         <div class="import-link">
           <a href="/add/movies/import" onclick="event.preventDefault(); this.closest('add-movie-page').navigateToImport()">
@@ -472,9 +479,12 @@ export class AddMoviePage extends BaseComponent {
     return html`
       <div class="result-card" onclick="this.closest('add-movie-page').selectMovie(${index})">
         <div class="result-poster">
-          ${posterImage?.remoteUrl ? html`
+          ${
+            posterImage?.remoteUrl
+              ? html`
             <img src="${escapeHtml(posterImage.remoteUrl)}" alt="${escapeHtml(result.title)}" loading="lazy" />
-          ` : html`
+          `
+              : html`
             <div class="result-poster-placeholder">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
@@ -482,7 +492,8 @@ export class AddMoviePage extends BaseComponent {
                 <line x1="17" y1="2" x2="17" y2="22"></line>
               </svg>
             </div>
-          `}
+          `
+          }
         </div>
         <div class="result-info">
           <div class="result-title">${escapeHtml(result.title)}</div>
@@ -493,7 +504,11 @@ export class AddMoviePage extends BaseComponent {
     `;
   }
 
-  private renderAddForm(movie: MovieLookupResult, rootFolders: RootFolder[], profiles: QualityProfile[]): string {
+  private renderAddForm(
+    movie: MovieLookupResult,
+    rootFolders: RootFolder[],
+    profiles: QualityProfile[],
+  ): string {
     const posterImage = movie.images?.find((i) => i.coverType === 'poster');
 
     return html`
@@ -504,9 +519,13 @@ export class AddMoviePage extends BaseComponent {
 
         <div class="form-header">
           <div class="form-poster">
-            ${posterImage?.remoteUrl ? html`
+            ${
+              posterImage?.remoteUrl
+                ? html`
               <img src="${escapeHtml(posterImage.remoteUrl)}" alt="${escapeHtml(movie.title)}" />
-            ` : ''}
+            `
+                : ''
+            }
           </div>
           <div class="form-movie-info">
             <h2 class="form-title">${escapeHtml(movie.title)}</h2>
@@ -517,11 +536,15 @@ export class AddMoviePage extends BaseComponent {
               ${movie.certification ? ` • ${escapeHtml(movie.certification)}` : ''}
             </div>
             <div class="form-overview">${escapeHtml(movie.overview ?? '')}</div>
-            ${movie.genres.length > 0 ? `
+            ${
+              movie.genres.length > 0
+                ? `
               <div class="form-genres">
                 ${movie.genres.map((g) => `<span class="genre-tag">${escapeHtml(g)}</span>`).join('')}
               </div>
-            ` : ''}
+            `
+                : ''
+            }
           </div>
         </div>
 
@@ -529,18 +552,26 @@ export class AddMoviePage extends BaseComponent {
           <div class="form-group">
             <label class="form-label">Root Folder</label>
             <select class="form-select" id="rootFolder">
-              ${rootFolders.map((folder) => html`
+              ${rootFolders
+                .map(
+                  (folder) => html`
                 <option value="${escapeHtml(folder.path)}">${escapeHtml(folder.path)}</option>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </select>
           </div>
 
           <div class="form-group">
             <label class="form-label">Quality Profile</label>
             <select class="form-select" id="qualityProfile">
-              ${profiles.map((profile) => html`
+              ${profiles
+                .map(
+                  (profile) => html`
                 <option value="${profile.id}">${escapeHtml(profile.name)}</option>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </select>
           </div>
 
@@ -621,7 +652,7 @@ export class AddMoviePage extends BaseComponent {
     this.addMovieMutation.mutate({
       title: movie.title,
       imdbId: movie.imdbId,
-      qualityProfileId: qualityProfileEl ? parseInt(qualityProfileEl.value) : 0,
+      qualityProfileId: qualityProfileEl ? parseInt(qualityProfileEl.value, 10) : 0,
       rootFolderPath: rootFolderEl?.value ?? '',
       monitored: monitoredEl?.checked ?? true,
       addOptions: {

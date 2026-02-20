@@ -66,7 +66,7 @@
 
 /* Dark theme (default) - Glassmorphism */
 :root,
-[data-theme='dark'] {
+[data-theme="dark"] {
   color-scheme: dark;
 
   /* Text */
@@ -252,7 +252,7 @@
 }
 
 /* Light theme - Glassmorphism */
-[data-theme='light'] {
+[data-theme="light"] {
   color-scheme: light;
 
   --text-color: rgba(0, 0, 0, 0.85);

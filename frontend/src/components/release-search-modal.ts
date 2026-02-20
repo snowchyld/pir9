@@ -3,10 +3,10 @@
  * Shows releases from indexers and allows manual selection
  */
 
-import { BaseComponent, customElement, html, escapeHtml } from '../core/component';
+import { BaseComponent, customElement, escapeHtml, html } from '../core/component';
 import { httpV3 } from '../core/http';
-import { showSuccess, showError } from '../stores/app.store';
 import { signal } from '../core/reactive';
+import { showError, showSuccess } from '../stores/app.store';
 
 interface ReleaseResource {
   guid: string;
@@ -107,7 +107,7 @@ export class ReleaseSearchModal extends BaseComponent {
 
       const results = await httpV3.get<ReleaseResource[]>('/release', { params: queryParams });
       this.releases.set(results);
-    } catch (e) {
+    } catch (_e) {
       showError('Failed to search for releases');
       this.releases.set([]);
     } finally {
@@ -125,7 +125,7 @@ export class ReleaseSearchModal extends BaseComponent {
       });
       showSuccess(`Grabbed: ${release.title}`);
       this.close();
-    } catch (e) {
+    } catch (_e) {
       showError('Failed to grab release');
     } finally {
       this.isGrabbing.set(null);
@@ -178,11 +178,12 @@ export class ReleaseSearchModal extends BaseComponent {
     const releases = this.getSortedReleases();
     const grabbing = this.isGrabbing.value;
 
-    const title = params?.episodeNumber !== undefined
-      ? `${params.seriesTitle} - S${String(params.seasonNumber ?? 0).padStart(2, '0')}E${String(params.episodeNumber).padStart(2, '0')} - ${params.episodeTitle ?? ''}`
-      : params?.seasonNumber !== undefined
-        ? `${params?.seriesTitle} - Season ${params.seasonNumber}`
-        : params?.seriesTitle ?? 'Search';
+    const title =
+      params?.episodeNumber !== undefined
+        ? `${params.seriesTitle} - S${String(params.seasonNumber ?? 0).padStart(2, '0')}E${String(params.episodeNumber).padStart(2, '0')} - ${params.episodeTitle ?? ''}`
+        : params?.seasonNumber !== undefined
+          ? `${params?.seriesTitle} - Season ${params.seasonNumber}`
+          : (params?.seriesTitle ?? 'Search');
 
     return html`
       <div class="modal-overlay" onclick="if(event.target === this) this.closest('release-search-modal').close()">
@@ -199,12 +200,16 @@ export class ReleaseSearchModal extends BaseComponent {
           </div>
 
           <div class="modal-body">
-            ${isLoading ? html`
+            ${
+              isLoading
+                ? html`
               <div class="loading-state">
                 <div class="spinner"></div>
                 <p>Searching indexers...</p>
               </div>
-            ` : releases.length === 0 ? html`
+            `
+                : releases.length === 0
+                  ? html`
               <div class="empty-state">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                   <circle cx="11" cy="11" r="8"></circle>
@@ -215,7 +220,8 @@ export class ReleaseSearchModal extends BaseComponent {
                   Try Again
                 </button>
               </div>
-            ` : html`
+            `
+                  : html`
               <div class="results-info">
                 Found ${releases.length} releases
               </div>
@@ -250,7 +256,8 @@ export class ReleaseSearchModal extends BaseComponent {
                   </tbody>
                 </table>
               </div>
-            `}
+            `
+            }
           </div>
         </div>
       </div>
@@ -575,12 +582,20 @@ export class ReleaseSearchModal extends BaseComponent {
       <tr class="${isRejected ? 'release-rejected' : ''}">
         <td class="col-title">
           <div class="release-title">${escapeHtml(release.title)}</div>
-          ${release.releaseGroup ? html`
+          ${
+            release.releaseGroup
+              ? html`
             <div class="release-group">Group: ${escapeHtml(release.releaseGroup)}</div>
-          ` : ''}
-          ${isRejected && release.rejections.length > 0 ? html`
-            <div class="release-rejections">${release.rejections.map(r => escapeHtml(r)).join(', ')}</div>
-          ` : ''}
+          `
+              : ''
+          }
+          ${
+            isRejected && release.rejections.length > 0
+              ? html`
+            <div class="release-rejections">${release.rejections.map((r) => escapeHtml(r)).join(', ')}</div>
+          `
+              : ''
+          }
         </td>
         <td class="col-indexer">
           ${escapeHtml(release.indexer)}
@@ -591,13 +606,17 @@ export class ReleaseSearchModal extends BaseComponent {
         </td>
         <td class="col-size">${this.formatSize(release.size)}</td>
         <td class="col-peers">
-          ${release.protocol === 'torrent' ? html`
+          ${
+            release.protocol === 'torrent'
+              ? html`
             <div class="peers-info">
               <span class="seeders">${release.seeders ?? '?'}</span>
               /
               <span class="leechers">${release.leechers ?? '?'}</span>
             </div>
-          ` : '-'}
+          `
+              : '-'
+          }
         </td>
         <td class="col-age">${this.formatAge(release.age)}</td>
         <td class="col-actions">
