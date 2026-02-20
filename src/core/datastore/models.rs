@@ -35,6 +35,7 @@ pub struct SeriesDbModel {
     pub network: Option<String>,
     pub certification: Option<String>,
     pub use_scene_numbering: bool,
+    pub episode_ordering: String,
     pub added: DateTime<Utc>,
     pub last_info_sync: Option<DateTime<Utc>>,
     pub imdb_rating: Option<f32>,

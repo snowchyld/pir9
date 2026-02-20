@@ -87,6 +87,8 @@ services:
       - PIR9_DB_CONNECTION=postgresql://${POSTGRES_USER:-pir9}:${POSTGRES_PASSWORD:-pir9}@postgres:5432/${POSTGRES_DB:-pir9}
       - PIR9_IMDB_SERVICE_URL=http://imdb:8990
       - PIR9_IMDB_ENABLED=${PIR9_IMDB_ENABLED:-true}
+      - PIR9_TVDB_API_KEY=${PIR9_TVDB_API_KEY:-}
+      - PIR9_TMDB_API_KEY=${PIR9_TMDB_API_KEY:-}
       - TZ=${TZ:-UTC}
     depends_on:
       redis:

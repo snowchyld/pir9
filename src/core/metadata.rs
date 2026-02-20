@@ -9,16 +9,18 @@ use serde::Deserialize;
 use tracing::info;
 
 use crate::core::imdb::ImdbClient;
+use crate::core::tvdb::TvdbClient;
 use crate::core::tvmaze::TvMazeClient;
 
 /// Base URL for Skyhook metadata service
 const SKYHOOK_BASE_URL: &str = "http://skyhook.sonarr.tv/v1/tvdb";
 
-/// HTTP client for fetching series metadata from IMDB + Skyhook + TVMaze
+/// HTTP client for fetching series metadata from IMDB + Skyhook + TVMaze + TVDB
 #[derive(Clone)]
 pub struct MetadataService {
     imdb_client: ImdbClient,
     tvmaze_client: TvMazeClient,
+    tvdb_client: TvdbClient,
     http_client: reqwest::Client,
 }
 
@@ -26,12 +28,13 @@ impl std::fmt::Debug for MetadataService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MetadataService")
             .field("imdb_enabled", &self.imdb_client.is_enabled())
+            .field("tvdb_enabled", &self.tvdb_client.is_enabled())
             .finish()
     }
 }
 
 impl MetadataService {
-    pub fn new(imdb_client: ImdbClient, tvmaze_client: TvMazeClient) -> Self {
+    pub fn new(imdb_client: ImdbClient, tvmaze_client: TvMazeClient, tvdb_client: TvdbClient) -> Self {
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .user_agent(format!("pir9/{}", env!("CARGO_PKG_VERSION")))
@@ -40,8 +43,14 @@ impl MetadataService {
         Self {
             imdb_client,
             tvmaze_client,
+            tvdb_client,
             http_client,
         }
+    }
+
+    /// Access the TVDB client for episode ordering lookups
+    pub fn tvdb_client(&self) -> &TvdbClient {
+        &self.tvdb_client
     }
 
     /// Fetch series metadata, merging IMDB + Skyhook data.

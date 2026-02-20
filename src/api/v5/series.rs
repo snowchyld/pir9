@@ -247,6 +247,11 @@ async fn create_series(
         network: options.network.clone(),
         certification: options.certification.clone(),
         use_scene_numbering: false,
+        episode_ordering: if crate::core::tvdb::VALID_ORDERINGS.contains(&options.episode_ordering.as_str()) {
+            options.episode_ordering.clone()
+        } else {
+            "aired".to_string()
+        },
         added: Utc::now(),
         last_info_sync: None,
         imdb_rating: None,
@@ -416,6 +421,7 @@ async fn import_series(
             tvrage_id: None,
             tmdb_id: None,
             language_profile_id: import_req.language_profile_id,
+            episode_ordering: "aired".to_string(),
             seasons: vec![],
             images: vec![],
         };
@@ -469,6 +475,7 @@ async fn import_series(
             network: options.network.clone(),
             certification: options.certification.clone(),
             use_scene_numbering: false,
+            episode_ordering: options.episode_ordering.clone(),
             added: Utc::now(),
             last_info_sync: None,
             imdb_rating: None,
@@ -558,6 +565,11 @@ async fn update_series(
             _ => 0,
         };
     }
+    if let Some(ref ordering) = update.episode_ordering {
+        if crate::core::tvdb::VALID_ORDERINGS.contains(&ordering.as_str()) {
+            series.episode_ordering = ordering.clone();
+        }
+    }
 
     repo.update(&series)
         .await
@@ -630,6 +642,11 @@ async fn update_series_by_body(
             "daily" => 2,
             _ => 0,
         };
+    }
+    if let Some(ref ordering) = body.update.episode_ordering {
+        if crate::core::tvdb::VALID_ORDERINGS.contains(&ordering.as_str()) {
+            series.episode_ordering = ordering.clone();
+        }
     }
 
     // Handle moveFiles if path changed
@@ -2140,10 +2157,16 @@ pub struct CreateSeriesRequest {
     pub tvrage_id: Option<i64>,
     pub tmdb_id: Option<i64>,
     pub language_profile_id: Option<i64>,
+    #[serde(default = "default_episode_ordering")]
+    pub episode_ordering: String,
     #[serde(default)]
     pub seasons: Vec<SeasonResource>,
     #[serde(default)]
     pub images: Vec<SeriesImage>,
+}
+
+fn default_episode_ordering() -> String {
+    "aired".to_string()
 }
 
 fn default_series_type() -> String {
@@ -2246,6 +2269,7 @@ pub struct UpdateSeriesRequest {
     pub path: Option<String>,
     pub season_folder: Option<bool>,
     pub series_type: Option<String>,
+    pub episode_ordering: Option<String>,
 }
 
 /// Full series update request (includes ID in body)
@@ -2309,6 +2333,7 @@ pub struct SeriesResponse {
     pub monitored: bool,
     pub monitor_new_items: String,
     pub use_scene_numbering: bool,
+    pub episode_ordering: String,
     pub runtime: i32,
     pub tvdb_id: i64,
     pub tv_rage_id: i64,
@@ -2469,6 +2494,7 @@ impl From<SeriesDbModel> for SeriesResponse {
             monitored: s.monitored,
             monitor_new_items: monitor_new_items.to_string(),
             use_scene_numbering: s.use_scene_numbering,
+            episode_ordering: s.episode_ordering,
             runtime: s.runtime,
             tvdb_id: s.tvdb_id,
             tv_rage_id: s.tv_rage_id,

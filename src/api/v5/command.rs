@@ -662,6 +662,127 @@ async fn execute_refresh_series(
             }
         }
 
+        // Remap episode numbers if series uses a non-default TVDB ordering
+        if series.episode_ordering != "aired" {
+            if let Some(svc) = metadata_service {
+                match svc
+                    .tvdb_client()
+                    .get_episodes_by_ordering(series.tvdb_id, &series.episode_ordering)
+                    .await
+                {
+                    Ok(Some(tvdb_episodes)) => {
+                        // Build tvdb_episode_id → (new_season, new_episode) lookup
+                        let mut ordering_map: std::collections::HashMap<i64, (i32, i32)> =
+                            std::collections::HashMap::new();
+                        for tep in &tvdb_episodes {
+                            ordering_map.insert(tep.id, (tep.season_number, tep.episode_number));
+                        }
+
+                        // Fetch current episodes and build remap plan
+                        let current_episodes = episode_repo
+                            .get_by_series_id(*series_id)
+                            .await
+                            .unwrap_or_default();
+
+                        let mut remap_count = 0;
+                        let mut remap_plan: Vec<(i64, i32, i32, i32, i32)> = Vec::new(); // (id, new_season, new_ep, old_season, old_ep)
+
+                        for ep in &current_episodes {
+                            if ep.tvdb_id > 0 {
+                                if let Some(&(new_season, new_ep)) = ordering_map.get(&ep.tvdb_id) {
+                                    if new_season != ep.season_number || new_ep != ep.episode_number {
+                                        remap_plan.push((
+                                            ep.id,
+                                            new_season,
+                                            new_ep,
+                                            ep.season_number,
+                                            ep.episode_number,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+
+                        if !remap_plan.is_empty() {
+                            tracing::info!(
+                                "RefreshSeries: {} - remapping {} episodes to {} ordering",
+                                series.title,
+                                remap_plan.len(),
+                                series.episode_ordering,
+                            );
+
+                            let pool = db.pool();
+
+                            // Two-phase update within a transaction to avoid unique constraint violations
+                            // Phase A: set season/episode to negative sentinel values
+                            // Phase B: set to final ordering values
+                            let mut tx = pool
+                                .begin()
+                                .await
+                                .map_err(|e| format!("Failed to begin transaction: {}", e))?;
+
+                            // Phase A: clear to sentinel values and back up originals to scene_* fields
+                            for &(id, _, _, old_season, old_ep) in &remap_plan {
+                                let sentinel_season = -(1000 + id as i32);
+                                let sentinel_ep = -(1000 + id as i32);
+                                sqlx::query(
+                                    "UPDATE episodes SET season_number = $1, episode_number = $2, scene_season_number = $3, scene_episode_number = $4 WHERE id = $5"
+                                )
+                                .bind(sentinel_season)
+                                .bind(sentinel_ep)
+                                .bind(Some(old_season))
+                                .bind(Some(old_ep))
+                                .bind(id)
+                                .execute(&mut *tx)
+                                .await
+                                .map_err(|e| format!("Remap phase A failed: {}", e))?;
+                            }
+
+                            // Phase B: set final ordering values
+                            for &(id, new_season, new_ep, _, _) in &remap_plan {
+                                sqlx::query(
+                                    "UPDATE episodes SET season_number = $1, episode_number = $2 WHERE id = $3"
+                                )
+                                .bind(new_season)
+                                .bind(new_ep)
+                                .bind(id)
+                                .execute(&mut *tx)
+                                .await
+                                .map_err(|e| format!("Remap phase B failed: {}", e))?;
+                                remap_count += 1;
+                            }
+
+                            tx.commit()
+                                .await
+                                .map_err(|e| format!("Remap transaction commit failed: {}", e))?;
+
+                            tracing::info!(
+                                "RefreshSeries: {} - remapped {} episodes to {} ordering",
+                                series.title,
+                                remap_count,
+                                series.episode_ordering,
+                            );
+                        }
+                    }
+                    Ok(None) => {
+                        tracing::debug!(
+                            "RefreshSeries: {} - no TVDB data for {} ordering",
+                            series.title,
+                            series.episode_ordering,
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "RefreshSeries: {} - failed to fetch TVDB {} ordering: {}",
+                            series.title,
+                            series.episode_ordering,
+                            e,
+                        );
+                    }
+                }
+            }
+        }
+
         // Enrich episodes with IMDB ratings
         if let (Some(svc), Some(ref imdb_id)) = (metadata_service, &series.imdb_id) {
             let all_episodes = episode_repo

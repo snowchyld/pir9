@@ -521,7 +521,7 @@ impl SeriesRepository {
                 monitored, monitor_new_items, quality_profile_id, language_profile_id,
                 season_folder, series_type, title_slug, path, root_folder_path,
                 year, first_aired, last_aired, runtime, network, certification,
-                use_scene_numbering, added, last_info_sync,
+                use_scene_numbering, episode_ordering, added, last_info_sync,
                 imdb_rating, imdb_votes
             ) VALUES (
                 $1, $2, $3, $4, $5,
@@ -529,8 +529,8 @@ impl SeriesRepository {
                 $11, $12, $13, $14,
                 $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25,
-                $26, $27, $28,
-                $29, $30
+                $26, $27, $28, $29,
+                $30, $31
             ) RETURNING id
             "#,
         )
@@ -560,6 +560,7 @@ impl SeriesRepository {
         .bind(&series.network)
         .bind(&series.certification)
         .bind(series.use_scene_numbering)
+        .bind(&series.episode_ordering)
         .bind(series.added)
         .bind(series.last_info_sync)
         .bind(series.imdb_rating)
@@ -579,9 +580,9 @@ impl SeriesRepository {
                 monitored = $11, monitor_new_items = $12, quality_profile_id = $13, language_profile_id = $14,
                 season_folder = $15, series_type = $16, title_slug = $17, path = $18, root_folder_path = $19,
                 year = $20, first_aired = $21, last_aired = $22, runtime = $23, network = $24, certification = $25,
-                use_scene_numbering = $26, last_info_sync = $27,
-                imdb_rating = $28, imdb_votes = $29
-            WHERE id = $30
+                use_scene_numbering = $26, episode_ordering = $27, last_info_sync = $28,
+                imdb_rating = $29, imdb_votes = $30
+            WHERE id = $31
             "#
         )
         .bind(series.tvdb_id)
@@ -610,6 +611,7 @@ impl SeriesRepository {
         .bind(&series.network)
         .bind(&series.certification)
         .bind(series.use_scene_numbering)
+        .bind(&series.episode_ordering)
         .bind(series.last_info_sync)
         .bind(series.imdb_rating)
         .bind(series.imdb_votes)

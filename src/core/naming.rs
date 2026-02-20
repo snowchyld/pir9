@@ -361,6 +361,7 @@ mod tests {
             network: Some("The CW".to_string()),
             certification: None,
             use_scene_numbering: false,
+            episode_ordering: "aired".to_string(),
             added: Utc::now(),
             last_info_sync: None,
             imdb_rating: None,

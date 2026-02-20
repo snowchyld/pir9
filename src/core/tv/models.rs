@@ -60,6 +60,7 @@ pub struct Series {
     pub images: Vec<MediaCover>,
     pub ratings: Option<Ratings>,
     pub use_scene_numbering: bool,
+    pub episode_ordering: String,
 
     // Seasons
     pub seasons: Vec<Season>,
@@ -118,6 +119,7 @@ impl Series {
             images: Vec::new(),
             ratings: None,
             use_scene_numbering: false,
+            episode_ordering: "aired".to_string(),
             seasons: Vec::new(),
             tags: HashSet::new(),
             statistics: None,

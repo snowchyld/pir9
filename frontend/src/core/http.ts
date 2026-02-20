@@ -247,6 +247,7 @@ export interface Series {
   seasonFolder: boolean;
   monitored: boolean;
   seriesType: 'anime' | 'daily' | 'standard';
+  episodeOrdering: string;
   runtime: number;
   tvdbId: number;
   tvRageId: number;

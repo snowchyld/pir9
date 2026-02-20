@@ -24,6 +24,7 @@ interface SeriesFormData {
   seasonFolder: boolean;
   qualityProfileId: number;
   seriesType: 'anime' | 'daily' | 'standard';
+  episodeOrdering: string;
   path: string;
   tags: number[];
 }
@@ -63,6 +64,7 @@ export class SeriesEditDialog extends BaseComponent {
       seasonFolder: series.seasonFolder,
       qualityProfileId: series.qualityProfileId,
       seriesType: series.seriesType,
+      episodeOrdering: series.episodeOrdering ?? 'aired',
       path: series.path,
       tags: series.tags ?? [],
     });
@@ -190,6 +192,23 @@ export class SeriesEditDialog extends BaseComponent {
                 <p class="help-text">Affects episode naming and search behavior</p>
               </div>
 
+              <!-- Episode Ordering -->
+              <div class="form-group">
+                <label for="episodeOrdering">Episode Ordering</label>
+                <select
+                  id="episodeOrdering"
+                  onchange="this.closest('series-edit-dialog').handleFieldChange('episodeOrdering', this.value)"
+                >
+                  <option value="aired" ${data.episodeOrdering === 'aired' ? 'selected' : ''}>Aired Order</option>
+                  <option value="dvd" ${data.episodeOrdering === 'dvd' ? 'selected' : ''}>DVD Order</option>
+                  <option value="absolute" ${data.episodeOrdering === 'absolute' ? 'selected' : ''}>Absolute Order</option>
+                  <option value="alternate" ${data.episodeOrdering === 'alternate' ? 'selected' : ''}>Alternate Order</option>
+                  <option value="regional" ${data.episodeOrdering === 'regional' ? 'selected' : ''}>Regional Order</option>
+                  <option value="altdvd" ${data.episodeOrdering === 'altdvd' ? 'selected' : ''}>Alternate DVD Order</option>
+                </select>
+                <p class="help-text">TVDB episode ordering. Changing triggers a full metadata refresh.</p>
+              </div>
+
               <!-- Path -->
               <div class="form-group">
                 <label for="path">Path</label>
@@ -282,6 +301,7 @@ export class SeriesEditDialog extends BaseComponent {
     this.errors.set([]);
 
     const pathChanged = data.path !== series.path;
+    const orderingChanged = data.episodeOrdering !== (series.episodeOrdering ?? 'aired');
 
     try {
       await http.put(
@@ -292,6 +312,7 @@ export class SeriesEditDialog extends BaseComponent {
           seasonFolder: data.seasonFolder,
           qualityProfileId: data.qualityProfileId,
           seriesType: data.seriesType,
+          episodeOrdering: data.episodeOrdering,
           path: data.path,
         },
         {
@@ -299,8 +320,20 @@ export class SeriesEditDialog extends BaseComponent {
         },
       );
 
+      // Trigger RefreshSeries when ordering changed to remap episode numbers
+      if (orderingChanged) {
+        http
+          .post('/command', {
+            name: 'RefreshSeries',
+            seriesId: series.id,
+          })
+          .catch(() => {
+            // Refresh is best-effort; don't block the save
+          });
+      }
+
       invalidateQueries(['/series']);
-      showSuccess('Series saved');
+      showSuccess(orderingChanged ? 'Series saved — refreshing episode ordering...' : 'Series saved');
       this.close();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save series';

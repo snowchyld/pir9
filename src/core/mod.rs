@@ -19,5 +19,6 @@ pub mod queue;
 pub mod scanner;
 pub mod scheduler;
 pub mod tv;
+pub mod tvdb;
 pub mod tvmaze;
 pub mod worker;

@@ -173,8 +173,9 @@ async fn run_server_mode(args: &Args) -> Result<()> {
     {
         let imdb_client = crate::core::imdb::ImdbClient::from_env();
         let tvmaze_client = crate::core::tvmaze::TvMazeClient::new();
+        let tvdb_client = crate::core::tvdb::TvdbClient::from_env();
         let metadata_service =
-            crate::core::metadata::MetadataService::new(imdb_client, tvmaze_client);
+            crate::core::metadata::MetadataService::new(imdb_client, tvmaze_client, tvdb_client);
         scheduler.set_metadata_service(metadata_service);
         scheduler.set_media_config(config.media.clone());
     }

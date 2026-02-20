@@ -56,7 +56,8 @@ impl AppState {
     ) -> anyhow::Result<Arc<Self>> {
         let imdb_client = ImdbClient::from_env();
         let tvmaze_client = crate::core::tvmaze::TvMazeClient::new();
-        let metadata_service = MetadataService::new(imdb_client.clone(), tvmaze_client);
+        let tvdb_client = crate::core::tvdb::TvdbClient::from_env();
+        let metadata_service = MetadataService::new(imdb_client.clone(), tvmaze_client, tvdb_client);
         Ok(Arc::new(Self {
             config: parking_lot::RwLock::new(config),
             db,
@@ -95,7 +96,8 @@ impl AppState {
 
         let imdb_client = ImdbClient::from_env();
         let tvmaze_client = crate::core::tvmaze::TvMazeClient::new();
-        let metadata_service = MetadataService::new(imdb_client.clone(), tvmaze_client);
+        let tvdb_client = crate::core::tvdb::TvdbClient::from_env();
+        let metadata_service = MetadataService::new(imdb_client.clone(), tvmaze_client, tvdb_client);
         Ok(Arc::new(Self {
             config: parking_lot::RwLock::new(config),
             db,
