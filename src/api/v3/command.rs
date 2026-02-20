@@ -151,22 +151,31 @@ pub async fn create_command(
         .map_err(|e| CommandError::Internal(format!("Failed to fetch command: {}", e)))?
         .ok_or(CommandError::NotFound)?;
 
+    // Create a cancellation token for this command (matching v5 pattern)
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    state.command_tokens.insert(id, cancel_token.clone());
+
     // Spawn background task to execute the command (same as v5)
     tokio::spawn({
         let db = state.db.clone();
         let event_bus = state.event_bus.clone();
+        let hybrid_event_bus = state.hybrid_event_bus.clone();
         let metadata_service = state.metadata_service.clone();
         let imdb_client = state.imdb_client.clone();
         let media_config = state.config.read().media.clone();
+        let command_tokens = state.command_tokens.clone();
+        let scan_result_consumer = state.scan_result_consumer.get().cloned();
         let cmd_id = id;
         let cmd_name = name.to_string();
         let cmd_body = body.clone();
+        let token = cancel_token;
         async move {
             use crate::core::messaging::Message;
 
             let repo = CommandRepository::new(db.clone());
             if let Err(e) = repo.start_command(cmd_id).await {
                 tracing::error!("Failed to start command {}: {}", cmd_id, e);
+                command_tokens.remove(&cmd_id);
                 return;
             }
 
@@ -179,22 +188,38 @@ pub async fn create_command(
                 })
                 .await;
 
-            // Execute command based on type (reuse v5 with metadata service)
+            // Execute command based on type (reuse v5 with distributed scanning support)
             let options = crate::api::v5::command::CommandExecutionOptions {
-                hybrid_event_bus: None,
+                hybrid_event_bus,
                 metadata_service: Some(metadata_service),
                 imdb_client: Some(imdb_client),
-                cancel_token: None,
+                cancel_token: Some(token),
                 media_config: Some(media_config),
-                scan_result_consumer: None,
+                scan_result_consumer,
             };
             let result = crate::api::v5::command::execute_command_with_options(
                 &cmd_name, &cmd_body, &db, &event_bus, options,
             )
             .await;
 
-            // Mark as completed or failed
+            // Clean up cancellation token
+            command_tokens.remove(&cmd_id);
+
+            // Mark as completed, cancelled, or failed
             match result {
+                Ok(msg) if msg.starts_with("Cancelled:") => {
+                    let _ = repo
+                        .update_status(cmd_id, "cancelled", Some("cancelled"))
+                        .await;
+                    tracing::info!("v3: Cancelled command: id={}, name={}", cmd_id, cmd_name);
+                    event_bus
+                        .publish(Message::CommandCompleted {
+                            command_id: cmd_id,
+                            name: cmd_name,
+                            message: Some(msg),
+                        })
+                        .await;
+                }
                 Ok(msg) => {
                     if let Err(e) = repo
                         .update_status(cmd_id, "completed", Some("successful"))
@@ -249,12 +274,19 @@ pub async fn delete_command(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, CommandError> {
+    // Signal the running command to stop via its cancellation token
+    if let Some((_, token)) = state.command_tokens.remove(&(id as i64)) {
+        token.cancel();
+        tracing::info!("v3: Cancelling running command: id={}", id);
+    }
+
     let repo = CommandRepository::new(state.db.clone());
 
-    // Mark as cancelled
-    repo.update_status(id as i64, "cancelled", Some("cancelled"))
+    repo.delete(id as i64)
         .await
-        .map_err(|e| CommandError::Internal(format!("Failed to cancel command: {}", e)))?;
+        .map_err(|e| CommandError::Internal(format!("Failed to delete command: {}", e)))?;
+
+    tracing::info!("v3: Cancelled/deleted command: id={}", id);
 
     Ok(Json(serde_json::json!({})))
 }

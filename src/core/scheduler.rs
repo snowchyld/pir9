@@ -27,6 +27,11 @@ pub struct JobScheduler {
     jobs: Arc<RwLock<Vec<ScheduledJob>>>,
     metadata_service: Option<crate::core::metadata::MetadataService>,
     media_config: Option<crate::core::configuration::MediaConfig>,
+    /// Hybrid event bus for distributed scanning (set after AppState creation)
+    hybrid_event_bus: Arc<tokio::sync::OnceCell<crate::core::messaging::HybridEventBus>>,
+    /// Scan result consumer for registering download imports (set after consumer creation)
+    scan_result_consumer:
+        Arc<tokio::sync::OnceCell<Arc<crate::core::scanner::ScanResultConsumer>>>,
 }
 
 impl JobScheduler {
@@ -36,6 +41,8 @@ impl JobScheduler {
             jobs: Arc::new(RwLock::new(Vec::new())),
             metadata_service: None,
             media_config: None,
+            hybrid_event_bus: Arc::new(tokio::sync::OnceCell::new()),
+            scan_result_consumer: Arc::new(tokio::sync::OnceCell::new()),
         })
     }
 
@@ -47,6 +54,19 @@ impl JobScheduler {
     /// Set the media configuration for episode naming during imports
     pub fn set_media_config(&mut self, config: crate::core::configuration::MediaConfig) {
         self.media_config = Some(config);
+    }
+
+    /// Set the hybrid event bus for distributed scanning (late binding via OnceCell)
+    pub fn set_hybrid_event_bus(&self, bus: crate::core::messaging::HybridEventBus) {
+        let _ = self.hybrid_event_bus.set(bus);
+    }
+
+    /// Set the scan result consumer for registering download imports (late binding via OnceCell)
+    pub fn set_scan_result_consumer(
+        &self,
+        consumer: Arc<crate::core::scanner::ScanResultConsumer>,
+    ) {
+        let _ = self.scan_result_consumer.set(consumer);
     }
 
     /// Initialize default scheduled jobs
@@ -145,8 +165,18 @@ impl JobScheduler {
                 let db = self.db.clone();
                 let metadata_service = self.metadata_service.clone();
                 let media_config = self.media_config.clone();
+                let hybrid_event_bus = self.hybrid_event_bus.clone();
+                let scan_result_consumer = self.scan_result_consumer.clone();
                 tokio::spawn(async move {
-                    run_job_loop(job, db, metadata_service, media_config).await;
+                    run_job_loop(
+                        job,
+                        db,
+                        metadata_service,
+                        media_config,
+                        hybrid_event_bus,
+                        scan_result_consumer,
+                    )
+                    .await;
                 });
             }
         }
@@ -173,6 +203,8 @@ impl JobScheduler {
             &self.db,
             self.metadata_service.as_ref(),
             self.media_config.as_ref(),
+            self.hybrid_event_bus.get(),
+            self.scan_result_consumer.get(),
         )
         .await?;
 
@@ -196,6 +228,10 @@ async fn run_job_loop(
     db: Database,
     metadata_service: Option<crate::core::metadata::MetadataService>,
     media_config: Option<crate::core::configuration::MediaConfig>,
+    hybrid_event_bus: Arc<tokio::sync::OnceCell<crate::core::messaging::HybridEventBus>>,
+    scan_result_consumer: Arc<
+        tokio::sync::OnceCell<Arc<crate::core::scanner::ScanResultConsumer>>,
+    >,
 ) {
     let interval = tokio::time::Duration::from_secs(job.interval_minutes as u64 * 60);
     let mut interval_timer = tokio::time::interval(interval);
@@ -213,6 +249,8 @@ async fn run_job_loop(
             &db,
             metadata_service.as_ref(),
             media_config.as_ref(),
+            hybrid_event_bus.get(),
+            scan_result_consumer.get(),
         )
         .await
         {
@@ -227,6 +265,8 @@ async fn execute_job_command(
     db: &Database,
     metadata_service: Option<&crate::core::metadata::MetadataService>,
     media_config: Option<&crate::core::configuration::MediaConfig>,
+    hybrid_event_bus: Option<&crate::core::messaging::HybridEventBus>,
+    scan_result_consumer: Option<&Arc<crate::core::scanner::ScanResultConsumer>>,
 ) -> Result<()> {
     match command {
         JobCommand::RssSync => {
@@ -236,7 +276,7 @@ async fn execute_job_command(
             execute_refresh_series(db, metadata_service).await?;
         }
         JobCommand::DownloadedEpisodesScan => {
-            execute_downloaded_episodes_scan(db, media_config).await?;
+            execute_downloaded_episodes_scan(db, media_config, hybrid_event_bus, scan_result_consumer).await?;
         }
         JobCommand::Housekeeping => {
             execute_housekeeping(db).await?;
@@ -570,14 +610,73 @@ async fn execute_reconcile_downloads(db: &Database) -> Result<()> {
     Ok(())
 }
 
-/// Downloaded Episodes Scan: Check download clients for completed downloads and import them
+/// Downloaded Episodes Scan: Check download clients for completed downloads and import them.
+///
+/// When Redis workers are available, dispatches file discovery to workers instead
+/// of scanning over NFS — matching the v5 command handler behavior.
 async fn execute_downloaded_episodes_scan(
     db: &Database,
     media_config: Option<&crate::core::configuration::MediaConfig>,
+    hybrid_event_bus: Option<&crate::core::messaging::HybridEventBus>,
+    scan_result_consumer: Option<&Arc<crate::core::scanner::ScanResultConsumer>>,
 ) -> Result<()> {
     info!("Executing downloaded episodes scan...");
 
     let import_service = ImportService::new(db.clone(), media_config.cloned().unwrap_or_default());
+
+    // If Redis/workers available, use the distributed path (same as v5 command handler)
+    if let (Some(hybrid_bus), Some(consumer)) = (hybrid_event_bus, scan_result_consumer) {
+        if hybrid_bus.is_redis_enabled() {
+            let pending = import_service.check_for_completed_downloads().await?;
+            if pending.is_empty() {
+                return Ok(());
+            }
+
+            info!(
+                "Downloaded episodes scan: dispatching {} completed downloads to workers",
+                pending.len()
+            );
+
+            // Reuse the same distributed dispatch logic from v5 command handler
+            use crate::core::messaging::{Message, ScanType};
+            use crate::core::scanner::DownloadImportInfo;
+
+            for item in &pending {
+                let job_id = uuid::Uuid::new_v4().to_string();
+                let output_path_str = item.output_path.to_string_lossy().to_string();
+
+                let import_info = DownloadImportInfo {
+                    download_id: item.download_id.clone(),
+                    download_client_id: item.download_client_id,
+                    download_client_name: item.download_client_name.clone(),
+                    title: item.title.clone(),
+                    output_path: item.output_path.clone(),
+                    parsed_info: item.parsed_info.clone(),
+                    series: item.series.clone(),
+                    episodes: item.episodes.clone(),
+                };
+
+                consumer
+                    .register_download_import(&job_id, vec![import_info])
+                    .await;
+                consumer
+                    .register_job(&job_id, ScanType::DownloadedEpisodesScan, vec![0])
+                    .await;
+
+                let message = Message::ScanRequest {
+                    job_id,
+                    scan_type: ScanType::DownloadedEpisodesScan,
+                    series_ids: vec![0],
+                    paths: vec![output_path_str],
+                };
+                hybrid_bus.publish(message).await;
+            }
+
+            return Ok(());
+        }
+    }
+
+    // Fallback: local import (no worker available)
     let results = import_service.process_completed_downloads(true).await?;
 
     let succeeded = results.iter().filter(|r| r.success).count();

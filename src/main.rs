@@ -151,12 +151,19 @@ async fn run_server_mode(args: &Args) -> Result<()> {
         }
     }
 
-    // Clean up stale tracked downloads from previous server sessions
+    // Log tracked download count — don't process yet.
+    // Download clients (qBittorrent etc.) may still be initializing and return
+    // empty results, which would cause process_queue() to delete all tracked
+    // records. The first scheduled ProcessDownloadQueue (1 min) handles it.
     {
-        let service = crate::core::queue::TrackedDownloadService::new(database.clone());
-        match service.process_queue().await {
-            Ok(()) => info!("Startup queue cleanup completed"),
-            Err(e) => warn!("Failed startup queue cleanup: {}", e),
+        use crate::core::datastore::repositories::TrackedDownloadRepository;
+        let repo = TrackedDownloadRepository::new(database.clone());
+        match repo.get_all_active().await {
+            Ok(active) => info!(
+                "Startup: {} active tracked downloads in database",
+                active.len()
+            ),
+            Err(e) => warn!("Startup: failed to check tracked downloads: {}", e),
         }
     }
 
@@ -218,6 +225,11 @@ async fn run_server_mode(args: &Args) -> Result<()> {
 
             // Store in AppState for command.rs to register download imports
             let _ = state.scan_result_consumer.set(consumer.clone());
+
+            // Wire scheduler with Redis handles so scheduled jobs (e.g.
+            // DownloadedEpisodesScan) also dispatch to workers
+            state.scheduler.set_hybrid_event_bus(hybrid_bus.clone());
+            state.scheduler.set_scan_result_consumer(consumer.clone());
 
             tokio::spawn(consumer.run());
             info!("Scan result consumer started");

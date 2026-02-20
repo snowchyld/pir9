@@ -514,12 +514,14 @@ impl TrackedDownloadService {
             let live_status = match client.get_download(&td.download_id).await {
                 Ok(Some(status)) => status,
                 Ok(None) => {
-                    // Download not found — removed from client, clean up DB record
-                    info!(
-                        "Download {} ('{}') no longer in client {}, removing tracked record",
+                    // Download not found in client — skip rather than delete.
+                    // The client may still be initializing (e.g. qBittorrent returns
+                    // empty results briefly after restart). The reconciliation job
+                    // and cleanup_imported_downloads() handle actual cleanup.
+                    debug!(
+                        "Download {} ('{}') not found in client {}, skipping",
                         td.download_id, td.title, client_model.name
                     );
-                    let _ = repo.delete(td.id).await;
                     continue;
                 }
                 Err(e) => {
@@ -653,13 +655,13 @@ impl TrackedDownloadService {
         let mut cleaned = 0usize;
 
         for td in &active {
-            // Only process completed/importPending downloads
+            // Only clean up downloads that reached import stages — never
+            // touch actively downloading items (user may have manually
+            // assigned them to a different movie/show).
             let state = TrackedDownloadState::from_i32(td.status);
             if !matches!(
                 state,
-                TrackedDownloadState::ImportPending
-                    | TrackedDownloadState::Imported
-                    | TrackedDownloadState::Downloading
+                TrackedDownloadState::ImportPending | TrackedDownloadState::Imported
             ) {
                 continue;
             }
@@ -1181,10 +1183,15 @@ impl TrackedDownloadService {
                     use crate::core::parser::normalize_title;
                     let name_normalized = normalize_title(&dl.name);
 
-                    let matched_movie = all_movies.iter().find(|m| {
-                        let clean = normalize_title(&m.clean_title);
-                        clean.len() >= 4 && name_normalized.contains(clean.as_str())
-                    });
+                    // Use longest matching title to avoid "The Avengers"
+                    // matching before "The Avengers Age of Ultron"
+                    let matched_movie = all_movies
+                        .iter()
+                        .filter(|m| {
+                            let clean = normalize_title(&m.clean_title);
+                            clean.len() >= 4 && name_normalized.contains(clean.as_str())
+                        })
+                        .max_by_key(|m| normalize_title(&m.clean_title).len());
 
                     match matched_movie {
                         Some(movie) => {

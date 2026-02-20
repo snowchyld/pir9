@@ -1,7 +1,7 @@
 # pir9 Mental Model
 
 > Living document — updated as the codebase evolves.
-> **Version**: 0.42.0 | **Last updated**: 2026-02-17
+> **Version**: 0.46.0 | **Last updated**: 2026-02-18
 
 ## 1. What Is pir9?
 
@@ -98,6 +98,7 @@ do_async_work().await;  // Now safe
 - **Rule**: NEVER change response shapes. Adding fields is OK. Removing/renaming is never OK.
 - **Consumers**: Overseerr, Ombi, LunaSea, nzb360, Bazarr, Tdarr
 - **Serde**: `#[serde(rename_all = "camelCase")]` on all response types
+- **v0.46.0**: `command.rs` now passes `hybrid_event_bus` + `scan_result_consumer` from `AppState` (previously hardcoded to `None`). Also supports cancellation tokens and `command_tokens` cleanup, matching v5 pattern.
 
 ### v5 (Current — Active Development)
 - **Path**: `src/api/v5/` (~34 modules)
@@ -242,7 +243,7 @@ Downloading → ImportBlocked → ImportPending → Importing → Imported
 
 **Anime detection**: `queue.rs` enrichment pass checks `series.series_type == 2` and overrides `content_type` to "anime".
 
-**Startup cleanup**: `process_queue()` runs once at startup (after DB init, before scheduler) to clean stale tracked downloads from previous sessions.
+**Startup**: Logs tracked download count (doesn't process — clients may still be initializing). First `ProcessDownloadQueue` scheduled job (1 min) handles it.
 
 ### 6.8 Naming Engine (`core/naming.rs`, ~672 lines)
 
@@ -362,7 +363,7 @@ pir9-cli --url http://localhost:8989 --api-key KEY <command>
 
 ---
 
-## 8. Scheduler (`core/scheduler.rs`, ~782 lines)
+## 8. Scheduler (`core/scheduler.rs`)
 
 | Job | Interval | Purpose |
 |-----|----------|---------|
@@ -373,7 +374,9 @@ pir9-cli --url http://localhost:8989 --api-key KEY <command>
 | Housekeeping | 24 hrs | Cleanup old commands, VACUUM ANALYZE |
 | Backup | Weekly | `pg_dump` → `/config/Backups/` (keep last 7) |
 | ReconcileDownloads | 5 min | Match untracked client downloads to series/movies |
-| DownloadedEpisodesScan | On-demand | Import completed files |
+| DownloadedEpisodesScan | On-demand | Import completed files (dispatches to workers when Redis available) |
+
+**Redis dispatch (v0.46.0)**: `JobScheduler` has `Arc<OnceCell<HybridEventBus>>` and `Arc<OnceCell<Arc<ScanResultConsumer>>>` for late binding. Set in `main.rs` after `ScanResultConsumer` is created. `DownloadedEpisodesScan` checks for Redis/workers and dispatches file discovery to workers when available, falling back to local `ImportService` otherwise.
 
 ### RSS Sync Pipeline (the core automation)
 ```
@@ -618,3 +621,4 @@ WebSocket message → wsManager.on('series_refreshed')
 8. **Docker `read_only: true`**: Incompatible with runtime `useradd` — bake user at build time.
 9. **Multiple import entry points**: Movies have 3 import paths (folder import, queue import, RescanMovie). Any guard (dupe check, quality check) must exist in ALL paths — easy to miss one.
 10. **History FK on episode_id=0**: Movie grabs have no episode. History `series_id`/`episode_id` are nullable (`Option<i64>`) since v0.37.1. Use `None` for movie-only history entries.
+11. **Redis dispatch must be wired in all entry points**: v3 API, v5 API, and scheduler all need `hybrid_event_bus` + `scan_result_consumer`. Fixed in v0.46.0 — previously v3 and scheduler silently fell back to local processing.
