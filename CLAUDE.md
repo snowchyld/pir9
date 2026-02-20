@@ -190,7 +190,7 @@ This project uses semver. **Every commit MUST bump the version.**
    - First line: `type: short description` (under 72 chars)
    - Blank line, then body explaining what changed and why
 
-### Current version: 0.33.0
+### Current version: 0.34.0
 
 ### Commit types
 - `feat:` — new feature or capability

@@ -234,8 +234,8 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
 
     // Get tracked downloads with live status merged
     match service.get_queue().await {
-        Ok(queue_items) => {
-            for item in queue_items {
+        Ok(result) => {
+            for item in result.items {
                 all_downloads.push(queue_item_to_resource(&item, &series_repo, &episode_repo));
             }
         }

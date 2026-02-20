@@ -150,6 +150,15 @@ async fn run_server_mode(args: &Args) -> Result<()> {
         }
     }
 
+    // Clean up stale tracked downloads from previous server sessions
+    {
+        let service = crate::core::queue::TrackedDownloadService::new(database.clone());
+        match service.process_queue().await {
+            Ok(()) => info!("Startup queue cleanup completed"),
+            Err(e) => warn!("Failed startup queue cleanup: {}", e),
+        }
+    }
+
     // Initialize job scheduler with metadata service for IMDB-enriched refreshes
     let mut scheduler =
         JobScheduler::new(database.clone()).context("Failed to initialize job scheduler")?;

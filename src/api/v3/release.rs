@@ -456,7 +456,7 @@ pub async fn create_release(
 
     // Grab the release using TrackedDownloadService
     let service = TrackedDownloadService::new(state.db.clone());
-    match service.grab_release(&release, episode_ids.clone()).await {
+    match service.grab_release(&release, episode_ids.clone(), None).await {
         Ok(tracked_id) => {
             tracing::info!("Release grabbed and tracked: id={}", tracked_id);
 

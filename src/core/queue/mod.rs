@@ -99,6 +99,15 @@ pub enum Protocol {
     Torrent,
 }
 
+/// Result from `get_queue()` — includes both tracked items and the raw client
+/// downloads map so callers can reuse the polled data without hitting clients again.
+pub struct QueueResult {
+    pub items: Vec<QueueItem>,
+    /// Raw downloads from each polled client, keyed by client_id.
+    pub client_downloads:
+        std::collections::HashMap<i64, Vec<crate::core::download::clients::DownloadStatus>>,
+}
+
 /// Queue service
 pub struct QueueService;
 

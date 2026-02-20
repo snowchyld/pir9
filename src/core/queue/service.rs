@@ -7,7 +7,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::core::datastore::models::TrackedDownloadDbModel;
 use crate::core::datastore::repositories::{
-    DownloadClientRepository, EpisodeRepository, SeriesRepository, TrackedDownloadRepository,
+    DownloadClientRepository, EpisodeRepository, MovieRepository, SeriesRepository,
+    TrackedDownloadRepository,
 };
 use crate::core::datastore::Database;
 use crate::core::download::clients::{create_client_from_model, DownloadOptions, DownloadState};
@@ -16,7 +17,8 @@ use crate::core::parser::{parse_title, title_matches_series};
 use crate::core::profiles::qualities::QualityModel;
 
 use super::{
-    Protocol, QueueItem, QueueStatus, StatusMessage, TrackedDownloadState, TrackedDownloadStatus,
+    Protocol, QueueItem, QueueResult, QueueStatus, StatusMessage, TrackedDownloadState,
+    TrackedDownloadStatus,
 };
 
 /// Service for managing tracked downloads
@@ -151,6 +153,7 @@ impl TrackedDownloadService {
         release: &ReleaseInfo,
         episode_ids: Vec<i64>,
         is_upgrade: bool,
+        movie_id: Option<i64>,
     ) -> Result<i64> {
         let repo = TrackedDownloadRepository::new(self.db.clone());
 
@@ -187,7 +190,7 @@ impl TrackedDownloadService {
             output_path: None,
             is_upgrade,
             added: Utc::now(),
-            movie_id: None,
+            movie_id,
         };
 
         let id = repo.insert(&tracked).await?;
@@ -199,8 +202,11 @@ impl TrackedDownloadService {
         Ok(id)
     }
 
-    /// Get all queue items with merged download client status
-    pub async fn get_queue(&self) -> Result<Vec<QueueItem>> {
+    /// Get all queue items with merged download client status.
+    /// Returns a `QueueResult` containing both the tracked items and the raw
+    /// downloads polled from each client (keyed by client_id), so callers can
+    /// reuse them without hitting the download clients a second time.
+    pub async fn get_queue(&self) -> Result<QueueResult> {
         let repo = TrackedDownloadRepository::new(self.db.clone());
         let client_repo = DownloadClientRepository::new(self.db.clone());
         let _series_repo = SeriesRepository::new(self.db.clone());
@@ -208,17 +214,19 @@ impl TrackedDownloadService {
 
         // Get all active tracked downloads
         let tracked = repo.get_all_active().await?;
-        if tracked.is_empty() {
-            return Ok(vec![]);
-        }
 
         // Get all download clients for status lookup
         let clients = client_repo.get_all().await?;
 
         // Build client status map: (client_id, download_id) -> DownloadStatus
+        // Also collect raw downloads per client for the QueueResult
         let mut client_status_map = std::collections::HashMap::new();
         let mut client_name_map = std::collections::HashMap::new();
         let mut polled_clients = std::collections::HashSet::new();
+        let mut client_downloads: std::collections::HashMap<
+            i64,
+            Vec<crate::core::download::clients::DownloadStatus>,
+        > = std::collections::HashMap::new();
 
         for client_model in &clients {
             if !client_model.enable {
@@ -231,9 +239,11 @@ impl TrackedDownloadService {
                 Ok(client) => match client.get_downloads().await {
                     Ok(downloads) => {
                         polled_clients.insert(client_model.id);
-                        for dl in downloads {
-                            client_status_map.insert((client_model.id, dl.id.clone()), dl);
+                        for dl in &downloads {
+                            client_status_map
+                                .insert((client_model.id, dl.id.clone()), dl.clone());
                         }
+                        client_downloads.insert(client_model.id, downloads);
                     }
                     Err(e) => {
                         debug!("Failed to get downloads from {}: {}", client_model.name, e);
@@ -243,6 +253,13 @@ impl TrackedDownloadService {
                     debug!("Failed to create client {}: {}", client_model.name, e);
                 }
             }
+        }
+
+        if tracked.is_empty() {
+            return Ok(QueueResult {
+                items: vec![],
+                client_downloads,
+            });
         }
 
         // Convert tracked downloads to queue items
@@ -430,7 +447,10 @@ impl TrackedDownloadService {
             });
         }
 
-        Ok(queue_items)
+        Ok(QueueResult {
+            items: queue_items,
+            client_downloads,
+        })
     }
 
     /// Process the download queue - update statuses and trigger imports
@@ -586,8 +606,14 @@ impl TrackedDownloadService {
         Ok(())
     }
 
-    /// Grab a release and send to download client
-    pub async fn grab_release(&self, release: &ReleaseInfo, episode_ids: Vec<i64>) -> Result<i64> {
+    /// Grab a release and send to download client.
+    /// Pass `movie_id` for movie releases to select the correct download category.
+    pub async fn grab_release(
+        &self,
+        release: &ReleaseInfo,
+        episode_ids: Vec<i64>,
+        movie_id: Option<i64>,
+    ) -> Result<i64> {
         let client_repo = DownloadClientRepository::new(self.db.clone());
 
         // Get enabled download clients for this protocol
@@ -610,15 +636,21 @@ impl TrackedDownloadService {
         let client = create_client_from_model(client_model)?;
 
         // Read the category from client settings based on content type.
-        // Falls back to "category" (series) → "sonarr" if the specific field is missing.
-        let grab_category = serde_json::from_str::<serde_json::Value>(&client_model.settings)
-            .ok()
-            .and_then(|s| {
-                s.get("category").and_then(|v| v.as_str()).map(|cat| {
-                    // Use the first category if comma-separated (legacy format)
-                    cat.split(',').next().unwrap_or("sonarr").trim().to_string()
-                })
-            })
+        // Movies use "movieCategory", series use "category". Falls back to "sonarr".
+        let settings = serde_json::from_str::<serde_json::Value>(&client_model.settings)
+            .unwrap_or(serde_json::json!({}));
+
+        let category_key = if movie_id.is_some() {
+            "movieCategory"
+        } else {
+            "category"
+        };
+
+        let grab_category = settings
+            .get(category_key)
+            .or_else(|| settings.get("category"))
+            .and_then(|v| v.as_str())
+            .map(|cat| cat.split(',').next().unwrap_or("sonarr").trim().to_string())
             .unwrap_or_else(|| "sonarr".to_string());
 
         let options = DownloadOptions {
@@ -699,6 +731,7 @@ impl TrackedDownloadService {
                 release,
                 episode_ids,
                 false, // TODO: Determine if upgrade
+                movie_id,
             )
             .await?;
 
@@ -719,8 +752,11 @@ impl TrackedDownloadService {
         let series_repo = SeriesRepository::new(self.db.clone());
         let episode_repo = EpisodeRepository::new(self.db.clone());
 
+        let movie_repo = MovieRepository::new(self.db.clone());
+
         let clients = client_repo.get_all().await?;
         let all_series = series_repo.get_all().await?;
+        let all_movies = movie_repo.get_all().await?;
 
         let mut reconciled = 0usize;
 
@@ -785,87 +821,138 @@ impl TrackedDownloadService {
                         || title_matches_series(&parsed, &s.clean_title)
                 });
 
-                let series = match matched_series {
-                    Some(s) => s,
-                    None => {
-                        debug!("Reconcile: no series match for '{}'", dl.name);
-                        continue;
-                    }
-                };
-
-                // Match episode(s)
-                let mut episode_ids = Vec::new();
-                if let Some(season) = parsed.season_number {
-                    for &ep_num in &parsed.episode_numbers {
-                        if let Ok(Some(ep)) = episode_repo
-                            .get_by_series_season_episode(series.id, season, ep_num)
-                            .await
-                        {
-                            episode_ids.push(ep.id);
-                        }
-                    }
-                }
-
-                if episode_ids.is_empty() {
-                    debug!(
-                        "Reconcile: matched series '{}' but no episodes for '{}'",
-                        series.title, dl.name
-                    );
-                    continue;
-                }
-
-                // Serialize fields
+                // Serialize quality/languages (shared by both series and movie paths)
                 let quality_json =
                     serde_json::to_string(&parsed.quality).unwrap_or_else(|_| "{}".to_string());
                 let languages_json =
                     serde_json::to_string(&parsed.languages).unwrap_or_else(|_| "[]".to_string());
-                let episode_ids_json =
-                    serde_json::to_string(&episode_ids).unwrap_or_else(|_| "[]".to_string());
 
-                let tracked = TrackedDownloadDbModel {
-                    id: 0,
-                    download_id: dl.id.clone(),
-                    download_client_id: client_model.id,
-                    series_id: series.id,
-                    episode_ids: episode_ids_json,
-                    title: dl.name.clone(),
-                    indexer: None,
-                    size: dl.size,
-                    protocol: client_model.protocol,
-                    quality: quality_json,
-                    languages: languages_json,
-                    status: TrackedDownloadState::Downloading as i32,
-                    status_messages: "[]".to_string(),
-                    error_message: None,
-                    output_path: dl.output_path.clone(),
-                    is_upgrade: false,
-                    added: Utc::now(),
-                    movie_id: None,
-                };
-
-                match repo.insert(&tracked).await {
-                    Ok(id) => {
-                        info!(
-                            "Reconciled download: id={}, '{}' → {} S{:02}E{} (episodes: {:?})",
-                            id,
-                            dl.name,
-                            series.title,
-                            parsed.season_number.unwrap_or(0),
-                            parsed
-                                .episode_numbers
-                                .iter()
-                                .map(|n| format!("{:02}", n))
-                                .collect::<Vec<_>>()
-                                .join("E"),
-                            episode_ids,
-                        );
-                        reconciled += 1;
+                if let Some(series) = matched_series {
+                    // --- Series match path ---
+                    let mut episode_ids = Vec::new();
+                    if let Some(season) = parsed.season_number {
+                        for &ep_num in &parsed.episode_numbers {
+                            if let Ok(Some(ep)) = episode_repo
+                                .get_by_series_season_episode(series.id, season, ep_num)
+                                .await
+                            {
+                                episode_ids.push(ep.id);
+                            }
+                        }
                     }
-                    Err(e) => {
-                        warn!(
-                            "Reconcile: failed to insert tracked download for '{}': {}",
-                            dl.name, e
+
+                    if episode_ids.is_empty() {
+                        debug!(
+                            "Reconcile: matched series '{}' but no episodes for '{}'",
+                            series.title, dl.name
                         );
+                        continue;
+                    }
+
+                    let episode_ids_json =
+                        serde_json::to_string(&episode_ids).unwrap_or_else(|_| "[]".to_string());
+
+                    let tracked = TrackedDownloadDbModel {
+                        id: 0,
+                        download_id: dl.id.clone(),
+                        download_client_id: client_model.id,
+                        series_id: series.id,
+                        episode_ids: episode_ids_json,
+                        title: dl.name.clone(),
+                        indexer: None,
+                        size: dl.size,
+                        protocol: client_model.protocol,
+                        quality: quality_json,
+                        languages: languages_json,
+                        status: TrackedDownloadState::Downloading as i32,
+                        status_messages: "[]".to_string(),
+                        error_message: None,
+                        output_path: dl.output_path.clone(),
+                        is_upgrade: false,
+                        added: Utc::now(),
+                        movie_id: None,
+                    };
+
+                    match repo.insert(&tracked).await {
+                        Ok(id) => {
+                            info!(
+                                "Reconciled download: id={}, '{}' → {} S{:02}E{} (episodes: {:?})",
+                                id,
+                                dl.name,
+                                series.title,
+                                parsed.season_number.unwrap_or(0),
+                                parsed
+                                    .episode_numbers
+                                    .iter()
+                                    .map(|n| format!("{:02}", n))
+                                    .collect::<Vec<_>>()
+                                    .join("E"),
+                                episode_ids,
+                            );
+                            reconciled += 1;
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Reconcile: failed to insert tracked download for '{}': {}",
+                                dl.name, e
+                            );
+                        }
+                    }
+                } else {
+                    // --- Movie match fallback ---
+                    use crate::core::parser::normalize_title;
+                    let name_normalized = normalize_title(&dl.name);
+
+                    let matched_movie = all_movies.iter().find(|m| {
+                        let clean = normalize_title(&m.clean_title);
+                        clean.len() >= 4 && name_normalized.contains(clean.as_str())
+                    });
+
+                    match matched_movie {
+                        Some(movie) => {
+                            let tracked = TrackedDownloadDbModel {
+                                id: 0,
+                                download_id: dl.id.clone(),
+                                download_client_id: client_model.id,
+                                series_id: 0,
+                                episode_ids: "[]".to_string(),
+                                title: dl.name.clone(),
+                                indexer: None,
+                                size: dl.size,
+                                protocol: client_model.protocol,
+                                quality: quality_json,
+                                languages: languages_json,
+                                status: TrackedDownloadState::Downloading as i32,
+                                status_messages: "[]".to_string(),
+                                error_message: None,
+                                output_path: dl.output_path.clone(),
+                                is_upgrade: false,
+                                added: Utc::now(),
+                                movie_id: Some(movie.id),
+                            };
+
+                            match repo.insert(&tracked).await {
+                                Ok(id) => {
+                                    info!(
+                                        "Reconciled movie download: id={}, '{}' → {}",
+                                        id, dl.name, movie.title,
+                                    );
+                                    reconciled += 1;
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "Reconcile: failed to insert tracked download for '{}': {}",
+                                        dl.name, e
+                                    );
+                                }
+                            }
+                        }
+                        None => {
+                            debug!(
+                                "Reconcile: no series or movie match for '{}'",
+                                dl.name
+                            );
+                        }
                     }
                 }
             }

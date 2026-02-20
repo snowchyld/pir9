@@ -1707,7 +1707,7 @@ async fn execute_episode_search(
                             );
 
                             match tracked_service
-                                .grab_release(&release, vec![*episode_id])
+                                .grab_release(&release, vec![*episode_id], None)
                                 .await
                             {
                                 Ok(tracked_id) => {

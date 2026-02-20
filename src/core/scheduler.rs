@@ -413,7 +413,7 @@ async fn execute_rss_sync(db: &Database) -> Result<()> {
             release.quality.quality
         );
 
-        match tracked_service.grab_release(&release, episode_ids).await {
+        match tracked_service.grab_release(&release, episode_ids, None).await {
             Ok(tracked_id) => {
                 grabbed += 1;
                 info!("Grabbed successfully (tracked_id={})", tracked_id);

@@ -18,8 +18,8 @@ use crate::core::datastore::repositories::{
 use crate::core::download::clients::{create_client_from_model, DownloadState};
 use crate::core::parser::{normalize_title, parse_title, title_matches_series};
 use crate::core::queue::{
-    Protocol as QueueProtocol, QueueStatus, TrackedDownloadService, TrackedDownloadState,
-    TrackedDownloadStatus,
+    Protocol as QueueProtocol, QueueResult, QueueStatus, TrackedDownloadService,
+    TrackedDownloadState, TrackedDownloadStatus,
 };
 use crate::web::AppState;
 
@@ -416,9 +416,17 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
     // the untracked section with a stale title-parsed series match.
     let mut tracked_ids: HashSet<String> = HashSet::new();
 
-    // Get tracked downloads with live status merged
+    // Get tracked downloads with live status merged.
+    // `get_queue()` returns a QueueResult containing both items and the raw
+    // polled downloads from each client — reuse them below to avoid double-polling.
+    let mut cached_client_downloads = std::collections::HashMap::new();
+
     match service.get_queue().await {
-        Ok(queue_items) => {
+        Ok(QueueResult {
+            items: queue_items,
+            client_downloads,
+        }) => {
+            cached_client_downloads = client_downloads;
             for item in &queue_items {
                 if let Some(ref did) = item.download_id {
                     tracked_ids.insert(did.clone());
@@ -462,348 +470,355 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                 serde_json::from_str(&db_client.settings).unwrap_or(serde_json::json!({}));
             let client_categories = ClientCategories::from_settings(&settings_json);
 
-            match create_client_from_model(db_client) {
-                Ok(client) => match client.get_downloads().await {
-                    Ok(downloads) => {
-                        let protocol = if db_client.protocol == 1 {
-                            "usenet"
-                        } else {
-                            "torrent"
-                        };
+            // Reuse downloads already polled by get_queue() if available,
+            // otherwise fall back to polling the client directly.
+            let downloads = if let Some(cached) = cached_client_downloads.remove(&db_client.id) {
+                cached
+            } else {
+                match create_client_from_model(db_client) {
+                    Ok(client) => match client.get_downloads().await {
+                        Ok(dl) => dl,
+                        Err(e) => {
+                            tracing::debug!(
+                                "Failed to get downloads from {}: {}",
+                                db_client.name,
+                                e
+                            );
+                            continue;
+                        }
+                    },
+                    Err(e) => {
+                        tracing::debug!("Failed to create client for {}: {}", db_client.name, e);
+                        continue;
+                    }
+                }
+            };
 
-                        for dl in downloads {
-                            if tracked_ids.contains(&dl.id) {
-                                continue;
-                            }
+            let protocol = if db_client.protocol == 1 {
+                "usenet"
+            } else {
+                "torrent"
+            };
 
-                            // Skip downloads that don't match any configured category
-                            let dl_cat = dl.category.as_deref().unwrap_or("").to_lowercase();
-                            if !client_categories.all.is_empty()
-                                && !client_categories.all.iter().any(|c| c == &dl_cat)
-                            {
-                                continue;
-                            }
+            for dl in downloads {
+                if tracked_ids.contains(&dl.id) {
+                    continue;
+                }
 
-                            // Determine content type from download category
-                            let content_type = client_categories.content_type_for(&dl_cat);
+                // Skip downloads that don't match any configured category
+                let dl_cat = dl.category.as_deref().unwrap_or("").to_lowercase();
+                if !client_categories.all.is_empty()
+                    && !client_categories.all.iter().any(|c| c == &dl_cat)
+                {
+                    continue;
+                }
 
-                            let status = match dl.status {
-                                DownloadState::Queued => "queued",
-                                DownloadState::Paused => "paused",
-                                DownloadState::Downloading => "downloading",
-                                DownloadState::Stalled => "stalled",
-                                DownloadState::Seeding => "seeding",
-                                DownloadState::Completed => "completed",
-                                DownloadState::Failed => "failed",
-                                DownloadState::Warning => "warning",
-                            };
+                // Determine content type from download category
+                let content_type = client_categories.content_type_for(&dl_cat);
 
-                            let tracked_state = match dl.status {
-                                DownloadState::Queued => "importPending",
-                                DownloadState::Downloading => "downloading",
-                                DownloadState::Stalled => "downloading",
-                                DownloadState::Paused => "paused",
-                                DownloadState::Seeding => "importPending",
-                                DownloadState::Completed => "importPending",
-                                DownloadState::Failed => "downloadFailed",
-                                DownloadState::Warning => "downloadWarning",
-                            };
+                let status = match dl.status {
+                    DownloadState::Queued => "queued",
+                    DownloadState::Paused => "paused",
+                    DownloadState::Downloading => "downloading",
+                    DownloadState::Stalled => "stalled",
+                    DownloadState::Seeding => "seeding",
+                    DownloadState::Completed => "completed",
+                    DownloadState::Failed => "failed",
+                    DownloadState::Warning => "warning",
+                };
 
-                            let timeleft = dl.eta.map(|seconds| {
-                                let hours = seconds / 3600;
-                                let minutes = (seconds % 3600) / 60;
-                                let secs = seconds % 60;
-                                format!("{:02}:{:02}:{:02}", hours, minutes, secs)
-                            });
+                let tracked_state = match dl.status {
+                    DownloadState::Queued => "importPending",
+                    DownloadState::Downloading => "downloading",
+                    DownloadState::Stalled => "downloading",
+                    DownloadState::Paused => "paused",
+                    DownloadState::Seeding => "importPending",
+                    DownloadState::Completed => "importPending",
+                    DownloadState::Failed => "downloadFailed",
+                    DownloadState::Warning => "downloadWarning",
+                };
 
-                            let parsed = parse_title(&dl.name);
-                            let mut matched_series_id: Option<i64> = None;
-                            let mut matched_episode_id: Option<i64> = None;
-                            let mut quality_model = QualityModel {
-                                quality: QualityResource {
-                                    id: 0,
-                                    name: "Unknown".to_string(),
-                                    source: "unknown".to_string(),
-                                    resolution: 0,
-                                },
-                                revision: RevisionResource {
-                                    version: 1,
-                                    real: 0,
-                                    is_repack: false,
-                                },
-                            };
+                let timeleft = dl.eta.map(|seconds| {
+                    let hours = seconds / 3600;
+                    let minutes = (seconds % 3600) / 60;
+                    let secs = seconds % 60;
+                    format!("{:02}:{:02}:{:02}", hours, minutes, secs)
+                });
 
-                            if let Some(ref info) = parsed {
-                                let q = &info.quality;
-                                quality_model = QualityModel {
-                                    quality: QualityResource {
-                                        id: q.quality.weight(),
-                                        name: format!("{:?}", q.quality),
-                                        source: "unknown".to_string(),
-                                        resolution: q.quality.resolution_width(),
-                                    },
-                                    revision: RevisionResource {
-                                        version: q.revision.version,
-                                        real: q.revision.real,
-                                        is_repack: q.revision.is_repack,
-                                    },
-                                };
+                let parsed = parse_title(&dl.name);
+                let mut matched_series_id: Option<i64> = None;
+                let mut matched_episode_id: Option<i64> = None;
+                let mut quality_model = QualityModel {
+                    quality: QualityResource {
+                        id: 0,
+                        name: "Unknown".to_string(),
+                        source: "unknown".to_string(),
+                        resolution: 0,
+                    },
+                    revision: RevisionResource {
+                        version: 1,
+                        real: 0,
+                        is_repack: false,
+                    },
+                };
 
-                                for series in &all_series {
-                                    if title_matches_series(info, &series.title)
-                                        || title_matches_series(info, &series.clean_title)
+                if let Some(ref info) = parsed {
+                    let q = &info.quality;
+                    quality_model = QualityModel {
+                        quality: QualityResource {
+                            id: q.quality.weight(),
+                            name: format!("{:?}", q.quality),
+                            source: "unknown".to_string(),
+                            resolution: q.quality.resolution_width(),
+                        },
+                        revision: RevisionResource {
+                            version: q.revision.version,
+                            real: q.revision.real,
+                            is_repack: q.revision.is_repack,
+                        },
+                    };
+
+                    for series in &all_series {
+                        if title_matches_series(info, &series.title)
+                            || title_matches_series(info, &series.clean_title)
+                        {
+                            matched_series_id = Some(series.id);
+
+                            // Standard S01E02 matching
+                            if let Some(season) = info.season_number {
+                                if !info.episode_numbers.is_empty() {
+                                    let ep_num = info.episode_numbers[0];
+                                    if let Ok(Some(ep)) = episode_repo
+                                        .get_by_series_season_episode(series.id, season, ep_num)
+                                        .await
                                     {
-                                        matched_series_id = Some(series.id);
-
-                                        // Standard S01E02 matching
-                                        if let Some(season) = info.season_number {
-                                            if !info.episode_numbers.is_empty() {
-                                                let ep_num = info.episode_numbers[0];
-                                                if let Ok(Some(ep)) = episode_repo
-                                                    .get_by_series_season_episode(
-                                                        series.id, season, ep_num,
-                                                    )
-                                                    .await
-                                                {
-                                                    matched_episode_id = Some(ep.id);
-                                                }
-                                            }
-                                        }
-
-                                        // Anime absolute episode matching (e.g. "- 23")
-                                        if matched_episode_id.is_none()
-                                            && !info.absolute_episode_numbers.is_empty()
-                                        {
-                                            let abs_num = info.absolute_episode_numbers[0];
-                                            if let Ok(Some(ep)) = episode_repo
-                                                .get_by_series_and_absolute(series.id, abs_num)
-                                                .await
-                                            {
-                                                matched_episode_id = Some(ep.id);
-                                            }
-                                        }
-
-                                        // Bare episode number without season (e.g. "E10")
-                                        if matched_episode_id.is_none()
-                                            && info.season_number.is_none()
-                                            && !info.episode_numbers.is_empty()
-                                        {
-                                            let ep_num = info.episode_numbers[0];
-                                            // Try as absolute episode number first
-                                            if let Ok(Some(ep)) = episode_repo
-                                                .get_by_series_and_absolute(series.id, ep_num)
-                                                .await
-                                            {
-                                                matched_episode_id = Some(ep.id);
-                                            }
-                                        }
-
-                                        break;
+                                        matched_episode_id = Some(ep.id);
                                     }
                                 }
                             }
 
-                            // Fallback: when parser can't extract structured data (e.g.
-                            // complete series packs with no S01E02 markers), try matching
-                            // the raw torrent name against known series titles directly.
-                            if matched_series_id.is_none() {
-                                let name_normalized = normalize_title(&dl.name);
-                                let mut best_match: Option<(i64, usize)> = None;
-
-                                for series in &all_series {
-                                    let clean = normalize_title(&series.clean_title);
-                                    // Also try title without trailing year
-                                    let clean_no_year = clean
-                                        .trim_end()
-                                        .rsplit_once(' ')
-                                        .and_then(|(prefix, suffix)| {
-                                            if suffix.len() == 4
-                                                && suffix.chars().all(|c| c.is_ascii_digit())
-                                            {
-                                                Some(prefix.to_string())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .unwrap_or_else(|| clean.clone());
-
-                                    for candidate in [&clean, &clean_no_year] {
-                                        // Minimum length to avoid false positives (e.g. "V")
-                                        if candidate.len() >= 4
-                                            && name_normalized.contains(candidate.as_str())
-                                        {
-                                            if best_match.is_none()
-                                                || candidate.len() > best_match.as_ref().unwrap().1
-                                            {
-                                                best_match = Some((series.id, candidate.len()));
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if let Some((series_id, _)) = best_match {
-                                    matched_series_id = Some(series_id);
-                                }
-                            }
-
-                            // Check if matched episode(s) already have files in the library
-                            let mut episode_has_file_val = false;
-                            if let Some(ep_id) = matched_episode_id {
-                                if let Ok(Some(ep)) = episode_repo.get_by_id(ep_id).await {
-                                    episode_has_file_val = ep.has_file;
-                                }
-                            } else if matched_series_id.is_some() {
-                                // For season packs (no specific episode matched),
-                                // check if all episodes in the season already have files
-                                if let Some(ref info) = parsed {
-                                    if info.full_season {
-                                        if let (Some(season), Some(series_id)) =
-                                            (info.season_number, matched_series_id)
-                                        {
-                                            let season_eps = episode_repo
-                                                .get_by_series_and_season(series_id, season)
-                                                .await
-                                                .unwrap_or_default();
-                                            if !season_eps.is_empty()
-                                                && season_eps.iter().all(|e| e.has_file)
-                                            {
-                                                episode_has_file_val = true;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Skip completed/seeding downloads where episode(s) already imported
-                            if episode_has_file_val
-                                && matches!(
-                                    dl.status,
-                                    DownloadState::Completed | DownloadState::Seeding
-                                )
+                            // Anime absolute episode matching (e.g. "- 23")
+                            if matched_episode_id.is_none()
+                                && !info.absolute_episode_numbers.is_empty()
                             {
-                                continue;
+                                let abs_num = info.absolute_episode_numbers[0];
+                                if let Ok(Some(ep)) = episode_repo
+                                    .get_by_series_and_absolute(series.id, abs_num)
+                                    .await
+                                {
+                                    matched_episode_id = Some(ep.id);
+                                }
                             }
 
-                            // Build series/episode from parsed info even when not matched in DB.
-                            // This gives the frontend a clean series name instead of the raw torrent title.
-                            let parsed_series = if matched_series_id.is_some() {
-                                // Will be enriched later in list_queue()
-                                None
-                            } else if let Some(ref info) = parsed {
-                                if !info.series_title.is_empty() {
-                                    Some(QueueSeriesResource {
-                                        id: 0,
-                                        title: info.series_title.clone(),
-                                        title_slug: String::new(),
-                                    })
-                                } else {
-                                    None
+                            // Bare episode number without season (e.g. "E10")
+                            if matched_episode_id.is_none()
+                                && info.season_number.is_none()
+                                && !info.episode_numbers.is_empty()
+                            {
+                                let ep_num = info.episode_numbers[0];
+                                // Try as absolute episode number first
+                                if let Ok(Some(ep)) = episode_repo
+                                    .get_by_series_and_absolute(series.id, ep_num)
+                                    .await
+                                {
+                                    matched_episode_id = Some(ep.id);
                                 }
-                            } else {
-                                None
-                            };
+                            }
 
-                            let parsed_episode = if matched_episode_id.is_some() {
-                                // Will be enriched later in list_queue()
-                                None
-                            } else if let Some(ref info) = parsed {
-                                if let Some(season) = info.season_number {
-                                    if !info.episode_numbers.is_empty() {
-                                        Some(QueueEpisodeResource {
-                                            id: 0,
-                                            season_number: season,
-                                            episode_number: info.episode_numbers[0],
-                                            title: String::new(),
-                                            air_date_utc: None,
-                                        })
-                                    } else {
-                                        None
-                                    }
-                                } else if !info.absolute_episode_numbers.is_empty() {
-                                    // Anime absolute numbering (e.g. "- 23")
-                                    Some(QueueEpisodeResource {
-                                        id: 0,
-                                        season_number: 1,
-                                        episode_number: info.absolute_episode_numbers[0],
-                                        title: String::new(),
-                                        air_date_utc: None,
-                                    })
-                                } else if !info.episode_numbers.is_empty() {
-                                    // Bare episode number without season (e.g. "E10")
-                                    Some(QueueEpisodeResource {
-                                        id: 0,
-                                        season_number: 0,
-                                        episode_number: info.episode_numbers[0],
-                                        title: String::new(),
-                                        air_date_utc: None,
-                                    })
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            };
-
-                            all_downloads.push(QueueResource {
-                                id: id_counter,
-                                series_id: matched_series_id,
-                                episode_id: matched_episode_id,
-                                languages: vec![LanguageResource {
-                                    id: 1,
-                                    name: "English".to_string(),
-                                }],
-                                quality: quality_model,
-                                custom_formats: vec![],
-                                custom_format_score: 0,
-                                size: dl.size as f64,
-                                title: dl.name.clone(),
-                                sizeleft: dl.size_left as f64,
-                                timeleft,
-                                estimated_completion_time: None,
-                                added: None,
-                                status: status.to_string(),
-                                tracked_download_status: Some("ok".to_string()),
-                                tracked_download_state: Some(tracked_state.to_string()),
-                                status_messages: if dl.error_message.is_some() {
-                                    vec![StatusMessage {
-                                        title: "Error".to_string(),
-                                        messages: vec![dl
-                                            .error_message
-                                            .clone()
-                                            .unwrap_or_default()],
-                                    }]
-                                } else {
-                                    vec![]
-                                },
-                                error_message: dl.error_message,
-                                download_id: Some(dl.id),
-                                protocol: protocol.to_string(),
-                                download_client: Some(db_client.name.clone()),
-                                download_client_has_post_import_category: false,
-                                indexer: None,
-                                output_path: dl.output_path,
-                                episode_has_file: episode_has_file_val,
-                                content_type: content_type.to_string(),
-                                movie_id: None,
-                                seeds: dl.seeds,
-                                leechers: dl.leechers,
-                                seed_count: dl.seed_count,
-                                leech_count: dl.leech_count,
-                                episode: parsed_episode,
-                                series: parsed_series,
-                                movie: None,
-                            });
-
-                            id_counter += 1;
+                            break;
                         }
                     }
-                    Err(e) => {
-                        tracing::debug!("Failed to get downloads from {}: {}", db_client.name, e);
-                    }
-                },
-                Err(e) => {
-                    tracing::debug!("Failed to create client for {}: {}", db_client.name, e);
                 }
+
+                // Fallback: when parser can't extract structured data (e.g.
+                // complete series packs with no S01E02 markers), try matching
+                // the raw torrent name against known series titles directly.
+                if matched_series_id.is_none() {
+                    let name_normalized = normalize_title(&dl.name);
+                    let mut best_match: Option<(i64, usize)> = None;
+
+                    for series in &all_series {
+                        let clean = normalize_title(&series.clean_title);
+                        // Also try title without trailing year
+                        let clean_no_year = clean
+                            .trim_end()
+                            .rsplit_once(' ')
+                            .and_then(|(prefix, suffix)| {
+                                if suffix.len() == 4
+                                    && suffix.chars().all(|c| c.is_ascii_digit())
+                                {
+                                    Some(prefix.to_string())
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_else(|| clean.clone());
+
+                        for candidate in [&clean, &clean_no_year] {
+                            // Minimum length to avoid false positives (e.g. "V")
+                            if candidate.len() >= 4
+                                && name_normalized.contains(candidate.as_str())
+                            {
+                                if best_match.is_none()
+                                    || candidate.len() > best_match.as_ref().unwrap().1
+                                {
+                                    best_match = Some((series.id, candidate.len()));
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some((series_id, _)) = best_match {
+                        matched_series_id = Some(series_id);
+                    }
+                }
+
+                // Check if matched episode(s) already have files in the library
+                let mut episode_has_file_val = false;
+                if let Some(ep_id) = matched_episode_id {
+                    if let Ok(Some(ep)) = episode_repo.get_by_id(ep_id).await {
+                        episode_has_file_val = ep.has_file;
+                    }
+                } else if matched_series_id.is_some() {
+                    // For season packs (no specific episode matched),
+                    // check if all episodes in the season already have files
+                    if let Some(ref info) = parsed {
+                        if info.full_season {
+                            if let (Some(season), Some(series_id)) =
+                                (info.season_number, matched_series_id)
+                            {
+                                let season_eps = episode_repo
+                                    .get_by_series_and_season(series_id, season)
+                                    .await
+                                    .unwrap_or_default();
+                                if !season_eps.is_empty()
+                                    && season_eps.iter().all(|e| e.has_file)
+                                {
+                                    episode_has_file_val = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Skip completed/seeding downloads where episode(s) already imported
+                if episode_has_file_val
+                    && matches!(
+                        dl.status,
+                        DownloadState::Completed | DownloadState::Seeding
+                    )
+                {
+                    continue;
+                }
+
+                // Build series/episode from parsed info even when not matched in DB.
+                // This gives the frontend a clean series name instead of the raw torrent title.
+                let parsed_series = if matched_series_id.is_some() {
+                    // Will be enriched later in list_queue()
+                    None
+                } else if let Some(ref info) = parsed {
+                    if !info.series_title.is_empty() {
+                        Some(QueueSeriesResource {
+                            id: 0,
+                            title: info.series_title.clone(),
+                            title_slug: String::new(),
+                        })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let parsed_episode = if matched_episode_id.is_some() {
+                    // Will be enriched later in list_queue()
+                    None
+                } else if let Some(ref info) = parsed {
+                    if let Some(season) = info.season_number {
+                        if !info.episode_numbers.is_empty() {
+                            Some(QueueEpisodeResource {
+                                id: 0,
+                                season_number: season,
+                                episode_number: info.episode_numbers[0],
+                                title: String::new(),
+                                air_date_utc: None,
+                            })
+                        } else {
+                            None
+                        }
+                    } else if !info.absolute_episode_numbers.is_empty() {
+                        // Anime absolute numbering (e.g. "- 23")
+                        Some(QueueEpisodeResource {
+                            id: 0,
+                            season_number: 1,
+                            episode_number: info.absolute_episode_numbers[0],
+                            title: String::new(),
+                            air_date_utc: None,
+                        })
+                    } else if !info.episode_numbers.is_empty() {
+                        // Bare episode number without season (e.g. "E10")
+                        Some(QueueEpisodeResource {
+                            id: 0,
+                            season_number: 0,
+                            episode_number: info.episode_numbers[0],
+                            title: String::new(),
+                            air_date_utc: None,
+                        })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                all_downloads.push(QueueResource {
+                    id: id_counter,
+                    series_id: matched_series_id,
+                    episode_id: matched_episode_id,
+                    languages: vec![LanguageResource {
+                        id: 1,
+                        name: "English".to_string(),
+                    }],
+                    quality: quality_model,
+                    custom_formats: vec![],
+                    custom_format_score: 0,
+                    size: dl.size as f64,
+                    title: dl.name.clone(),
+                    sizeleft: dl.size_left as f64,
+                    timeleft,
+                    estimated_completion_time: None,
+                    added: None,
+                    status: status.to_string(),
+                    tracked_download_status: Some("ok".to_string()),
+                    tracked_download_state: Some(tracked_state.to_string()),
+                    status_messages: if dl.error_message.is_some() {
+                        vec![StatusMessage {
+                            title: "Error".to_string(),
+                            messages: vec![dl.error_message.clone().unwrap_or_default()],
+                        }]
+                    } else {
+                        vec![]
+                    },
+                    error_message: dl.error_message,
+                    download_id: Some(dl.id),
+                    protocol: protocol.to_string(),
+                    download_client: Some(db_client.name.clone()),
+                    download_client_has_post_import_category: false,
+                    indexer: None,
+                    output_path: dl.output_path,
+                    episode_has_file: episode_has_file_val,
+                    content_type: content_type.to_string(),
+                    movie_id: None,
+                    seeds: dl.seeds,
+                    leechers: dl.leechers,
+                    seed_count: dl.seed_count,
+                    leech_count: dl.leech_count,
+                    episode: parsed_episode,
+                    series: parsed_series,
+                    movie: None,
+                });
+
+                id_counter += 1;
             }
         }
     }
@@ -843,6 +858,10 @@ async fn list_queue(
             if include_series {
                 if let Some(sid) = dl.series_id {
                     if let Ok(Some(s)) = series_repo.get_by_id(sid).await {
+                        // Detect anime from series_type (2 = anime)
+                        if s.series_type == 2 {
+                            dl.content_type = "anime".to_string();
+                        }
                         dl.series = Some(QueueSeriesResource {
                             id: s.id,
                             title_slug: s.title_slug.clone(),
@@ -1067,7 +1086,7 @@ async fn grab_release(
 
     // Grab the best release (first in quality-sorted list)
     let best = &releases[0];
-    match service.grab_release(best, episode_ids).await {
+    match service.grab_release(best, episode_ids, tracked.movie_id).await {
         Ok(new_id) => {
             tracing::info!(
                 "Re-grab succeeded: {} → tracked download {}",

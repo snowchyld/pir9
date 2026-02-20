@@ -189,6 +189,8 @@ pub trait DownloadClient: Send + Sync {
 
 **`DownloadClientDbModel` (v0.30.0)**: Added `remove_completed_downloads: bool` and `remove_failed_downloads: bool` fields — previously hardcoded to `true`, now persisted per-client.
 
+**Stalled state & peer data (v0.33.0)**: `DownloadState::Stalled` maps qBit's `stalledDL`. `DownloadStatus` carries `seeds`/`leechers`/`seed_count`/`leech_count` — populated by qBit and Transmission, `None` for usenet clients. Completion check requires `size > 0` to prevent 0-byte torrents (metadata not fetched) from being marked complete. In queue API: v5 emits `"stalled"` status; v3 maps to `"warning"` for Sonarr compat.
+
 **qBittorrent logging (v0.30.0)**: Per-torrent status, GET/POST success paths moved to `trace` level — only login/summary logs at `debug`.
 
 **ImportService** (`import.rs`): Processes completed downloads into the library. Handles single-file downloads AND multi-file season/multi-season packs. Per video file: parse filename → match to episode(s) → analyze media (FFmpeg) → compute file hash (BLAKE3) → rename via naming engine → move to series folder → create `EpisodeFileDbModel` + set `episode.has_file=true`. Returns `ImportResult { success, episode_file_ids, episode_ids, error_message }`.
@@ -220,12 +222,23 @@ Downloading → ImportBlocked → ImportPending → Importing → Imported
            ↘ FailedPending → Failed
 ```
 
-**`TrackedDownloadService.grab_release()`**:
+**`TrackedDownloadService.grab_release(release, episode_ids, movie_id)`**:
 1. Select best download client matching protocol
-2. Prefer magnet links (avoid indexer dependency)
-3. Fallback: magnet from info_hash → torrent file download → redirect-following
-4. Convert .torrent → magnet via bencoding parser
-5. Send to download client, create tracking record
+2. Content-aware category: `movieCategory` for movies, `category` for series (fallback: "sonarr")
+3. Prefer magnet links (avoid indexer dependency)
+4. Fallback: magnet from info_hash → torrent file download → redirect-following
+5. Convert .torrent → magnet via bencoding parser
+6. Send to download client, create tracking record with `movie_id`
+
+**`TrackedDownloadService.get_queue()`** returns `QueueResult`:
+- `items`: Vec of tracked QueueItems with merged live download status
+- `client_downloads`: HashMap<client_id, Vec<DownloadStatus>> — raw polled data reused by callers to avoid double-polling
+
+**`reconcile_downloads()`**: Matches untracked downloads to series first, then movies as fallback using `normalize_title()` substring matching.
+
+**Anime detection**: `queue.rs` enrichment pass checks `series.series_type == 2` and overrides `content_type` to "anime".
+
+**Startup cleanup**: `process_queue()` runs once at startup (after DB init, before scheduler) to clean stale tracked downloads from previous sessions.
 
 ### 6.8 Naming Engine (`core/naming.rs`, ~672 lines)
 
