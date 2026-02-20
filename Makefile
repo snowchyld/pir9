@@ -223,7 +223,7 @@ docker-build:
 # Push to registry (version + latest)
 push:
 	@echo "Pushing to registry: $(FULL_IMAGE)"
-	#docker push $(FULL_IMAGE)
+	docker push $(FULL_IMAGE)
 	docker push $(LATEST_IMAGE)
 	@echo "Image pushed: $(FULL_IMAGE) + :latest"
 

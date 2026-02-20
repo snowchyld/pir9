@@ -133,13 +133,16 @@ impl WorkerRunner {
         use crate::core::scanner::registry::HEARTBEAT_INTERVAL;
         use tokio::signal;
 
+        // Wrap in Arc so spawned background tasks can access worker state
+        let this = Arc::new(self);
+
         info!(
             "Starting worker {} with paths: {:?}",
-            self.worker_id, self.worker_paths
+            this.worker_id, this.worker_paths
         );
 
         // Connect to Redis
-        let event_bus = HybridEventBus::new_redis(&self.redis_url)
+        let event_bus = HybridEventBus::new_redis(&this.redis_url)
             .await
             .context("Failed to connect to Redis")?;
 
@@ -159,8 +162,8 @@ impl WorkerRunner {
         // Announce that we're online
         event_bus
             .publish(Message::WorkerOnline {
-                worker_id: self.worker_id.clone(),
-                paths: self.paths_as_strings(),
+                worker_id: this.worker_id.clone(),
+                paths: this.paths_as_strings(),
             })
             .await;
 
@@ -201,11 +204,11 @@ impl WorkerRunner {
                 }
                 _ = heartbeat_interval.tick() => {
                     // Send heartbeat
-                    let (scans, files, uptime) = self.get_stats();
+                    let (scans, files, uptime) = this.get_stats();
                     debug!("Sending heartbeat: scans={}, files={}, uptime={}s", scans, files, uptime);
                     event_bus.publish(Message::WorkerHeartbeat {
-                        worker_id: self.worker_id.clone(),
-                        paths: self.paths_as_strings(),
+                        worker_id: this.worker_id.clone(),
+                        paths: this.paths_as_strings(),
                         scans_completed: scans,
                         files_found: files,
                         uptime_seconds: uptime,
@@ -214,7 +217,7 @@ impl WorkerRunner {
                 result = receiver.recv() => {
                     match result {
                         Ok(message) => {
-                            self.handle_message(message, &event_bus).await;
+                            this.handle_message(message, &event_bus).await;
                         }
                         Err(e) => {
                             error!("Error receiving message: {}", e);
@@ -229,7 +232,7 @@ impl WorkerRunner {
         // Announce that we're going offline
         event_bus
             .publish(Message::WorkerOffline {
-                worker_id: self.worker_id.clone(),
+                worker_id: this.worker_id.clone(),
             })
             .await;
 
@@ -246,9 +249,9 @@ impl WorkerRunner {
     /// Handle an incoming message
     #[cfg(feature = "redis-events")]
     async fn handle_message(
-        &self,
+        self: &Arc<Self>,
         message: Message,
-        event_bus: &crate::core::messaging::HybridEventBus,
+        event_bus: &Arc<crate::core::messaging::HybridEventBus>,
     ) {
         match &message {
             Message::ScanRequest {
@@ -262,12 +265,12 @@ impl WorkerRunner {
                     job_id, scan_type, series_ids
                 );
 
-                // Pair series_ids with paths (1:1 aligned) and filter to paths we handle
-                let relevant: Vec<(i64, &String)> = series_ids
+                // Pair series_ids with paths (1:1 aligned), filter to paths we handle, own the data
+                let relevant: Vec<(i64, String)> = series_ids
                     .iter()
                     .zip(paths.iter())
                     .filter(|(_, p)| self.handles_path(p))
-                    .map(|(&sid, p)| (sid, p))
+                    .map(|(&sid, p)| (sid, p.clone()))
                     .collect();
 
                 if relevant.is_empty() {
@@ -275,12 +278,80 @@ impl WorkerRunner {
                     return;
                 }
 
-                // Execute the scan
-                let result = self.execute_scan(job_id, scan_type, &relevant).await;
+                if *scan_type == ScanType::DownloadedEpisodesScan {
+                    // Per-file streaming: spawn enrichment as background task so the
+                    // main event loop stays free to process ImportFilesRequests concurrently.
+                    // This means file1 can be moved to library while file50 is still being probed.
+                    let this = Arc::clone(self);
+                    let event_bus = Arc::clone(event_bus);
+                    let job_id = job_id.clone();
 
-                // Publish results
-                for scan_result in result {
-                    event_bus.publish(scan_result).await;
+                    tokio::spawn(async move {
+                        let mut total_files: u64 = 0;
+                        let scan_start = std::time::Instant::now();
+
+                        for (series_id, path_str) in &relevant {
+                            let path = PathBuf::from(path_str);
+                            if !path.exists() {
+                                continue;
+                            }
+
+                            info!("[scan][download] Scanning {}", path_str);
+                            let mut files = scanner::scan_series_directory(&path);
+                            let file_count = files.len();
+                            info!(
+                                "[scan][download] Found {} video file(s) in {}",
+                                file_count, path_str
+                            );
+
+                            for (idx, file) in files.iter_mut().enumerate() {
+                                enrich_scanned_file(file, (idx + 1, file_count)).await;
+
+                                // Publish per-file result immediately — server can start
+                                // matching and dispatching file moves right away
+                                event_bus
+                                    .publish(Message::ScanResult {
+                                        job_id: job_id.clone(),
+                                        series_id: *series_id,
+                                        worker_id: this.worker_id.clone(),
+                                        files_found: vec![file.clone()],
+                                        errors: vec![],
+                                    })
+                                    .await;
+                            }
+
+                            total_files += file_count as u64;
+                        }
+
+                        let elapsed = scan_start.elapsed();
+                        info!(
+                            "[scan][download] Streaming scan complete — {} file(s) in {:.1}s",
+                            total_files,
+                            elapsed.as_secs_f64()
+                        );
+
+                        // Signal scan completion with empty result so server knows
+                        // no more files are coming and can finalize cleanup
+                        event_bus
+                            .publish(Message::ScanResult {
+                                job_id: job_id.clone(),
+                                series_id: 0,
+                                worker_id: this.worker_id.clone(),
+                                files_found: vec![],
+                                errors: vec![],
+                            })
+                            .await;
+
+                        this.record_scan(total_files);
+                    });
+                } else {
+                    // Batch mode for non-download scans (RescanSeries, RescanMovie, etc.)
+                    let relevant_refs: Vec<(i64, &String)> =
+                        relevant.iter().map(|(id, p)| (*id, p)).collect();
+                    let result = self.execute_scan(job_id, scan_type, &relevant_refs).await;
+                    for scan_result in result {
+                        event_bus.publish(scan_result).await;
+                    }
                 }
             }
             // Ignore our own heartbeats and status messages

@@ -28,6 +28,10 @@ pub struct PendingScanJobs {
     jobs: HashMap<String, PendingJob>,
     /// Maps job_id -> pending download import (Phase 2→3→4 tracking)
     download_imports: HashMap<String, PendingDownloadImport>,
+    /// Tracks overall progress of per-file download imports (keyed by scan job_id)
+    download_job_trackers: HashMap<String, DownloadJobTracker>,
+    /// Maps per-file import_job_id → original scan job_id for tracker lookup
+    import_to_scan_job: HashMap<String, String>,
 }
 
 #[derive(Debug)]
@@ -67,6 +71,25 @@ struct ImportMapping {
     source_path: PathBuf,
     /// Parsed quality model JSON for history recording
     parsed_quality_json: String,
+}
+
+/// Tracks overall progress of a download import across multiple per-file rounds.
+/// Created when the scan is registered and consumed when all files are imported.
+#[derive(Debug)]
+struct DownloadJobTracker {
+    download_id: String,
+    download_client_id: i64,
+    download_title: String,
+    /// Number of ImportFilesRequests dispatched (one per matched file)
+    files_dispatched: usize,
+    /// Number of ImportFilesResults received back from worker
+    files_completed: usize,
+    /// Files successfully imported (DB records created)
+    files_imported: usize,
+    /// Episodes linked to imported files
+    episodes_linked: usize,
+    /// Set when the worker sends an empty ScanResult (no more files coming)
+    scan_finished: bool,
 }
 
 /// Info about a download to import, passed from command.rs to the consumer
@@ -137,18 +160,36 @@ impl ScanResultConsumer {
         let mut jobs = self.pending_jobs.write().await;
         // Store each download import keyed by job_id + index for multi-download batches
         // For now we key by job_id and store one at a time (imports dispatched per-download)
-        for import_info in imports {
+        for import_info in &imports {
             let key = format!("{}:{}", job_id, import_info.download_id);
             jobs.download_imports.insert(
                 key,
                 PendingDownloadImport {
-                    download_id: import_info.download_id,
+                    download_id: import_info.download_id.clone(),
                     download_client_id: import_info.download_client_id,
-                    download_title: import_info.title,
+                    download_title: import_info.title.clone(),
                     file_mappings: HashMap::new(),
                 },
             );
         }
+
+        // Create a job tracker for per-file import progress
+        if let Some(first) = imports.first() {
+            jobs.download_job_trackers.insert(
+                job_id.to_string(),
+                DownloadJobTracker {
+                    download_id: first.download_id.clone(),
+                    download_client_id: first.download_client_id,
+                    download_title: first.title.clone(),
+                    files_dispatched: 0,
+                    files_completed: 0,
+                    files_imported: 0,
+                    episodes_linked: 0,
+                    scan_finished: false,
+                },
+            );
+        }
+
         debug!("Registered download imports for scan job: {}", job_id);
     }
 
@@ -449,14 +490,17 @@ impl ScanResultConsumer {
         Ok(())
     }
 
-    /// Handle download scan result (Phase 2): match files → episodes, compute paths, dispatch moves.
+    /// Handle download scan result (Phase 2): match file → episodes, compute path, dispatch move.
     ///
-    /// When the worker discovers video files in a download directory, this method:
-    /// 1. Parses each filename to extract season/episode numbers
-    /// 2. Matches against series/episodes in the database
-    /// 3. Computes destination paths using the naming engine
-    /// 4. Sends an ImportFilesRequest to the worker to move files
-    /// 5. Stores mapping data for Phase 4 (DB insert after move)
+    /// Called once per file in streaming mode (worker sends per-file ScanResults).
+    /// When files_found is empty, this signals scan completion for cleanup tracking.
+    ///
+    /// For each file:
+    /// 1. Parse filename to extract season/episode numbers
+    /// 2. Match against series/episodes in the database
+    /// 3. Compute destination path using the naming engine
+    /// 4. Send a per-file ImportFilesRequest to the worker
+    /// 5. Store mapping data for Phase 4 (DB insert after move)
     async fn handle_download_scan_result(
         &self,
         job_id: &str,
@@ -464,23 +508,31 @@ impl ScanResultConsumer {
         files_found: Vec<ScannedFile>,
         errors: Vec<String>,
     ) {
-        info!(
-            "Download scan result from worker {}: job_id={}, {} files scanned, {} errors",
-            worker_id,
-            job_id,
-            files_found.len(),
-            errors.len()
-        );
-
         for err in &errors {
             warn!("Worker {} download scan error: {}", worker_id, err);
         }
 
+        // Empty result = scan completion signal from worker
         if files_found.is_empty() {
-            info!("No video files found in download directories by worker");
+            info!(
+                "[worker:{}] Scan complete for job {}",
+                worker_id, job_id
+            );
+            {
+                let mut jobs = self.pending_jobs.write().await;
+                if let Some(tracker) = jobs.download_job_trackers.get_mut(job_id) {
+                    tracker.scan_finished = true;
+                }
+            }
+            self.try_download_cleanup(job_id).await;
             self.mark_job_result_received(job_id).await;
             return;
         }
+
+        info!(
+            "[worker:{}] Scan result: job_id={}, {} file(s)",
+            worker_id, job_id, files_found.len()
+        );
 
         // Look up which download imports are associated with this job
         let download_keys: Vec<String> = {
@@ -494,39 +546,29 @@ impl ScanResultConsumer {
 
         if download_keys.is_empty() {
             warn!(
-                "No download import info found for job_id={}, falling back to series scan",
+                "No download import info found for job_id={}, skipping",
                 job_id
             );
-            // Fallback: process as a normal series scan if no download import was registered
-            // This shouldn't happen in normal flow but is a safety net
-            self.mark_job_result_received(job_id).await;
             return;
         }
 
-        // For each discovered file, try to match it to a series+episodes
-        let mut import_specs: Vec<ImportFileSpec> = Vec::new();
-        let mut file_mappings: HashMap<PathBuf, ImportMapping> = HashMap::new();
-        let mut download_id_for_cleanup = String::new();
-        let mut download_client_id: i64 = 0;
+        // Get download info from the registered import
         let mut download_title = String::new();
-
-        // Get the first download import info (typically one download per scan)
         if let Some(key) = download_keys.first() {
             let jobs = self.pending_jobs.read().await;
             if let Some(pending) = jobs.download_imports.get(key) {
-                download_id_for_cleanup = pending.download_id.clone();
-                download_client_id = pending.download_client_id;
                 download_title = pending.download_title.clone();
             }
         }
 
+        // Process each file (typically 1 in per-file streaming mode)
         for file in &files_found {
             let filename = &file.filename;
 
             // Parse episode info from the filename
             let parsed_eps = crate::core::scanner::parse_episodes_from_filename(filename);
             if parsed_eps.is_empty() {
-                debug!("Download import: skipping unmatched file '{}'", filename);
+                debug!("[worker:{}] skipping unmatched file '{}'", worker_id, filename);
                 continue;
             }
 
@@ -536,8 +578,8 @@ impl ScanResultConsumer {
                 Some(pi) => pi,
                 None => {
                     debug!(
-                        "Download import: could not parse title from '{}'",
-                        filename
+                        "[worker:{}] could not parse title from '{}'",
+                        worker_id, filename
                     );
                     continue;
                 }
@@ -611,13 +653,13 @@ impl ScanResultConsumer {
                     serde_json::to_string(&parsed_info.quality).unwrap_or_default()
                 });
 
-            import_specs.push(ImportFileSpec {
-                source_path: file.path.clone(),
-                dest_path: dest_path.clone(),
-            });
+            // Generate a unique import_job_id for this single file
+            let import_job_id = uuid::Uuid::new_v4().to_string();
 
+            // Store per-file mapping for Phase 4
+            let mut file_mappings = HashMap::new();
             file_mappings.insert(
-                dest_path,
+                dest_path.clone(),
                 ImportMapping {
                     series_id: series.id,
                     season_number,
@@ -633,68 +675,53 @@ impl ScanResultConsumer {
                 },
             );
 
-            debug!(
-                "[worker:{}] planned: {} → {}",
-                worker_id,
-                file.path.display(),
-                import_specs.last().unwrap().dest_path.display(),
-            );
-        }
+            {
+                let mut jobs = self.pending_jobs.write().await;
+                // Store per-file import state
+                jobs.download_imports.insert(
+                    import_job_id.clone(),
+                    PendingDownloadImport {
+                        download_id: String::new(), // cleanup handled by tracker
+                        download_client_id: 0,
+                        download_title: download_title.clone(),
+                        file_mappings,
+                    },
+                );
+                // Map import_job_id back to scan job for tracker updates
+                jobs.import_to_scan_job
+                    .insert(import_job_id.clone(), job_id.to_string());
+                // Increment dispatched counter
+                if let Some(tracker) = jobs.download_job_trackers.get_mut(job_id) {
+                    tracker.files_dispatched += 1;
+                }
+            }
 
-        let matched_count = import_specs.len();
-        let skipped_count = files_found.len() - matched_count;
-
-        if import_specs.is_empty() {
             info!(
-                "[worker:{}] '{}': matching complete — 0/{} files matched",
-                worker_id, download_title, files_found.len()
+                "[worker:{}] '{}': dispatching move {} → {}",
+                worker_id,
+                filename,
+                file.path.display(),
+                dest_path.display(),
             );
-            self.mark_job_result_received(job_id).await;
-            return;
+
+            // Phase 3: Send per-file ImportFilesRequest to worker immediately
+            self.event_bus
+                .publish(Message::ImportFilesRequest {
+                    job_id: import_job_id,
+                    files: vec![ImportFileSpec {
+                        source_path: file.path.clone(),
+                        dest_path,
+                    }],
+                })
+                .await;
         }
-
-        info!(
-            "[worker:{}] '{}': matching complete — {}/{} files matched, {} skipped",
-            worker_id, download_title, matched_count, files_found.len(), skipped_count
-        );
-
-        // Generate a new job_id for the import files request
-        let import_job_id = uuid::Uuid::new_v4().to_string();
-
-        // Store pending import state for Phase 4
-        {
-            let mut jobs = self.pending_jobs.write().await;
-            jobs.download_imports.insert(
-                import_job_id.clone(),
-                PendingDownloadImport {
-                    download_id: download_id_for_cleanup,
-                    download_client_id,
-                    download_title: download_title.clone(),
-                    file_mappings,
-                },
-            );
-        }
-
-        // Phase 3: Send ImportFilesRequest to worker
-        info!(
-            "[worker:{}] '{}': dispatching {} file moves (import_job_id={})",
-            worker_id, download_title, import_specs.len(), import_job_id
-        );
-
-        self.event_bus
-            .publish(Message::ImportFilesRequest {
-                job_id: import_job_id,
-                files: import_specs,
-            })
-            .await;
-
-        self.mark_job_result_received(job_id).await;
     }
 
-    /// Handle import files result (Phase 4): insert DB records, link episodes, cleanup download.
+    /// Handle import files result (Phase 4): insert DB records, link episodes.
     ///
-    /// Called when the worker confirms that file moves are complete. For each successfully
-    /// moved file, creates an EpisodeFileDbModel, links episodes, and records history.
+    /// Called per-file when the worker confirms a file move is complete. Creates an
+    /// EpisodeFileDbModel, links episodes, records history, and updates the download
+    /// job tracker. Download cleanup happens when all files are processed.
     async fn handle_import_files_result(
         &self,
         job_id: &str,
@@ -704,11 +731,11 @@ impl ScanResultConsumer {
         let succeeded = results.iter().filter(|r| r.success).count();
         let failed = results.iter().filter(|r| !r.success).count();
         info!(
-            "[worker:{}] File moves complete: job_id={}, {} succeeded, {} failed",
+            "[worker:{}] File move result: job_id={}, {} ok, {} failed",
             worker_id, job_id, succeeded, failed
         );
 
-        // Look up pending import state
+        // Look up pending import state for this per-file import
         let pending = {
             let mut jobs = self.pending_jobs.write().await;
             jobs.download_imports.remove(job_id)
@@ -809,6 +836,15 @@ impl ScanResultConsumer {
                     }
 
                     // Record history
+                    let download_id = {
+                        let jobs = self.pending_jobs.read().await;
+                        jobs.import_to_scan_job
+                            .get(job_id)
+                            .and_then(|scan_id| jobs.download_job_trackers.get(scan_id))
+                            .map(|t| t.download_id.clone())
+                            .unwrap_or_default()
+                    };
+
                     for episode_id in &mapping.episode_ids {
                         let history = crate::core::datastore::models::HistoryDbModel {
                             id: 0,
@@ -822,7 +858,7 @@ impl ScanResultConsumer {
                             custom_format_score: 0,
                             quality_cutoff_not_met: false,
                             date: Utc::now(),
-                            download_id: Some(pending.download_id.clone()),
+                            download_id: Some(download_id.clone()),
                             event_type: 3, // DownloadImported
                             data: "{}".to_string(),
                         };
@@ -830,7 +866,8 @@ impl ScanResultConsumer {
                     }
 
                     info!(
-                        "Download import: inserted file record for {} (file_id={}, episodes={})",
+                        "[worker:{}] Imported {} (file_id={}, {} episodes)",
+                        worker_id,
                         dest_path_str,
                         file_id,
                         mapping.episode_ids.len()
@@ -845,26 +882,81 @@ impl ScanResultConsumer {
             }
         }
 
+        // Update the download job tracker with per-file results
+        let scan_job_id = {
+            let mut jobs = self.pending_jobs.write().await;
+            let scan_job_id = jobs.import_to_scan_job.remove(job_id).clone();
+            if let Some(ref sjid) = scan_job_id {
+                if let Some(tracker) = jobs.download_job_trackers.get_mut(sjid.as_str()) {
+                    tracker.files_completed += 1;
+                    tracker.files_imported += total_imported;
+                    tracker.episodes_linked += total_episodes_linked;
+                }
+            }
+            scan_job_id
+        };
+
+        // Check if all files are done and we can finalize
+        if let Some(sjid) = scan_job_id {
+            self.try_download_cleanup(&sjid).await;
+        }
+    }
+
+    /// Check if a download import is fully complete (all files processed + scan finished).
+    /// If so, clean up the download from the client and emit final log.
+    async fn try_download_cleanup(&self, scan_job_id: &str) {
+        let should_cleanup = {
+            let jobs = self.pending_jobs.read().await;
+            if let Some(tracker) = jobs.download_job_trackers.get(scan_job_id) {
+                tracker.scan_finished
+                    && tracker.files_completed == tracker.files_dispatched
+                    && tracker.files_dispatched > 0
+            } else {
+                false
+            }
+        };
+
+        if !should_cleanup {
+            return;
+        }
+
+        // Remove tracker and perform cleanup
+        let tracker = {
+            let mut jobs = self.pending_jobs.write().await;
+            jobs.download_job_trackers.remove(scan_job_id)
+        };
+
+        let tracker = match tracker {
+            Some(t) => t,
+            None => return,
+        };
+
+        info!(
+            "Download import complete '{}': {} files imported, {} episodes linked",
+            tracker.download_title, tracker.files_imported, tracker.episodes_linked
+        );
+
         // Clean up download from download client
-        if total_imported > 0 && pending.download_client_id > 0 {
+        if tracker.files_imported > 0 && tracker.download_client_id > 0 {
             use crate::core::datastore::repositories::DownloadClientRepository;
             use crate::core::download::clients::create_client_from_model;
 
             let client_repo = DownloadClientRepository::new(self.db.clone());
-            if let Ok(Some(client_model)) = client_repo.get_by_id(pending.download_client_id).await
+            if let Ok(Some(client_model)) =
+                client_repo.get_by_id(tracker.download_client_id).await
             {
                 if let Ok(client) = create_client_from_model(&client_model) {
-                    match client.remove(&pending.download_id, false).await {
+                    match client.remove(&tracker.download_id, false).await {
                         Ok(()) => {
                             info!(
                                 "Download import: cleaned up '{}' from {}",
-                                pending.download_title, client_model.name
+                                tracker.download_title, client_model.name
                             );
                         }
                         Err(e) => {
                             warn!(
                                 "Download import: cleanup failed for '{}': {}",
-                                pending.download_title, e
+                                tracker.download_title, e
                             );
                         }
                     }
@@ -876,15 +968,10 @@ impl ScanResultConsumer {
             "DownloadImported",
             &format!(
                 "Worker import '{}': {} files imported, {} episodes linked",
-                pending.download_title, total_imported, total_episodes_linked
+                tracker.download_title, tracker.files_imported, tracker.episodes_linked
             ),
         )
         .await;
-
-        info!(
-            "[worker:{}] Import complete '{}': {} files imported, {} episodes linked",
-            worker_id, pending.download_title, total_imported, total_episodes_linked
-        );
     }
 
     /// Mark a job result as received in the pending jobs tracker
