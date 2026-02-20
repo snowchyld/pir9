@@ -207,6 +207,27 @@ export function useSeriesDetailQuery(id: number) {
 }
 
 /**
+ * Create a query for fetching movies list
+ */
+export function useMoviesQuery() {
+  return createQuery({
+    queryKey: ['/movie'],
+    queryFn: () => http.get<import('./http').Movie[]>('/movie'),
+  });
+}
+
+/**
+ * Create a query for fetching a single movie
+ */
+export function useMovieDetailQuery(id: number) {
+  return createQuery({
+    queryKey: ['/movie', id],
+    queryFn: () => http.get<import('./http').Movie>(`/movie/${id}`),
+    enabled: id > 0,
+  });
+}
+
+/**
  * Create a query for fetching episodes
  */
 export function useEpisodesQuery(seriesId: number) {
@@ -234,7 +255,9 @@ export function useCalendarQuery(start: string, end: string) {
 export function useQueueQuery() {
   return createQuery({
     queryKey: ['/queue'],
-    queryFn: () => http.get<import('./http').QueueResponse>('/queue'),
+    queryFn: () => http.get<import('./http').QueueResponse>('/queue', {
+      params: { pageSize: 10000 },
+    }),
     refetchInterval: 5000, // Poll every 5 seconds
   });
 }

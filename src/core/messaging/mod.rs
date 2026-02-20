@@ -123,6 +123,32 @@ pub enum Message {
         episodes_matched: usize,
     },
 
+    // Movie events
+    MovieAdded {
+        movie_id: i64,
+        title: String,
+    },
+    MovieUpdated {
+        movie_id: i64,
+        title: String,
+    },
+    MovieDeleted {
+        movie_id: i64,
+        title: String,
+    },
+    MovieRefreshed {
+        movie_id: i64,
+        title: String,
+    },
+    MovieFileImported {
+        movie_file_id: i64,
+        movie_id: i64,
+    },
+    MovieFileDeleted {
+        movie_file_id: i64,
+        movie_id: i64,
+    },
+
     // Episode events
     EpisodeAdded {
         episode_id: i64,

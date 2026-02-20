@@ -28,6 +28,9 @@ const SKIP_IF_RECENT_HOURS: i64 = 24;
 /// TV title types we care about
 const TV_TITLE_TYPES: &[&str] = &["tvSeries", "tvMiniSeries"];
 
+/// Movie title types we care about
+const MOVIE_TITLE_TYPES: &[&str] = &["movie"];
+
 /// Download a dataset file, racing against the cancellation token.
 /// Returns the raw bytes on success, or DatasetResult::Cancelled if the token fires.
 async fn download_dataset(
@@ -35,7 +38,7 @@ async fn download_dataset(
     token: &CancellationToken,
 ) -> Result<std::result::Result<Vec<u8>, DatasetResult>> {
     let client = reqwest::Client::builder()
-        .user_agent("Pir9-IMDB/0.1.0")
+        .user_agent("pir9-IMDB/0.1.0")
         .timeout(std::time::Duration::from_secs(3600))
         .build()?;
 
@@ -274,9 +277,12 @@ async fn sync_title_basics_inner(
             continue;
         }
 
-        // Only process TV series types
         let title_type = fields[1];
-        if !TV_TITLE_TYPES.contains(&title_type) {
+        let is_tv = TV_TITLE_TYPES.contains(&title_type);
+        let is_movie = MOVIE_TITLE_TYPES.contains(&title_type);
+
+        // Only process TV series and movie types
+        if !is_tv && !is_movie {
             continue;
         }
 
@@ -291,31 +297,58 @@ async fn sync_title_basics_inner(
             continue;
         }
 
-        let series = DbSeries {
-            imdb_id,
-            title: fields[2].to_string(),
-            original_title: if fields[3] != "\\N" && fields[3] != fields[2] {
-                Some(fields[3].to_string())
-            } else {
-                None
-            },
-            is_adult: fields[4] == "1",
-            start_year: parse_int(fields[5]),
-            end_year: parse_int(fields[6]),
-            runtime_minutes: parse_int(fields[7]),
-            genres: if fields[8] != "\\N" {
-                Some(fields[8].to_string())
-            } else {
-                None
-            },
-            title_type: title_type.to_string(),
-            rating: None,
-            votes: None,
-            last_synced_at: Utc::now(),
-        };
+        if is_tv {
+            let series = DbSeries {
+                imdb_id,
+                title: fields[2].to_string(),
+                original_title: if fields[3] != "\\N" && fields[3] != fields[2] {
+                    Some(fields[3].to_string())
+                } else {
+                    None
+                },
+                is_adult: fields[4] == "1",
+                start_year: parse_int(fields[5]),
+                end_year: parse_int(fields[6]),
+                runtime_minutes: parse_int(fields[7]),
+                genres: if fields[8] != "\\N" {
+                    Some(fields[8].to_string())
+                } else {
+                    None
+                },
+                title_type: title_type.to_string(),
+                rating: None,
+                votes: None,
+                last_synced_at: Utc::now(),
+            };
 
-        if db.upsert_series(&series).await? {
-            rows_inserted += 1;
+            if db.upsert_series(&series).await? {
+                rows_inserted += 1;
+            }
+        } else {
+            let movie = DbMovie {
+                imdb_id,
+                title: fields[2].to_string(),
+                original_title: if fields[3] != "\\N" && fields[3] != fields[2] {
+                    Some(fields[3].to_string())
+                } else {
+                    None
+                },
+                is_adult: fields[4] == "1",
+                year: parse_int(fields[5]),
+                runtime_minutes: parse_int(fields[7]),
+                genres: if fields[8] != "\\N" {
+                    Some(fields[8].to_string())
+                } else {
+                    None
+                },
+                rating: None,
+                votes: None,
+                last_synced_at: Utc::now(),
+            };
+
+            if db.upsert_movie(&movie).await? {
+                rows_inserted += 1;
+            }
         }
 
         rows_processed += 1;
@@ -633,8 +666,9 @@ async fn sync_title_ratings_inner(
             Err(_) => continue,
         };
 
-        // Update series rating (if it exists in our series table)
+        // Update ratings (for both series and movies — one will match, one won't)
         db.update_series_rating(imdb_id, rating, votes).await.ok();
+        db.update_movie_rating(imdb_id, rating, votes).await.ok();
 
         rows_processed += 1;
         last_id = imdb_id;

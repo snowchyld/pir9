@@ -56,15 +56,18 @@ pub async fn get_root_folders(
     let db_folders = repo.get_all().await
         .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folders: {}", e)))?;
 
-    // Get all series paths to determine which folders are unmapped
+    // Get all series + movie paths to determine which folders are unmapped
     let series_paths = get_series_paths(&state.db).await.unwrap_or_default();
+    let movie_paths = get_movie_paths(&state.db).await.unwrap_or_default();
+    let mut mapped_paths = series_paths;
+    mapped_paths.extend(movie_paths);
 
     let folders: Vec<RootFolderResource> = db_folders
         .into_iter()
         .map(|f| {
             let (accessible, free_space) = check_path_accessible(&f.path);
             let unmapped_folders = if accessible {
-                scan_unmapped_folders(&f.path, &series_paths)
+                scan_unmapped_folders(&f.path, &mapped_paths)
             } else {
                 vec![]
             };
@@ -91,12 +94,15 @@ pub async fn get_root_folder(
         .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folder: {}", e)))?
         .ok_or(RootFolderError::NotFound)?;
 
-    // Get series paths for unmapped folder detection
+    // Get series + movie paths for unmapped folder detection
     let series_paths = get_series_paths(&state.db).await.unwrap_or_default();
+    let movie_paths = get_movie_paths(&state.db).await.unwrap_or_default();
+    let mut mapped_paths = series_paths;
+    mapped_paths.extend(movie_paths);
 
     let (accessible, free_space) = check_path_accessible(&folder.path);
     let unmapped_folders = if accessible {
-        scan_unmapped_folders(&folder.path, &series_paths)
+        scan_unmapped_folders(&folder.path, &mapped_paths)
     } else {
         vec![]
     };
@@ -136,7 +142,10 @@ pub async fn create_root_folder(
 
     // Scan for unmapped folders
     let series_paths = get_series_paths(&state.db).await.unwrap_or_default();
-    let unmapped_folders = scan_unmapped_folders(path, &series_paths);
+    let movie_paths = get_movie_paths(&state.db).await.unwrap_or_default();
+    let mut mapped_paths = series_paths;
+    mapped_paths.extend(movie_paths);
+    let unmapped_folders = scan_unmapped_folders(path, &mapped_paths);
 
     Ok(Json(RootFolderResource {
         id: id as i32,
@@ -226,6 +235,23 @@ async fn get_series_paths(db: &crate::core::datastore::Database) -> anyhow::Resu
 
     let pool = db.pool();
     let rows = sqlx::query("SELECT path FROM series")
+        .fetch_all(pool)
+        .await?;
+
+    let paths: Vec<String> = rows
+        .iter()
+        .filter_map(|row| row.try_get::<String, _>("path").ok())
+        .collect();
+
+    Ok(paths)
+}
+
+/// Get all movie paths from the database
+async fn get_movie_paths(db: &crate::core::datastore::Database) -> anyhow::Result<Vec<String>> {
+    use sqlx::Row;
+
+    let pool = db.pool();
+    let rows = sqlx::query("SELECT path FROM movies")
         .fetch_all(pool)
         .await?;
 

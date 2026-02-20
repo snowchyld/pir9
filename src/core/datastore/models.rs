@@ -87,6 +87,58 @@ pub struct EpisodeFileDbModel {
     pub original_file_path: Option<String>,
 }
 
+/// Movie database model
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct MovieDbModel {
+    pub id: i64,
+    pub tmdb_id: i64,
+    pub imdb_id: Option<String>,
+    pub title: String,
+    pub clean_title: String,
+    pub sort_title: String,
+    pub status: i32,
+    pub overview: Option<String>,
+    pub monitored: bool,
+    pub quality_profile_id: i64,
+    pub title_slug: String,
+    pub path: String,
+    pub root_folder_path: String,
+    pub year: i32,
+    pub release_date: Option<NaiveDate>,
+    pub physical_release_date: Option<NaiveDate>,
+    pub digital_release_date: Option<NaiveDate>,
+    pub runtime: i32,
+    pub studio: Option<String>,
+    pub certification: Option<String>,
+    pub genres: String,        // JSON serialized
+    pub tags: String,          // JSON serialized
+    pub images: String,        // JSON serialized
+    pub has_file: bool,
+    pub movie_file_id: Option<i64>,
+    pub added: DateTime<Utc>,
+    pub last_info_sync: Option<DateTime<Utc>>,
+    pub imdb_rating: Option<f32>,
+    pub imdb_votes: Option<i32>,
+}
+
+/// Movie file database model
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct MovieFileDbModel {
+    pub id: i64,
+    pub movie_id: i64,
+    pub relative_path: String,
+    pub path: String,
+    pub size: i64,
+    pub date_added: DateTime<Utc>,
+    pub scene_name: Option<String>,
+    pub release_group: Option<String>,
+    pub quality: String,       // JSON serialized
+    pub languages: String,     // JSON serialized
+    pub media_info: Option<String>, // JSON serialized
+    pub original_file_path: Option<String>,
+    pub edition: Option<String>,
+}
+
 /// Episode to file mapping (for multi-episode files)
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct EpisodeFileMapping {

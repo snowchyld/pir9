@@ -1,10 +1,10 @@
-# Pir9 Architecture
+# pir9 Architecture
 
-This document describes the architecture of Pir9.
+This document describes the architecture of pir9.
 
 ## Overview
 
-Pir9 is a complete rewrite of the original C# Sonarr application, maintaining API compatibility while leveraging Rust's performance and safety guarantees.
+pir9 is a complete rewrite of the original C# Sonarr application, maintaining API compatibility while leveraging Rust's performance and safety guarantees.
 
 ## Architecture Diagram
 
@@ -197,7 +197,7 @@ Background job scheduling.
 ### Episode Import
 
 1. Download completes
-2. Download client notifies Pir9
+2. Download client notifies pir9
 3. `MediaAnalyzer` analyzes file
 4. Episode matched to series/episode
 5. File renamed and moved

@@ -28,6 +28,7 @@ pub mod indexers;
 pub mod localization;
 pub mod log;
 pub mod manualimport;
+pub mod movies;
 pub mod notification;
 pub mod parse;
 pub mod profile;
@@ -49,6 +50,7 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         // Core resources
         .nest("/series", series::routes())
+        .nest("/movie", movies::routes())
         .nest("/episode", episodes::routes())
         .nest("/episodeFile", episodefile::routes())
         .nest("/episodefile", episodefile::routes())  // lowercase alias

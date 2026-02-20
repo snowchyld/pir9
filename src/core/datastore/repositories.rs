@@ -596,6 +596,242 @@ impl SeriesRepository {
     }
 }
 
+/// Repository for movies
+pub struct MovieRepository {
+    db: Database,
+}
+
+impl MovieRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_all(&self) -> Result<Vec<super::models::MovieDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::MovieDbModel>(
+            "SELECT * FROM movies ORDER BY sort_title"
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::MovieDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::MovieDbModel>(
+            "SELECT * FROM movies WHERE id = $1"
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_by_tmdb_id(&self, tmdb_id: i64) -> Result<Option<super::models::MovieDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::MovieDbModel>(
+            "SELECT * FROM movies WHERE tmdb_id = $1"
+        )
+        .bind(tmdb_id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_by_imdb_id(&self, imdb_id: &str) -> Result<Option<super::models::MovieDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::MovieDbModel>(
+            "SELECT * FROM movies WHERE imdb_id = $1"
+        )
+        .bind(imdb_id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn insert(&self, movie: &super::models::MovieDbModel) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO movies (
+                tmdb_id, imdb_id, title, clean_title, sort_title, status,
+                overview, monitored, quality_profile_id, title_slug,
+                path, root_folder_path, year, release_date,
+                physical_release_date, digital_release_date, runtime,
+                studio, certification, genres, tags, images,
+                has_file, movie_file_id, added, last_info_sync,
+                imdb_rating, imdb_votes
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                $21, $22, $23, $24, $25, $26, $27, $28
+            ) RETURNING id
+            "#
+        )
+        .bind(movie.tmdb_id)
+        .bind(&movie.imdb_id)
+        .bind(&movie.title)
+        .bind(&movie.clean_title)
+        .bind(&movie.sort_title)
+        .bind(movie.status)
+        .bind(&movie.overview)
+        .bind(movie.monitored)
+        .bind(movie.quality_profile_id)
+        .bind(&movie.title_slug)
+        .bind(&movie.path)
+        .bind(&movie.root_folder_path)
+        .bind(movie.year)
+        .bind(movie.release_date)
+        .bind(movie.physical_release_date)
+        .bind(movie.digital_release_date)
+        .bind(movie.runtime)
+        .bind(&movie.studio)
+        .bind(&movie.certification)
+        .bind(&movie.genres)
+        .bind(&movie.tags)
+        .bind(&movie.images)
+        .bind(movie.has_file)
+        .bind(movie.movie_file_id)
+        .bind(movie.added)
+        .bind(movie.last_info_sync)
+        .bind(movie.imdb_rating)
+        .bind(movie.imdb_votes)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn update(&self, movie: &super::models::MovieDbModel) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            r#"
+            UPDATE movies SET
+                tmdb_id = $1, imdb_id = $2, title = $3, clean_title = $4, sort_title = $5,
+                status = $6, overview = $7, monitored = $8, quality_profile_id = $9,
+                title_slug = $10, path = $11, root_folder_path = $12,
+                year = $13, release_date = $14, physical_release_date = $15,
+                digital_release_date = $16, runtime = $17, studio = $18,
+                certification = $19, genres = $20, tags = $21, images = $22,
+                has_file = $23, movie_file_id = $24, last_info_sync = $25,
+                imdb_rating = $26, imdb_votes = $27
+            WHERE id = $28
+            "#
+        )
+        .bind(movie.tmdb_id)
+        .bind(&movie.imdb_id)
+        .bind(&movie.title)
+        .bind(&movie.clean_title)
+        .bind(&movie.sort_title)
+        .bind(movie.status)
+        .bind(&movie.overview)
+        .bind(movie.monitored)
+        .bind(movie.quality_profile_id)
+        .bind(&movie.title_slug)
+        .bind(&movie.path)
+        .bind(&movie.root_folder_path)
+        .bind(movie.year)
+        .bind(movie.release_date)
+        .bind(movie.physical_release_date)
+        .bind(movie.digital_release_date)
+        .bind(movie.runtime)
+        .bind(&movie.studio)
+        .bind(&movie.certification)
+        .bind(&movie.genres)
+        .bind(&movie.tags)
+        .bind(&movie.images)
+        .bind(movie.has_file)
+        .bind(movie.movie_file_id)
+        .bind(movie.last_info_sync)
+        .bind(movie.imdb_rating)
+        .bind(movie.imdb_votes)
+        .bind(movie.id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM movies WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for movie files
+pub struct MovieFileRepository {
+    db: Database,
+}
+
+impl MovieFileRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::MovieFileDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::MovieFileDbModel>(
+            "SELECT * FROM movie_files WHERE id = $1"
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_by_movie_id(&self, movie_id: i64) -> Result<Option<super::models::MovieFileDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::MovieFileDbModel>(
+            "SELECT * FROM movie_files WHERE movie_id = $1"
+        )
+        .bind(movie_id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn insert(&self, file: &super::models::MovieFileDbModel) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO movie_files (
+                movie_id, relative_path, path, size, date_added,
+                scene_name, release_group, quality, languages,
+                media_info, original_file_path, edition
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+            ) RETURNING id
+            "#
+        )
+        .bind(file.movie_id)
+        .bind(&file.relative_path)
+        .bind(&file.path)
+        .bind(file.size)
+        .bind(file.date_added)
+        .bind(&file.scene_name)
+        .bind(&file.release_group)
+        .bind(&file.quality)
+        .bind(&file.languages)
+        .bind(&file.media_info)
+        .bind(&file.original_file_path)
+        .bind(&file.edition)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM movie_files WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
 /// Repository for episodes
 pub struct EpisodeRepository {
     db: Database,

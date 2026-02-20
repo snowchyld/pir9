@@ -1,6 +1,6 @@
-# Contributing to Pir9
+# Contributing to pir9
 
-Thank you for your interest in contributing to Pir9! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to pir9! This document provides guidelines and instructions for contributing.
 
 ## Code of Conduct
 

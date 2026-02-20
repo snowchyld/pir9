@@ -374,7 +374,57 @@ pub struct SkyhookRatings {
     /// Vote count — Skyhook uses "votes" in search results, "count" in show details
     #[serde(alias = "count")]
     pub votes: Option<i64>,
+    /// Rating value — Skyhook sometimes returns this as a string ("3.9") or number (3.9)
+    #[serde(default, deserialize_with = "deserialize_f64_or_string")]
     pub value: Option<f64>,
+}
+
+/// Deserialize a value that may be either a number or a string representation of a number.
+fn deserialize_f64_or_string<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct F64OrString;
+
+    impl<'de> de::Visitor<'de> for F64OrString {
+        type Value = Option<f64>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a number or string")
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+            Ok(Some(v))
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(Some(v as f64))
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(Some(v as f64))
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            v.parse::<f64>().map(Some).map_err(de::Error::custom)
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D2: serde::Deserializer<'de>>(self, deserializer: D2) -> Result<Self::Value, D2::Error> {
+            deserializer.deserialize_any(Self)
+        }
+    }
+
+    deserializer.deserialize_any(F64OrString)
 }
 
 // ========== Merged Metadata Types ==========

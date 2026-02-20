@@ -1,8 +1,8 @@
-# Pir9 Implementation TODO
+# pir9 Implementation TODO
 
 ## Overview
 
-This document tracks the implementation status of Pir9 compared to the original Sonarr.
+This document tracks the implementation status of pir9 compared to the original Sonarr.
 Current completion: ~80% (Phase 1-5 complete: infrastructure, download clients, indexers, queue/import, wanted/calendar)
 
 ---

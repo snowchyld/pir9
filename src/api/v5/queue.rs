@@ -84,6 +84,27 @@ pub struct QueueResource {
     pub indexer: Option<String>,
     pub output_path: Option<String>,
     pub episode_has_file: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub episode: Option<QueueEpisodeResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub series: Option<QueueSeriesResource>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueEpisodeResource {
+    pub id: i64,
+    pub season_number: i32,
+    pub episode_number: i32,
+    pub title: String,
+    pub air_date_utc: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueSeriesResource {
+    pub id: i64,
+    pub title: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -250,6 +271,8 @@ fn queue_item_to_resource(item: &crate::core::queue::QueueItem) -> QueueResource
         indexer: Some(item.indexer.clone()),
         output_path: item.output_path.clone(),
         episode_has_file: item.episode_has_file,
+        episode: None,
+        series: None,
     }
 }
 
@@ -295,6 +318,12 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
         let mut id_counter = (all_downloads.len() as i64) + 10000;
 
         for db_client in clients.iter().filter(|c| c.enable) {
+            // Parse the configured category from client settings
+            let client_category: Option<String> = serde_json::from_str::<serde_json::Value>(&db_client.settings)
+                .ok()
+                .and_then(|s| s.get("tvCategory").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .filter(|s| !s.is_empty());
+
             match create_client_from_model(db_client) {
                 Ok(client) => match client.get_downloads().await {
                     Ok(downloads) => {
@@ -307,6 +336,14 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                         for dl in downloads {
                             if tracked_ids.contains(&dl.id) {
                                 continue;
+                            }
+
+                            // Skip downloads that don't match the configured category
+                            if let Some(ref expected_cat) = client_category {
+                                let dl_cat = dl.category.as_deref().unwrap_or("");
+                                if !dl_cat.eq_ignore_ascii_case(expected_cat) {
+                                    continue;
+                                }
                             }
 
                             let status = match dl.status {
@@ -393,6 +430,47 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                 }
                             }
 
+                            // Build series/episode from parsed info even when not matched in DB.
+                            // This gives the frontend a clean series name instead of the raw torrent title.
+                            let parsed_series = if matched_series_id.is_some() {
+                                // Will be enriched later in list_queue()
+                                None
+                            } else if let Some(ref info) = parsed {
+                                if !info.series_title.is_empty() {
+                                    Some(QueueSeriesResource {
+                                        id: 0,
+                                        title: info.series_title.clone(),
+                                    })
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            let parsed_episode = if matched_episode_id.is_some() {
+                                // Will be enriched later in list_queue()
+                                None
+                            } else if let Some(ref info) = parsed {
+                                if let Some(season) = info.season_number {
+                                    if !info.episode_numbers.is_empty() {
+                                        Some(QueueEpisodeResource {
+                                            id: 0,
+                                            season_number: season,
+                                            episode_number: info.episode_numbers[0],
+                                            title: String::new(),
+                                            air_date_utc: None,
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
                             all_downloads.push(QueueResource {
                                 id: id_counter,
                                 series_id: matched_series_id,
@@ -432,6 +510,8 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                 indexer: None,
                                 output_path: dl.output_path,
                                 episode_has_file: false,
+                                episode: parsed_episode,
+                                series: parsed_series,
                             });
 
                             id_counter += 1;
@@ -460,10 +540,44 @@ async fn list_queue(
     Query(params): Query<QueueListQuery>,
 ) -> Json<QueueResponse> {
     let include_unknown = params.include_unknown_series_items.unwrap_or(true);
-    let all_downloads = fetch_all_downloads(&state, include_unknown).await;
+    let include_episode = params.include_episode.unwrap_or(true);
+    let include_series = params.include_series.unwrap_or(true);
+    let mut all_downloads = fetch_all_downloads(&state, include_unknown).await;
+
+    // Enrich with episode/series metadata
+    if include_episode || include_series {
+        let episode_repo = EpisodeRepository::new(state.db.clone());
+        let series_repo = SeriesRepository::new(state.db.clone());
+
+        for dl in &mut all_downloads {
+            if include_episode {
+                if let Some(ep_id) = dl.episode_id {
+                    if let Ok(Some(ep)) = episode_repo.get_by_id(ep_id).await {
+                        dl.episode = Some(QueueEpisodeResource {
+                            id: ep.id,
+                            season_number: ep.season_number,
+                            episode_number: ep.episode_number,
+                            title: ep.title,
+                            air_date_utc: ep.air_date_utc.map(|d| d.to_rfc3339()),
+                        });
+                    }
+                }
+            }
+            if include_series {
+                if let Some(sid) = dl.series_id {
+                    if let Ok(Some(s)) = series_repo.get_by_id(sid).await {
+                        dl.series = Some(QueueSeriesResource {
+                            id: s.id,
+                            title: s.title,
+                        });
+                    }
+                }
+            }
+        }
+    }
 
     let page = params.page.unwrap_or(1).max(1);
-    let page_size = params.page_size.unwrap_or(20).max(1).min(100);
+    let page_size = params.page_size.unwrap_or(10000).max(1).min(10000);
     let total_records = all_downloads.len() as i64;
 
     let start = ((page - 1) * page_size) as usize;

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Entrypoint script for Pir9
+# Entrypoint script for pir9
 # Handles PUID/PGID for proper volume permissions (like linuxserver.io containers)
 
 set -e
@@ -7,7 +7,7 @@ set -e
 PUID=${PUID:-1000}
 PGID=${PGID:-1000}
 
-echo "Starting Pir9 with UID=$PUID GID=$PGID"
+echo "Starting pir9 with UID=$PUID GID=$PGID"
 
 # Create pir9 group and user with specified IDs if they don't match
 if [ "$(id -u pir9 2>/dev/null)" != "$PUID" ]; then

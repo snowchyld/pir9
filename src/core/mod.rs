@@ -9,6 +9,7 @@ pub mod indexers;
 pub mod metadata;
 pub mod logging;
 pub mod mediafiles;
+pub mod movies;
 pub mod messaging;
 pub mod notifications;
 pub mod parser;

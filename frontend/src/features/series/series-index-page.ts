@@ -122,6 +122,7 @@ export class SeriesIndexPage extends BaseComponent {
               <option value="previousAiring">Previous Airing</option>
               <option value="added">Added</option>
               <option value="year">Year</option>
+              <option value="episodeProgress">Episodes</option>
               <option value="sizeOnDisk">Size</option>
             </select>
 
@@ -710,6 +711,42 @@ export class SeriesIndexPage extends BaseComponent {
         .monitored-icon.false {
           color: var(--color-gray-600);
         }
+
+        /* Episode progress */
+        .episode-progress {
+          min-width: 120px;
+        }
+
+        .episode-progress-bar {
+          height: 6px;
+          background-color: var(--bg-progress, rgba(255,255,255,0.08));
+          border-radius: 3px;
+          overflow: hidden;
+        }
+
+        .episode-progress-fill {
+          height: 100%;
+          border-radius: 3px;
+          transition: width var(--transition-normal) var(--ease-out-expo);
+        }
+
+        .episode-progress-fill.complete {
+          background-color: var(--color-success);
+        }
+
+        .episode-progress-fill.partial {
+          background-color: var(--color-primary);
+        }
+
+        .episode-progress-fill.empty {
+          background-color: var(--color-gray-600);
+        }
+
+        .episode-progress-text {
+          font-size: 0.75rem;
+          color: var(--text-color-muted);
+          margin-top: 2px;
+        }
       </style>
     `;
   }
@@ -839,8 +876,8 @@ export class SeriesIndexPage extends BaseComponent {
               Year ${sortKey === 'year' ? safeHtml(sortIcon) : ''}
             </th>
             <th>Seasons</th>
-            <th class="sortable ${sortKey === 'sizeOnDisk' ? 'sorted' : ''}" onclick="this.closest('series-index-page').handleHeaderSort('sizeOnDisk')">
-              Episodes ${sortKey === 'sizeOnDisk' ? safeHtml(sortIcon) : ''}
+            <th class="sortable ${sortKey === 'episodeProgress' ? 'sorted' : ''}" onclick="this.closest('series-index-page').handleHeaderSort('episodeProgress')">
+              Episodes ${sortKey === 'episodeProgress' ? safeHtml(sortIcon) : ''}
             </th>
           </tr>
         </thead>
@@ -875,7 +912,12 @@ export class SeriesIndexPage extends BaseComponent {
         </td>
         <td>${series.year > 0 ? series.year : '-'}</td>
         <td>${stats?.seasonCount ?? 0}</td>
-        <td>${fileCount}/${episodeCount}</td>
+        <td class="episode-progress">
+          <div class="episode-progress-bar">
+            <div class="episode-progress-fill ${episodeCount > 0 && fileCount >= episodeCount ? 'complete' : fileCount > 0 ? 'partial' : 'empty'}" style="width: ${episodeCount > 0 ? Math.round((fileCount / episodeCount) * 100) : 0}%"></div>
+          </div>
+          <div class="episode-progress-text">${fileCount} / ${episodeCount}</div>
+        </td>
       </tr>
     `;
   }
@@ -913,6 +955,8 @@ export class SeriesIndexPage extends BaseComponent {
         return series.year;
       case 'sizeOnDisk':
         return series.statistics?.sizeOnDisk ?? 0;
+      case 'episodeProgress':
+        return series.statistics?.episodeFileCount ?? 0;
       default:
         return series.sortTitle.toLowerCase();
     }

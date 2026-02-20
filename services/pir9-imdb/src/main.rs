@@ -1,4 +1,4 @@
-//! Pir9 IMDB Service
+//! pir9 IMDB Service
 //!
 //! Standalone service for managing IMDB data:
 //! - Syncs data from IMDB non-commercial datasets
@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    info!("Starting Pir9 IMDB Service v{}", env!("CARGO_PKG_VERSION"));
+    info!("Starting pir9 IMDB Service v{}", env!("CARGO_PKG_VERSION"));
 
     // Database connection
     let db_url = std::env::var("PIR9_IMDB_DB_URL")
@@ -96,6 +96,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/series/search", get(search_series))
         .route("/api/series/{imdb_id}", get(get_series))
         .route("/api/series/{imdb_id}/episodes", get(get_episodes))
+        // Movie endpoints
+        .route("/api/movies/search", get(search_movies))
+        .route("/api/movies/{imdb_id}", get(get_movie))
         // Stats
         .route("/api/stats", get(get_stats))
         // Sync endpoints
@@ -198,6 +201,45 @@ async fn get_episodes(
         Ok(episodes) => (StatusCode::OK, Json(episodes)).into_response(),
         Err(e) => {
             error!("Get episodes error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn search_movies(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<SearchQuery>,
+) -> impl IntoResponse {
+    match state.db.search_movies(&query.q, query.limit).await {
+        Ok(results) => (StatusCode::OK, Json(results)).into_response(),
+        Err(e) => {
+            error!("Movie search error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn get_movie(
+    State(state): State<Arc<AppState>>,
+    Path(imdb_id): Path<String>,
+) -> impl IntoResponse {
+    match state.db.get_movie(&imdb_id).await {
+        Ok(Some(movie)) => (StatusCode::OK, Json(movie)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Movie not found" })),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Get movie error: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": e.to_string() })),

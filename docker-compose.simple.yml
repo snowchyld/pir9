@@ -1,6 +1,6 @@
-# Docker Compose for Pir9 - Simple Single-Container Deployment
+# Docker Compose for pir9 - Simple Single-Container Deployment
 #
-# This is the simplest way to run Pir9 for development or small deployments.
+# This is the simplest way to run pir9 for development or small deployments.
 # No Redis or multi-container complexity.
 #
 # Usage:

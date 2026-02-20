@@ -145,6 +145,81 @@ impl DbRepository {
         Ok(results)
     }
 
+    /// Search movies by title
+    pub async fn search_movies(&self, query: &str, limit: u32) -> Result<Vec<ImdbMovie>> {
+        let search_pattern = format!("%{}%", query);
+        let limit = limit.min(100) as i64;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT imdb_id, title, original_title, year,
+                   runtime_minutes, genres, is_adult, rating, votes, last_synced_at
+            FROM imdb_movies
+            WHERE title ILIKE $1 OR original_title ILIKE $1
+            ORDER BY votes DESC NULLS LAST, rating DESC NULLS LAST
+            LIMIT $2
+            "#,
+        )
+        .bind(&search_pattern)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let results: Vec<ImdbMovie> = rows
+            .iter()
+            .map(|row| {
+                let db_movie = DbMovie {
+                    imdb_id: row.get("imdb_id"),
+                    title: row.get("title"),
+                    original_title: row.get("original_title"),
+                    year: row.get("year"),
+                    runtime_minutes: row.get("runtime_minutes"),
+                    genres: row.get("genres"),
+                    is_adult: row.get("is_adult"),
+                    rating: row.get("rating"),
+                    votes: row.get("votes"),
+                    last_synced_at: row.get("last_synced_at"),
+                };
+                db_movie.to_api()
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Get a movie by IMDB ID
+    pub async fn get_movie(&self, imdb_id: &str) -> Result<Option<ImdbMovie>> {
+        let numeric_id = parse_imdb_id(imdb_id).ok_or_else(|| anyhow::anyhow!("Invalid IMDB ID"))?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT imdb_id, title, original_title, year,
+                   runtime_minutes, genres, is_adult, rating, votes, last_synced_at
+            FROM imdb_movies
+            WHERE imdb_id = $1
+            "#,
+        )
+        .bind(numeric_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|row| {
+            let db_movie = DbMovie {
+                imdb_id: row.get("imdb_id"),
+                title: row.get("title"),
+                original_title: row.get("original_title"),
+                year: row.get("year"),
+                runtime_minutes: row.get("runtime_minutes"),
+                genres: row.get("genres"),
+                is_adult: row.get("is_adult"),
+                rating: row.get("rating"),
+                votes: row.get("votes"),
+                last_synced_at: row.get("last_synced_at"),
+            };
+            db_movie.to_api()
+        }))
+    }
+
     /// Get database statistics
     pub async fn get_stats(&self) -> Result<ImdbStats> {
         let series_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM imdb_series")
@@ -153,6 +228,11 @@ impl DbRepository {
             .unwrap_or(0);
 
         let episode_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM imdb_episodes")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap_or(0);
+
+        let movie_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM imdb_movies")
             .fetch_one(&self.pool)
             .await
             .unwrap_or(0);
@@ -182,6 +262,7 @@ impl DbRepository {
         Ok(ImdbStats {
             series_count,
             episode_count,
+            movie_count,
             last_sync,
             db_size_bytes: db_size,
         })
@@ -476,6 +557,59 @@ impl DbRepository {
         sqlx::query(
             r#"
             UPDATE imdb_series
+            SET rating = $2, votes = $3, last_synced_at = NOW()
+            WHERE imdb_id = $1
+            "#,
+        )
+        .bind(imdb_id)
+        .bind(rating)
+        .bind(votes)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Upsert a movie
+    pub async fn upsert_movie(&self, movie: &DbMovie) -> Result<bool> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO imdb_movies (imdb_id, title, original_title, year,
+                                     runtime_minutes, genres, is_adult, rating, votes, last_synced_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (imdb_id) DO UPDATE SET
+                title = EXCLUDED.title,
+                original_title = EXCLUDED.original_title,
+                year = EXCLUDED.year,
+                runtime_minutes = EXCLUDED.runtime_minutes,
+                genres = EXCLUDED.genres,
+                is_adult = EXCLUDED.is_adult,
+                rating = COALESCE(EXCLUDED.rating, imdb_movies.rating),
+                votes = COALESCE(EXCLUDED.votes, imdb_movies.votes),
+                last_synced_at = EXCLUDED.last_synced_at
+            "#,
+        )
+        .bind(movie.imdb_id)
+        .bind(&movie.title)
+        .bind(&movie.original_title)
+        .bind(movie.year)
+        .bind(movie.runtime_minutes)
+        .bind(&movie.genres)
+        .bind(movie.is_adult)
+        .bind(movie.rating)
+        .bind(movie.votes)
+        .bind(movie.last_synced_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Update ratings for a movie
+    pub async fn update_movie_rating(&self, imdb_id: i64, rating: f64, votes: i64) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE imdb_movies
             SET rating = $2, votes = $3, last_synced_at = NOW()
             WHERE imdb_id = $1
             "#,

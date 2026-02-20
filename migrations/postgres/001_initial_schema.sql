@@ -1,4 +1,4 @@
--- Initial database schema for Pir9 (PostgreSQL)
+-- Initial database schema for pir9 (PostgreSQL)
 -- This schema matches the Rust model definitions exactly
 
 -- Series table (matches SeriesDbModel - all IDs are i64)

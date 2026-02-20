@@ -48,6 +48,12 @@ fn message_type_name(message: &Message) -> &'static str {
         Message::WorkerOnline { .. } => "WorkerOnline",
         Message::WorkerOffline { .. } => "WorkerOffline",
         Message::WorkerHeartbeat { .. } => "WorkerHeartbeat",
+        Message::MovieAdded { .. } => "MovieAdded",
+        Message::MovieUpdated { .. } => "MovieUpdated",
+        Message::MovieDeleted { .. } => "MovieDeleted",
+        Message::MovieRefreshed { .. } => "MovieRefreshed",
+        Message::MovieFileImported { .. } => "MovieFileImported",
+        Message::MovieFileDeleted { .. } => "MovieFileDeleted",
     }
 }
 

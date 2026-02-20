@@ -1,4 +1,4 @@
-# Pir9 Lint & Feature Completion TODO
+# pir9 Lint & Feature Completion TODO
 
 Generated: 2026-01-31
 

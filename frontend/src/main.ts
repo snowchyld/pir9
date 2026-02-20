@@ -36,9 +36,17 @@ import './components/release-search-modal';
 import './features/series/series-index-page';
 import './features/series/series-detail-page';
 
+// Movies
+import './features/movies/movies-index-page';
+import './features/movies/movie-detail-page';
+
 // Add Series
 import './features/add-series/add-series-page';
 import './features/add-series/import-series-page';
+
+// Add Movies
+import './features/add-movie/add-movie-page';
+import './features/add-movie/import-movie-page';
 
 // Calendar
 import './features/calendar/calendar-page';

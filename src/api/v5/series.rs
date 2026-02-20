@@ -1336,7 +1336,7 @@ async fn auto_scan_series(series_id: i64, db: &crate::core::datastore::Database)
 }
 
 /// Parse quality from filename
-fn parse_quality_from_filename(filename: &str) -> serde_json::Value {
+pub fn parse_quality_from_filename(filename: &str) -> serde_json::Value {
     let filename_lower = filename.to_lowercase();
 
     let (id, name) = if filename_lower.contains("2160p") || filename_lower.contains("4k") {
@@ -1370,7 +1370,7 @@ fn parse_quality_from_filename(filename: &str) -> serde_json::Value {
 }
 
 /// Parse release group from filename
-fn parse_release_group(filename: &str) -> Option<String> {
+pub fn parse_release_group(filename: &str) -> Option<String> {
     // Look for release group at end of filename (before extension)
     // Common pattern: "Show.Name.S01E01.1080p.WEB-DL.x264-GROUP.mkv"
     let name = filename.rsplit('.').nth(1)?; // Remove extension

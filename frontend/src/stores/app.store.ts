@@ -101,6 +101,54 @@ export function setSeriesFilter(filter: string): void {
 }
 
 /**
+ * Movie view mode
+ */
+export const movieViewMode = persistedSignal<ViewMode>('movie-view-mode', 'posters');
+
+export function setMovieViewMode(mode: ViewMode): void {
+  movieViewMode.set(mode);
+}
+
+/**
+ * Movie sort key
+ */
+export type MovieSortKey =
+  | 'sortTitle'
+  | 'status'
+  | 'studio'
+  | 'added'
+  | 'year'
+  | 'path'
+  | 'sizeOnDisk'
+  | 'ratings';
+
+export const movieSortKey = persistedSignal<MovieSortKey>('movie-sort-key', 'sortTitle');
+export const movieSortDirection = persistedSignal<'ascending' | 'descending'>(
+  'movie-sort-direction',
+  'ascending'
+);
+
+export function setMovieSort(key: MovieSortKey, direction?: 'ascending' | 'descending'): void {
+  if (key === movieSortKey.value && !direction) {
+    movieSortDirection.update((d) => (d === 'ascending' ? 'descending' : 'ascending'));
+  } else {
+    movieSortKey.set(key);
+    if (direction) {
+      movieSortDirection.set(direction);
+    }
+  }
+}
+
+/**
+ * Movie filter
+ */
+export const movieFilter = persistedSignal<string>('movie-filter', 'all');
+
+export function setMovieFilter(filter: string): void {
+  movieFilter.set(filter);
+}
+
+/**
  * Global search query
  */
 export const searchQuery = signal('');

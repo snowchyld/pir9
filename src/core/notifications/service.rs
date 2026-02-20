@@ -160,6 +160,12 @@ impl NotificationService {
             | Message::SeriesUpdated { .. }
             | Message::SeriesRefreshed { .. }
             | Message::SeriesScanned { .. }
+            | Message::MovieAdded { .. }
+            | Message::MovieUpdated { .. }
+            | Message::MovieDeleted { .. }
+            | Message::MovieRefreshed { .. }
+            | Message::MovieFileImported { .. }
+            | Message::MovieFileDeleted { .. }
             | Message::EpisodeAdded { .. }
             | Message::EpisodeUpdated { .. }
             | Message::EpisodeSearchRequested { .. }

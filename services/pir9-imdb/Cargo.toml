@@ -1,10 +1,10 @@
 [package]
 name = "pir9-imdb"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.93"
-authors = ["Pir9 Team"]
-description = "IMDB data service for Pir9"
+authors = ["pir9 Team"]
+description = "IMDB data service for pir9"
 license = "GPL-3.0"
 
 [dependencies]

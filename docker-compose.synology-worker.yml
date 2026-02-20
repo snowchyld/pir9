@@ -1,4 +1,4 @@
-# Docker Compose for Pir9 Worker on Synology NAS
+# Docker Compose for pir9 Worker on Synology NAS
 # Usage: docker compose -f docker-compose.synology-worker.yml up -d
 
 services:

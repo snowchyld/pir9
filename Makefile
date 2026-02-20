@@ -249,7 +249,7 @@ release: docker-build push
 release-restart: release
 	@echo ""
 	@echo "Restarting local containers..."
-	docker compose down
+#	docker compose down
 	docker compose build
 	docker compose up -d
 	@echo ""

@@ -1,10 +1,10 @@
-# Pir9
+# pir9
 
 A modern, high-performance Smart PVR for TV and anime, written in Rust.
 
 ## Overview
 
-Pir9 is a complete media management solution designed for TV series and anime. It automatically monitors RSS feeds, downloads episodes, and organizes your library.
+pir9 is a complete media management solution designed for TV series and anime. It automatically monitors RSS feeds, downloads episodes, and organizes your library.
 
 ## Architecture
 

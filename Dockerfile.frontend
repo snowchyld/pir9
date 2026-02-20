@@ -1,4 +1,4 @@
-# Dockerfile for Pir9 Frontend (nginx)
+# Dockerfile for pir9 Frontend (nginx)
 # Serves pre-built static files and proxies API requests to backend
 
 FROM nginx:alpine AS runtime

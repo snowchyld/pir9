@@ -53,12 +53,37 @@ pub struct ImdbEpisode {
     pub air_date: Option<String>,
 }
 
+/// IMDB Movie
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImdbMovie {
+    /// IMDB ID as string (e.g., "tt0133093")
+    pub imdb_id: String,
+    /// Primary title
+    pub title: String,
+    /// Original title (may differ from primary for non-English content)
+    pub original_title: Option<String>,
+    /// Release year
+    pub year: Option<i32>,
+    /// Runtime in minutes
+    pub runtime_minutes: Option<i32>,
+    /// Genres as a vector
+    pub genres: Vec<String>,
+    /// Is adult content
+    pub is_adult: bool,
+    /// Average rating (1-10)
+    pub rating: Option<f64>,
+    /// Number of votes
+    pub votes: Option<i64>,
+}
+
 /// Service statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImdbStats {
     pub series_count: i64,
     pub episode_count: i64,
+    pub movie_count: i64,
     pub last_sync: Option<String>,
     pub db_size_bytes: Option<i64>,
 }
@@ -178,6 +203,42 @@ impl DbEpisode {
             rating: self.rating,
             votes: self.votes,
             air_date: self.air_date.map(|d| d.to_string()),
+        }
+    }
+}
+
+/// Internal database row for movie
+#[derive(Debug, Clone)]
+pub struct DbMovie {
+    pub imdb_id: i64,
+    pub title: String,
+    pub original_title: Option<String>,
+    pub year: Option<i32>,
+    pub runtime_minutes: Option<i32>,
+    pub genres: Option<String>,
+    pub is_adult: bool,
+    pub rating: Option<f64>,
+    pub votes: Option<i64>,
+    pub last_synced_at: DateTime<Utc>,
+}
+
+impl DbMovie {
+    /// Convert to API response format
+    pub fn to_api(&self) -> ImdbMovie {
+        ImdbMovie {
+            imdb_id: format!("tt{:07}", self.imdb_id),
+            title: self.title.clone(),
+            original_title: self.original_title.clone(),
+            year: self.year,
+            runtime_minutes: self.runtime_minutes,
+            genres: self
+                .genres
+                .as_ref()
+                .map(|g| g.split(',').map(String::from).collect())
+                .unwrap_or_default(),
+            is_adult: self.is_adult,
+            rating: self.rating,
+            votes: self.votes,
         }
     }
 }

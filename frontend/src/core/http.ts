@@ -221,6 +221,19 @@ export const api = {
       http.post<Command>('/command', { name, ...body }),
   },
 
+  // Movies
+  movie: {
+    list: () => http.get<Movie[]>('/movie'),
+    get: (id: number) => http.get<Movie>(`/movie/${id}`),
+    create: (data: Partial<Movie>) => http.post<Movie>('/movie', data),
+    update: (id: number, data: Partial<Movie>) =>
+      http.put<Movie>(`/movie/${id}`, data),
+    delete: (id: number, params?: { deleteFiles?: boolean }) =>
+      http.delete<void>(`/movie/${id}`, { params }),
+    lookup: (term: string) =>
+      http.get<MovieLookupResult[]>('/movie/lookup', { params: { term } }),
+  },
+
   // System
   system: {
     status: () => http.get<SystemStatus>('/system/status'),
@@ -307,10 +320,76 @@ export interface CalendarEvent extends Episode {
   series: Series;
 }
 
+export interface Movie {
+  id: number;
+  title: string;
+  sortTitle: string;
+  titleSlug: string;
+  status: 'tba' | 'announced' | 'inCinemas' | 'released' | 'deleted';
+  overview?: string;
+  year: number;
+  studio?: string;
+  path: string;
+  rootFolderPath: string;
+  qualityProfileId: number;
+  monitored: boolean;
+  runtime: number;
+  tmdbId: number;
+  imdbId?: string;
+  certification?: string;
+  genres: string[];
+  tags: number[];
+  added: string;
+  releaseDate?: string;
+  physicalReleaseDate?: string;
+  digitalReleaseDate?: string;
+  images: SeriesImage[];
+  hasFile: boolean;
+  movieFileId?: number;
+  cleanTitle: string;
+  folder?: string;
+  ratings?: { votes: number; value: number };
+  imdbRating?: number;
+  imdbVotes?: number;
+  statistics?: MovieStatistics;
+}
+
+export interface MovieStatistics {
+  sizeOnDisk: number;
+  hasFile: boolean;
+}
+
+export interface MovieLookupResult {
+  imdbId?: string;
+  title: string;
+  sortTitle: string;
+  overview?: string;
+  year: number;
+  studio?: string;
+  images: SeriesImage[];
+  ratings?: { votes: number; value: number };
+  genres: string[];
+  runtime: number;
+  certification?: string;
+}
+
+export interface QueueItemEpisode {
+  id: number;
+  seasonNumber: number;
+  episodeNumber: number;
+  title: string;
+  airDateUtc?: string;
+}
+
+export interface QueueItemSeries {
+  id: number;
+  title: string;
+}
+
 export interface QueueItem {
   id: number;
-  seriesId: number;
-  episodeId: number;
+  seriesId?: number | null;
+  episodeId?: number | null;
   title: string;
   status: string;
   trackedDownloadStatus: string;
@@ -321,6 +400,10 @@ export interface QueueItem {
   size: number;
   sizeleft: number;
   timeleft?: string;
+  estimatedCompletionTime?: string;
+  added?: string;
+  episode?: QueueItemEpisode;
+  series?: QueueItemSeries;
 }
 
 export interface QueueResponse {

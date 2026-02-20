@@ -30,9 +30,17 @@ export const routes: Route[] = [
   { path: '/', component: 'series-index-page', title: 'Series' },
   { path: '/series/:titleSlug', component: 'series-detail-page', title: 'Series' },
 
+  // Movies
+  { path: '/movies', component: 'movies-index-page', title: 'Movies' },
+  { path: '/movies/:id', component: 'movie-detail-page', title: 'Movie' },
+
   // Add Series
   { path: '/add/new', component: 'add-series-page', title: 'Add Series' },
   { path: '/add/import', component: 'import-series-page', title: 'Import Series' },
+
+  // Add Movies
+  { path: '/add/movies', component: 'add-movie-page', title: 'Add Movie' },
+  { path: '/add/movies/import', component: 'import-movie-page', title: 'Import Movies' },
 
   // Calendar
   { path: '/calendar', component: 'calendar-page', title: 'Calendar' },

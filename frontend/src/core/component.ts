@@ -276,15 +276,78 @@ export abstract class BaseComponent extends HTMLElement {
 
   /**
    * Render the component
-   * Uses innerHTML with developer-controlled template() output
-   * User data must be escaped via html() or escapeHtml()
+   * Uses developer-controlled template() output to update the DOM.
+   * User data must be escaped via html() or escapeHtml().
+   *
+   * Preserves focus and cursor position across re-renders by saving
+   * the active element's selector and selection state before updating,
+   * then restoring it after.
    */
   private render(): void {
-    // Template returns developer-controlled HTML
-    // User data interpolation must use html() tagged template for safety
+    const focusInfo = this.saveFocusState();
+
+    // Template returns developer-controlled HTML (see SECURITY NOTE at top of file)
     const templateContent = this.template();
     this.innerHTML = templateContent;
+
+    if (focusInfo) {
+      this.restoreFocusState(focusInfo);
+    }
+
     this.onUpdate();
+  }
+
+  /**
+   * Save the currently focused element's info if it's inside this component
+   */
+  private saveFocusState(): { selector: string; selectionStart: number | null; selectionEnd: number | null; scrollTop: number } | null {
+    const active = document.activeElement;
+    if (!active || !this.contains(active) || active === this) return null;
+
+    // Build a selector to find the element after re-render
+    const tag = active.tagName.toLowerCase();
+    const classes = active.className ? `.${active.className.trim().split(/\s+/).join('.')}` : '';
+    const type = active.getAttribute('type');
+    const name = active.getAttribute('name');
+    const placeholder = active.getAttribute('placeholder');
+
+    let selector = tag;
+    if (classes) selector += classes;
+    if (type) selector += `[type="${type}"]`;
+    if (name) selector += `[name="${name}"]`;
+    if (placeholder) selector += `[placeholder="${placeholder}"]`;
+
+    const inputEl = active as HTMLInputElement | HTMLTextAreaElement;
+
+    return {
+      selector,
+      selectionStart: inputEl.selectionStart ?? null,
+      selectionEnd: inputEl.selectionEnd ?? null,
+      scrollTop: inputEl.scrollTop ?? 0,
+    };
+  }
+
+  /**
+   * Restore focus to the matching element after re-render
+   */
+  private restoreFocusState(info: { selector: string; selectionStart: number | null; selectionEnd: number | null; scrollTop: number }): void {
+    const el = this.querySelector<HTMLElement>(info.selector);
+    if (!el) return;
+
+    el.focus();
+
+    // Restore cursor/selection position for text inputs
+    const inputEl = el as HTMLInputElement | HTMLTextAreaElement;
+    if (info.selectionStart !== null && typeof inputEl.setSelectionRange === 'function') {
+      try {
+        inputEl.setSelectionRange(info.selectionStart, info.selectionEnd ?? info.selectionStart);
+      } catch {
+        // setSelectionRange throws on non-text inputs (email, number, etc.)
+      }
+    }
+    if (info.scrollTop) {
+      inputEl.scrollTop = info.scrollTop;
+    }
   }
 
   /**

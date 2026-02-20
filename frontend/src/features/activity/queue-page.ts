@@ -8,9 +8,13 @@ import { http, type QueueItem, type QueueResponse } from '../../core/http';
 import { navigate } from '../../router';
 import { showSuccess, showError } from '../../stores/app.store';
 
+type QueueSortKey = 'status' | 'title' | 'episode' | 'protocol' | 'progress' | 'timeleft';
+
 @customElement('queue-page')
 export class QueuePage extends BaseComponent {
   private queueQuery = useQueueQuery();
+  private sortKey: QueueSortKey = 'timeleft';
+  private sortDirection: 'asc' | 'desc' = 'asc';
 
   private removeItemMutation = createMutation({
     mutationFn: (params: { id: number; removeFromClient?: boolean; blocklist?: boolean }) =>
@@ -150,6 +154,7 @@ export class QueuePage extends BaseComponent {
         /* Queue table */
         .queue-table {
           width: 100%;
+          table-layout: fixed;
           border-collapse: collapse;
           font-size: 0.875rem;
         }
@@ -166,6 +171,26 @@ export class QueuePage extends BaseComponent {
           color: var(--text-color-muted);
           white-space: nowrap;
           background-color: var(--bg-card-alt);
+        }
+
+        .queue-table th.sortable {
+          cursor: pointer;
+          user-select: none;
+          transition: color 0.15s ease;
+        }
+
+        .queue-table th.sortable:hover {
+          color: var(--pir9-blue, var(--color-primary));
+        }
+
+        .queue-table th.sortable.sorted {
+          color: var(--pir9-blue, var(--color-primary));
+        }
+
+        .queue-table th .sort-icon {
+          display: inline-block;
+          vertical-align: middle;
+          margin-left: 0.25rem;
         }
 
         .queue-table tbody tr:hover td {
@@ -254,6 +279,14 @@ export class QueuePage extends BaseComponent {
           color: var(--color-danger);
         }
 
+        .title-cell,
+        .episode-cell {
+          max-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
         .title-link {
           color: var(--link-color);
           text-decoration: none;
@@ -304,22 +337,42 @@ export class QueuePage extends BaseComponent {
       `;
     }
 
+    const sorted = this.sortItems(items);
+    const sortIcon = this.sortDirection === 'asc'
+      ? '<svg class="sort-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>'
+      : '<svg class="sort-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+
+    const th = (label: string, key: QueueSortKey): string => {
+      const isSorted = this.sortKey === key;
+      return `<th class="sortable ${isSorted ? 'sorted' : ''}" onclick="this.closest('queue-page').handleSort('${key}')">${label}${isSorted ? sortIcon : ''}</th>`;
+    };
+
     return html`
       <table class="queue-table">
+        <colgroup>
+          <col style="width: 10%">
+          <col style="width: 15%">
+          <col style="width: 25%">
+          <col style="width: 8%">
+          <col style="width: 8%">
+          <col style="width: 18%">
+          <col style="width: 10%">
+          <col style="width: 3%">
+        </colgroup>
         <thead>
           <tr>
-            <th>Status</th>
-            <th>Series</th>
-            <th>Episode</th>
+            ${safeHtml(th('Status', 'status'))}
+            ${safeHtml(th('Series', 'title'))}
+            ${safeHtml(th('Episode', 'episode'))}
             <th>Quality</th>
-            <th>Protocol</th>
-            <th>Progress</th>
-            <th>Time Left</th>
+            ${safeHtml(th('Protocol', 'protocol'))}
+            ${safeHtml(th('Progress', 'progress'))}
+            ${safeHtml(th('Time Left', 'timeleft'))}
             <th></th>
           </tr>
         </thead>
         <tbody>
-          ${items.map((item) => this.renderRow(item)).join('')}
+          ${sorted.map((item) => this.renderRow(item)).join('')}
         </tbody>
       </table>
     `;
@@ -328,6 +381,11 @@ export class QueuePage extends BaseComponent {
   private renderRow(item: QueueItem): string {
     const progress = item.size > 0 ? ((item.size - item.sizeleft) / item.size) * 100 : 0;
     const statusIcon = this.getStatusIcon(item.status);
+    const seriesTitle = item.series?.title ?? item.title;
+    const hasDbSeries = item.seriesId != null && item.seriesId > 0;
+    const episodeLabel = item.episode
+      ? `S${String(item.episode.seasonNumber).padStart(2, '0')}E${String(item.episode.episodeNumber).padStart(2, '0')}${item.episode.title ? ` - ${item.episode.title}` : ''}`
+      : '-';
 
     return html`
       <tr>
@@ -337,13 +395,14 @@ export class QueuePage extends BaseComponent {
             <span>${escapeHtml(item.status)}</span>
           </div>
         </td>
-        <td>
-          <a class="title-link" href="/series/${item.seriesId}" onclick="event.preventDefault(); this.closest('queue-page').handleSeriesClick(${item.seriesId})">
-            ${escapeHtml(item.title.split(' - ')[0] ?? item.title)}
-          </a>
+        <td class="title-cell">
+          ${hasDbSeries
+            ? `<a class="title-link" href="/series/${item.seriesId}" onclick="event.preventDefault(); this.closest('queue-page').handleSeriesClick(${item.seriesId})" title="${escapeHtml(seriesTitle)}">${escapeHtml(this.truncate(seriesTitle, 32))}</a>`
+            : `<span title="${escapeHtml(seriesTitle)}">${escapeHtml(this.truncate(seriesTitle, 32))}</span>`
+          }
         </td>
-        <td>
-          <div>${escapeHtml(item.title.split(' - ').slice(1).join(' - ') || '-')}</div>
+        <td class="episode-cell" title="${escapeHtml(episodeLabel)}">
+          <div>${escapeHtml(this.truncate(episodeLabel, 64))}</div>
         </td>
         <td>-</td>
         <td>
@@ -374,6 +433,67 @@ export class QueuePage extends BaseComponent {
     `;
   }
 
+  private sortItems(items: QueueItem[]): QueueItem[] {
+    return [...items].sort((a, b) => {
+      const aVal = this.getSortValue(a, this.sortKey);
+      const bVal = this.getSortValue(b, this.sortKey);
+      let cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+      if (this.sortDirection === 'desc') cmp = -cmp;
+      return cmp;
+    });
+  }
+
+  private getSortValue(item: QueueItem, key: QueueSortKey): string | number {
+    switch (key) {
+      case 'status': {
+        const priority: Record<string, number> = {
+          downloading: 0,
+          queued: 1,
+          paused: 2,
+          completed: 3,
+          warning: 4,
+          error: 5,
+        };
+        return priority[item.status.toLowerCase()] ?? 99;
+      }
+      case 'title':
+        return (item.series?.title ?? item.title).toLowerCase();
+      case 'episode':
+        return item.episode
+          ? item.episode.seasonNumber * 10000 + item.episode.episodeNumber
+          : 0;
+      case 'protocol':
+        return item.protocol;
+      case 'progress':
+        return item.size > 0 ? (item.size - item.sizeleft) / item.size : 0;
+      case 'timeleft': {
+        if (!item.timeleft) return Number.MAX_SAFE_INTEGER;
+        return this.parseTimeleft(item.timeleft);
+      }
+      default:
+        return 0;
+    }
+  }
+
+  private parseTimeleft(timeleft: string): number {
+    // Handles formats like "HH:MM:SS", "MM:SS", "D.HH:MM:SS"
+    const dayParts = timeleft.split('.');
+    let days = 0;
+    let timePart = timeleft;
+    if (dayParts.length === 2) {
+      days = parseInt(dayParts[0], 10) || 0;
+      timePart = dayParts[1];
+    }
+    const parts = timePart.split(':').map((p) => parseInt(p, 10) || 0);
+    if (parts.length === 3) {
+      return days * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2];
+    }
+    if (parts.length === 2) {
+      return days * 86400 + parts[0] * 60 + parts[1];
+    }
+    return 0;
+  }
+
   private getStatusIcon(status: string): string {
     const icons: Record<string, string> = {
       downloading: '<svg class="status-icon downloading animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>',
@@ -382,6 +502,10 @@ export class QueuePage extends BaseComponent {
       error: '<svg class="status-icon error" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
     };
     return icons[status.toLowerCase()] ?? icons.queued;
+  }
+
+  private truncate(text: string, max: number): string {
+    return text.length > max ? text.slice(0, max) + '\u2026' : text;
   }
 
   private formatSize(bytes: number): string {
@@ -404,5 +528,15 @@ export class QueuePage extends BaseComponent {
     if (confirm('Remove this item from the queue?')) {
       this.removeItemMutation.mutate({ id, removeFromClient: true });
     }
+  }
+
+  handleSort(key: QueueSortKey): void {
+    if (this.sortKey === key) {
+      this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+      this.sortKey = key;
+      this.sortDirection = 'asc';
+    }
+    this.requestUpdate();
   }
 }

@@ -258,7 +258,7 @@ pub async fn execute_command_with_options(
     options: CommandExecutionOptions,
 ) -> Result<String, String> {
     match name {
-        "RefreshSeries" => execute_refresh_series(body, db, event_bus, options.metadata_service.as_ref()).await,
+        "RefreshSeries" => execute_refresh_series(body, db, event_bus, options.metadata_service.as_ref(), options.hybrid_event_bus.as_ref()).await,
         "RescanSeries" => execute_rescan_series(body, db, event_bus, options.hybrid_event_bus.as_ref()).await,
         "DownloadedEpisodesScan" | "ProcessMonitoredDownloads" => {
             execute_process_downloads(body, db, event_bus).await
@@ -301,6 +301,7 @@ async fn execute_refresh_series(
     db: &crate::core::datastore::Database,
     event_bus: &crate::core::messaging::EventBus,
     metadata_service: Option<&crate::core::metadata::MetadataService>,
+    hybrid_event_bus: Option<&crate::core::messaging::HybridEventBus>,
 ) -> Result<String, String> {
     use crate::core::datastore::models::EpisodeDbModel;
     use crate::core::datastore::repositories::{EpisodeRepository, SeriesRepository};
@@ -548,7 +549,11 @@ async fn execute_refresh_series(
     // After refreshing metadata, also run a disk scan to update file status
     if !series_ids.is_empty() {
         tracing::info!("RefreshSeries: triggering disk rescan for {} series", series_ids.len());
-        if let Err(e) = execute_rescan_series(body, db, event_bus, None).await {
+        let rescan_body = serde_json::json!({
+            "name": "RescanSeries",
+            "seriesIds": series_ids,
+        });
+        if let Err(e) = execute_rescan_series(&rescan_body, db, event_bus, hybrid_event_bus).await {
             tracing::warn!("RefreshSeries: rescan failed: {}", e);
         }
     }
@@ -590,8 +595,18 @@ async fn execute_rescan_series(
         }
     }
 
+    // If no series IDs provided, rescan ALL series
     if series_ids.is_empty() {
-        return Ok("No series to rescan".to_string());
+        tracing::info!("RescanSeries: no series IDs provided, rescanning all series");
+        let series_repo = crate::core::datastore::repositories::SeriesRepository::new(db.clone());
+        let all_series = series_repo.get_all().await
+            .map_err(|e| format!("Failed to fetch series list: {}", e))?;
+        series_ids = all_series.into_iter().map(|s| s.id).collect();
+
+        if series_ids.is_empty() {
+            return Ok("No series to rescan".to_string());
+        }
+        tracing::info!("RescanSeries: found {} series to rescan", series_ids.len());
     }
 
     // Check if we should use distributed scanning

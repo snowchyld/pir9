@@ -1,4 +1,4 @@
-# Docker Compose for Pir9
+# Docker Compose for pir9
 # Multi-container deployment with PostgreSQL, Redis, and IMDB service
 #
 # Usage:

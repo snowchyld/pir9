@@ -1,4 +1,4 @@
--- Initial database schema for Pir9
+-- Initial database schema for pir9
 -- Creates all core tables
 
 -- Series table

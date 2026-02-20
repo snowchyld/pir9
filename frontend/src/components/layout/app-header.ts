@@ -6,7 +6,7 @@ import { BaseComponent, customElement, html, escapeHtml } from '../../core/compo
 import { toggleMobileMenu, searchQuery, setSearchQuery } from '../../stores/app.store';
 import { toggleTheme, resolvedTheme } from '../../stores/theme.store';
 import { useSystemStatusQuery } from '../../core/query';
-import { navigate } from '../../router';
+import { navigate, currentRoute } from '../../router';
 
 @customElement('app-header')
 export class AppHeader extends BaseComponent {
@@ -16,12 +16,27 @@ export class AppHeader extends BaseComponent {
     this.watch(searchQuery);
     this.watch(this.statusQuery.data);
     this.watch(resolvedTheme);
+    this.watch(currentRoute);
+  }
+
+  /** Derive the "+" button label and target from the current route */
+  private getAddAction(): { label: string; path: string } {
+    const route = currentRoute.value;
+    const routePath = route?.path ?? '/';
+
+    if (routePath === '/movies' || routePath.startsWith('/movies/')) {
+      return { label: 'Import Movies', path: '/add/movies/import' };
+    }
+    // Default: series (covers /, /series/*, /add/new, etc.)
+    return { label: 'Add Series', path: '/add/new' };
   }
 
   protected template(): string {
     const query = searchQuery.value;
     const status = this.statusQuery.data.value;
     const theme = resolvedTheme.value;
+
+    const addAction = this.getAddAction();
 
     return html`
       <header class="header">
@@ -68,11 +83,11 @@ export class AppHeader extends BaseComponent {
 
         <!-- Actions -->
         <div class="header-actions">
-          <!-- Add Series -->
+          <!-- Context-aware Add button -->
           <button
             class="action-btn"
-            onclick="this.closest('app-header').handleAddSeries()"
-            title="Add Series"
+            onclick="this.closest('app-header').handleAdd()"
+            title="${escapeHtml(addAction.label)}"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -333,8 +348,8 @@ export class AppHeader extends BaseComponent {
     input?.focus();
   }
 
-  handleAddSeries(): void {
-    navigate('/add/new');
+  handleAdd(): void {
+    navigate(this.getAddAction().path);
   }
 
   handleThemeToggle(): void {

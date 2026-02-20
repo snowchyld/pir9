@@ -1,7 +1,7 @@
 {
   "name": "pir9",
   "version": "0.1.0",
-  "description": "Pir9 - Smart PVR for TV and anime",
+  "description": "pir9 - Smart PVR for TV and anime",
   "scripts": {
     "build": "webpack --config ./frontend/build/webpack.config.js --env production",
     "build:dev": "webpack --config ./frontend/build/webpack.config.js",
@@ -14,7 +14,7 @@
     "stylelint": "stylelint \"frontend/**/*.css\" --config frontend/.stylelintrc"
   },
   "repository": "https://github.com/pir9/pir9",
-  "author": "Pir9 Team",
+  "author": "pir9 Team",
   "license": "GPL-3.0",
   "readmeFilename": "readme.md",
   "main": "index.ts",

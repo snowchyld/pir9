@@ -106,6 +106,43 @@ impl ImdbClient {
         }
     }
 
+    pub async fn get_movie(&self, imdb_id: &str) -> anyhow::Result<Option<ImdbMovie>> {
+        if !self.config.enabled {
+            return Ok(None);
+        }
+        let url = format!("{}/api/movies/{}", self.config.base_url, imdb_id);
+        match self.client.get(&url).send().await {
+            Ok(response) if response.status().is_success() => Ok(response.json().await.ok()),
+            Ok(response) if response.status().as_u16() == 404 => Ok(None),
+            Ok(response) => {
+                warn!("IMDB service returned error: {}", response.status());
+                Ok(None)
+            }
+            Err(e) => {
+                warn!("Failed to connect to IMDB service: {}", e);
+                Ok(None)
+            }
+        }
+    }
+
+    pub async fn search_movies(&self, query: &str, limit: u32) -> anyhow::Result<Vec<ImdbMovie>> {
+        if !self.config.enabled {
+            return Ok(vec![]);
+        }
+        let url = format!(
+            "{}/api/movies/search?q={}&limit={}",
+            self.config.base_url,
+            urlencoding::encode(query),
+            limit
+        );
+        match self.client.get(&url).send().await {
+            Ok(response) if response.status().is_success() => {
+                Ok(response.json().await.unwrap_or_default())
+            }
+            Ok(_) | Err(_) => Ok(vec![]),
+        }
+    }
+
     pub async fn get_stats(&self) -> anyhow::Result<Option<ImdbStats>> {
         if !self.config.enabled {
             return Ok(None);
@@ -223,9 +260,24 @@ pub struct ImdbEpisode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ImdbMovie {
+    pub imdb_id: String,
+    pub title: String,
+    pub original_title: Option<String>,
+    pub year: Option<i32>,
+    pub runtime_minutes: Option<i32>,
+    pub genres: Vec<String>,
+    pub is_adult: bool,
+    pub rating: Option<f64>,
+    pub votes: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImdbStats {
     pub series_count: i64,
     pub episode_count: i64,
+    pub movie_count: Option<i64>,
     pub last_sync: Option<String>,
     pub db_size_bytes: Option<i64>,
 }

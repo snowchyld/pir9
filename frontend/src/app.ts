@@ -62,7 +62,7 @@ export class AppRoot extends BaseComponent {
             <div class="flex items-center justify-between px-4 py-2 text-sm text-[var(--text-color-muted)]">
               <div class="flex items-center gap-2">
                 <span class="connection-indicator ${wsManager.connectionState.value}"></span>
-                <span>Pir9</span>
+                <span>pir9</span>
               </div>
               <div>
                 <a href="https://github.com/pir9/pir9" target="_blank" rel="noopener">
