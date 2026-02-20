@@ -66,6 +66,9 @@ pub fn is_video_file(path: &Path) -> bool {
 /// Supports multiple formats:
 /// - S01E01, S01E01E02E03 (multi-episode)
 /// - 1x01
+/// - Part 1, Pt 2
+/// - Ep01, Episode 3
+/// - Bare number: 01, 01 - Title (last resort fallback)
 ///
 /// Returns a vector of (season, episode) tuples.
 pub fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
@@ -153,7 +156,65 @@ pub fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
         }
     }
 
+    // Last resort: bare number at start of filename — "01.mkv", "01 - Title.mkv",
+    // "01.Title.mkv". Common for files already in a series/season folder.
+    // Season defaults to 1; caller should override from folder context.
+    if episodes.is_empty() {
+        if let Some(caps) = Regex::new(r"^(\d{1,3})(?:[\.\s_-]|$)")
+            .ok()
+            .and_then(|re| re.captures(filename))
+        {
+            if let Some(ep) = caps.get(1).and_then(|m| m.as_str().parse::<i32>().ok()) {
+                // Only accept if the number is a plausible episode (1-999)
+                if ep >= 1 {
+                    episodes.push((1, ep));
+                }
+            }
+        }
+    }
+
     episodes
+}
+
+/// Extract season number from a folder name like "Season 1", "Season 01", "S01", "S1".
+///
+/// Returns `None` if the folder name doesn't contain a recognizable season pattern.
+fn season_from_folder(folder_name: &str) -> Option<i32> {
+    Regex::new(r"(?i)^(?:Season[\.\s_-]?|S)(\d{1,2})$")
+        .ok()
+        .and_then(|re| re.captures(folder_name))
+        .and_then(|caps| caps.get(1))
+        .and_then(|m| m.as_str().parse::<i32>().ok())
+}
+
+/// Check if a filename was parsed using the bare number fallback
+/// (i.e., none of the explicit patterns like S01E01, 1x01, Part, Ep matched).
+fn is_bare_number_match(filename: &str) -> bool {
+    // If any explicit pattern matches, this is NOT a bare number match
+    let has_sxxexx = Regex::new(r"[Ss](\d{1,2})([Ee]\d{1,2})+")
+        .ok()
+        .is_some_and(|re| re.is_match(filename));
+    let has_alt = Regex::new(r"(\d{1,2})x(\d{1,2})")
+        .ok()
+        .is_some_and(|re| re.is_match(filename));
+    let has_part = Regex::new(r"(?i)[\.\s_-](?:part|pt)[\.\s_-]?(\d{1,2})")
+        .ok()
+        .is_some_and(|re| re.is_match(filename));
+    let has_ep = Regex::new(r"(?i)(?:^|[\.\s_-])(?:Ep|Episode)[\.\s_-]?(\d{1,3})(?:[\.\s_-]|$)")
+        .ok()
+        .is_some_and(|re| re.is_match(filename));
+    let has_special = Regex::new(r"[Ss]\d{1,2}[Mm](\d{1,2})")
+        .ok()
+        .is_some_and(|re| re.is_match(filename));
+
+    if has_sxxexx || has_alt || has_part || has_ep || has_special {
+        return false;
+    }
+
+    // Check if bare number pattern matches
+    Regex::new(r"^(\d{1,3})(?:[\.\s_-]|$)")
+        .ok()
+        .is_some_and(|re| re.is_match(filename))
 }
 
 /// Quality/codec/source tokens to strip from filenames when extracting title words.
@@ -270,10 +331,28 @@ pub fn scan_series_directory(series_path: &Path) -> Vec<ScannedFile> {
             None => continue,
         };
 
-        let parsed_episodes = parse_episodes_from_filename(&filename);
+        let mut parsed_episodes = parse_episodes_from_filename(&filename);
         if parsed_episodes.is_empty() {
             debug!("Could not parse episode info from: {}", filename);
             continue;
+        }
+
+        // If we matched via bare number (season defaults to 1), try to infer
+        // the real season from the parent folder name (e.g., "Season 2", "S02").
+        // Only override season for bare number matches — explicit patterns like
+        // S01E01, 1x01, Ep01 already encode the correct season.
+        if is_bare_number_match(&filename) {
+            if let Some(parent) = file_path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+            {
+                if let Some(folder_season) = season_from_folder(parent) {
+                    for ep in &mut parsed_episodes {
+                        ep.0 = folder_season;
+                    }
+                }
+            }
         }
 
         let file_size = std::fs::metadata(&file_path)
@@ -402,8 +481,23 @@ pub fn scan_paths(paths: &[PathBuf]) -> Vec<(PathBuf, Vec<ScannedFile>)> {
             // Single file - scan it directly
             if is_video_file(path) {
                 if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-                    let parsed_episodes = parse_episodes_from_filename(filename);
+                    let mut parsed_episodes = parse_episodes_from_filename(filename);
                     let file_size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
+
+                    // Apply folder-based season override for bare number matches
+                    if is_bare_number_match(filename) {
+                        if let Some(parent) = path
+                            .parent()
+                            .and_then(|p| p.file_name())
+                            .and_then(|n| n.to_str())
+                        {
+                            if let Some(folder_season) = season_from_folder(parent) {
+                                for ep in &mut parsed_episodes {
+                                    ep.0 = folder_season;
+                                }
+                            }
+                        }
+                    }
 
                     let scanned = ScannedFile {
                         path: path.clone(),
@@ -613,6 +707,60 @@ mod tests {
             &specials,
         );
         assert_eq!(result, Some((0, 1)));
+    }
+
+    #[test]
+    fn test_parse_bare_number() {
+        let cases = vec![
+            ("01.mkv", vec![(1, 1)]),
+            ("01 - Episode Title.mkv", vec![(1, 1)]),
+            ("01 Episode Title.mkv", vec![(1, 1)]),
+            ("01.Episode.Title.mkv", vec![(1, 1)]),
+            ("10_Title.mkv", vec![(1, 10)]),
+            ("100.mkv", vec![(1, 100)]),
+            ("1.mkv", vec![(1, 1)]),
+            ("05 - The One Where.mkv", vec![(1, 5)]),
+        ];
+
+        for (filename, expected) in cases {
+            assert_eq!(
+                parse_episodes_from_filename(filename),
+                expected,
+                "Failed for: {}",
+                filename
+            );
+        }
+    }
+
+    #[test]
+    fn test_bare_number_does_not_override_explicit() {
+        // S01E01 should NOT be treated as bare number
+        assert!(!is_bare_number_match("S01E01.mkv"));
+        // 1x01 should NOT be treated as bare number
+        assert!(!is_bare_number_match("1x01.mkv"));
+        // Ep01 should NOT be treated as bare number
+        assert!(!is_bare_number_match("Ep01.mkv"));
+        // Part 1 should NOT be treated as bare number
+        assert!(!is_bare_number_match("Show.Part.1.mkv"));
+        // Bare number IS a bare number match
+        assert!(is_bare_number_match("01.mkv"));
+        assert!(is_bare_number_match("01 - Title.mkv"));
+        assert!(is_bare_number_match("05.Episode.Title.mkv"));
+    }
+
+    #[test]
+    fn test_season_from_folder() {
+        assert_eq!(season_from_folder("Season 1"), Some(1));
+        assert_eq!(season_from_folder("Season 02"), Some(2));
+        assert_eq!(season_from_folder("Season.03"), Some(3));
+        assert_eq!(season_from_folder("S01"), Some(1));
+        assert_eq!(season_from_folder("S1"), Some(1));
+        assert_eq!(season_from_folder("s04"), Some(4));
+        assert_eq!(season_from_folder("season 10"), Some(10));
+        // Not a season folder
+        assert_eq!(season_from_folder("Extras"), None);
+        assert_eq!(season_from_folder("Specials"), None);
+        assert_eq!(season_from_folder("The Flash"), None);
     }
 
     #[test]
