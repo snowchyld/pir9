@@ -106,10 +106,38 @@ pub async fn get_logs(
     }
 }
 
-pub async fn get_log_files() -> Json<Vec<LogFileResource>> {
-    // Log files are primarily for file-based logging (not implemented)
-    // Return empty for now - database logging doesn't use file rotation
-    Json(vec![])
+pub async fn get_log_files(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<LogFileResource>> {
+    let log_dir = &state.config.paths.log_dir;
+    let mut files = Vec::new();
+    let mut id = 1;
+
+    if let Ok(entries) = std::fs::read_dir(log_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("log")
+                || path.extension().and_then(|e| e.to_str()) == Some("txt")
+            {
+                if let Ok(meta) = entry.metadata() {
+                    let modified = meta.modified()
+                        .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
+                        .unwrap_or_default();
+                    let filename = entry.file_name().to_string_lossy().to_string();
+                    files.push(LogFileResource {
+                        id,
+                        filename: filename.clone(),
+                        last_write_time: modified,
+                        contents_url: format!("/api/v5/log/file/{}", filename),
+                        download_url: format!("/api/v5/log/file/{}", filename),
+                    });
+                    id += 1;
+                }
+            }
+        }
+    }
+
+    Json(files)
 }
 
 pub async fn delete_logs(State(state): State<Arc<AppState>>) -> StatusCode {
