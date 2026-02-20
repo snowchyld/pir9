@@ -1039,9 +1039,45 @@ async fn execute_rescan_series(
     }
 
     // Check if we should use distributed scanning
+    // Prefer local scanning for paths accessible to this server — only dispatch
+    // to workers for paths that aren't locally mounted (e.g., remote NAS paths).
     if let Some(hybrid_bus) = hybrid_event_bus {
         if hybrid_bus.is_redis_enabled() {
-            return execute_rescan_series_distributed(&series_ids, db, hybrid_bus).await;
+            let series_repo_check =
+                crate::core::datastore::repositories::SeriesRepository::new(db.clone());
+            let mut local_series_ids = Vec::new();
+            let mut remote_series_ids = Vec::new();
+
+            for &sid in &series_ids {
+                if let Ok(Some(s)) = series_repo_check.get_by_id(sid).await {
+                    if Path::new(&s.path).exists() {
+                        local_series_ids.push(sid);
+                    } else {
+                        remote_series_ids.push(sid);
+                    }
+                }
+            }
+
+            // Dispatch non-local paths to workers
+            if !remote_series_ids.is_empty() {
+                let _ =
+                    execute_rescan_series_distributed(&remote_series_ids, db, hybrid_bus).await;
+            }
+
+            // If nothing to scan locally, we're done
+            if local_series_ids.is_empty() {
+                return Ok(format!(
+                    "Dispatched {} series to workers for scanning",
+                    remote_series_ids.len()
+                ));
+            }
+
+            tracing::info!(
+                "RescanSeries: scanning {} series locally ({} dispatched to workers)",
+                local_series_ids.len(),
+                remote_series_ids.len()
+            );
+            series_ids = local_series_ids;
         }
     }
 
