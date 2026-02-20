@@ -66,8 +66,10 @@ RUN apt-get update && apt-get install -y \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Create directories
-RUN mkdir -p /config /data /logs /backups /app/cache
+# Create user and directories
+RUN groupadd -g 1000 pir9 && useradd -u 1000 -g pir9 -s /bin/false pir9
+RUN mkdir -p /config /data /logs /backups /app/cache \
+    && chown -R pir9:pir9 /config /data /logs /backups /app/cache
 
 # Copy binary from builder
 COPY --from=builder /app/target/release/pir9 /app/pir9
@@ -85,9 +87,7 @@ EXPOSE 8989
 # Volumes
 VOLUME ["/config", "/data", "/logs", "/backups"]
 
-# Environment - defaults matching common host user
-ENV PUID=1000
-ENV PGID=1000
+# Environment
 ENV PIR9_CONFIG_DIR=/config
 ENV PIR9_DATA_DIR=/data
 ENV PIR9_LOG_DIR=/logs

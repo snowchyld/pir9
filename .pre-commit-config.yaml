@@ -84,6 +84,7 @@ repos:
         entry: bash -c 'ubs --only=rust --ci src/ && ubs --only=js --ci frontend/src/'
         language: system
         pass_filenames: false
+        files: '\.(rs|ts|js)$'
 
   # ── SBOM generation ────────────────────────────────────────────────────
 
