@@ -69,8 +69,8 @@ ENV PGID=1000
 ENV RUST_LOG=info,pir9=debug
 ENV PIR9_PORT=8989
 ENV PIR9_BIND=0.0.0.0
-ENV PIR9_DB_TYPE=sqlite
-ENV PIR9_DB_CONNECTION=/config/pir9.db
+ENV PIR9_DB_TYPE=postgres
+ENV PIR9_DB_CONNECTION=postgresql://pir9:pir9@postgres:5432/pir9
 
 # Expose port
 EXPOSE 8989
