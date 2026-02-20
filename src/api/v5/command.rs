@@ -1458,13 +1458,7 @@ fn scan_directory_for_videos(dir: &std::path::Path, files: &mut Vec<std::path::P
     }
 }
 
-fn is_video_file(path: &std::path::Path) -> bool {
-    let video_extensions = ["mkv", "mp4", "avi", "wmv", "m4v", "ts", "webm", "mov"];
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| video_extensions.contains(&ext.to_lowercase().as_str()))
-        .unwrap_or(false)
-}
+use crate::core::scanner::is_video_file;
 
 /// Re-export from scanner module to avoid duplication
 use crate::core::scanner::parse_episodes_from_filename;

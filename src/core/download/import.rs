@@ -702,9 +702,7 @@ impl ImportService {
 
     /// Find video files in a path
     fn find_video_files(&self, path: &Path) -> Result<Vec<PathBuf>> {
-        let video_extensions = [
-            "mkv", "mp4", "avi", "wmv", "mov", "m4v", "ts", "webm", "flv",
-        ];
+        let video_extensions = crate::core::scanner::VIDEO_EXTENSIONS;
 
         let mut video_files = Vec::new();
 

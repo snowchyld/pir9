@@ -23,7 +23,10 @@ pub use jobs::JobTrackerService;
 pub use registry::WorkerRegistryService;
 
 /// Video file extensions supported by pir9
-pub const VIDEO_EXTENSIONS: &[&str] = &["mkv", "mp4", "avi", "wmv", "m4v", "ts", "webm", "mov"];
+pub const VIDEO_EXTENSIONS: &[&str] = &[
+    "mkv", "mp4", "avi", "wmv", "m4v", "ts", "webm", "mov", "flv", "mpg", "mpeg", "vob", "ogm",
+    "divx", "m2ts", "mts",
+];
 
 /// Scan a directory recursively for video files
 ///

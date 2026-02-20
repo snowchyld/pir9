@@ -1495,7 +1495,7 @@ pub(super) fn scan_movie_folder(folder_path: &str, movie_id: i64) -> Option<Movi
         return None;
     }
 
-    let video_extensions = ["mkv", "mp4", "avi", "wmv", "m4v", "ts", "webm", "mov"];
+    let video_extensions = crate::core::scanner::VIDEO_EXTENSIONS;
 
     // Handle single-file torrents: path points directly to a video file
     if root.is_file() {

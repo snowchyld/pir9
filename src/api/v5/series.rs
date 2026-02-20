@@ -1776,11 +1776,7 @@ async fn auto_scan_series(
     }
 
     fn is_video_file(path: &Path) -> bool {
-        let video_extensions = ["mkv", "mp4", "avi", "wmv", "m4v", "ts", "webm", "mov"];
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| video_extensions.contains(&ext.to_lowercase().as_str()))
-            .unwrap_or(false)
+        crate::core::scanner::is_video_file(path)
     }
 
     let mut video_files = Vec::new();
