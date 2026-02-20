@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -105,6 +106,16 @@ pub struct DownloadImportInfo {
     pub episodes: Vec<EpisodeDbModel>,
 }
 
+/// Info about a currently running scan job, exposed to the API layer
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunningJobInfo {
+    pub job_id: String,
+    pub scan_type: ScanType,
+    pub entity_ids: Vec<i64>,
+    pub results_received: usize,
+}
+
 /// Service that consumes scan results from workers and updates the database
 #[derive(Debug)]
 pub struct ScanResultConsumer {
@@ -128,6 +139,21 @@ impl ScanResultConsumer {
     /// Set media config for episode naming during download imports
     pub fn set_media_config(&mut self, config: MediaConfig) {
         self.media_config = config;
+    }
+
+    /// Get info about currently running scan jobs (for the UI)
+    pub async fn get_running_jobs(&self) -> Vec<RunningJobInfo> {
+        let jobs = self.pending_jobs.read().await;
+        jobs.jobs
+            .iter()
+            .filter(|(_, job)| !job.completed)
+            .map(|(id, job)| RunningJobInfo {
+                job_id: id.clone(),
+                scan_type: job.scan_type,
+                entity_ids: job.entity_ids.clone(),
+                results_received: job.results_received,
+            })
+            .collect()
     }
 
     /// Register a pending scan job with its scan type

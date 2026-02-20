@@ -3,7 +3,6 @@
  */
 
 import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
-import type { Command } from '../../core/http';
 import { http } from '../../core/http';
 import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 
@@ -54,6 +53,16 @@ interface HealthCheck {
   wikiUrl?: string;
 }
 
+interface RunningTask {
+  id: string;
+  taskType: 'command' | 'scan';
+  name: string;
+  status: string;
+  started?: string;
+  message?: string;
+  detail?: string;
+}
+
 @customElement('system-status-page')
 export class SystemStatusPage extends BaseComponent {
   private statusQuery = createQuery({
@@ -71,15 +80,16 @@ export class SystemStatusPage extends BaseComponent {
     queryFn: () => http.get<HealthCheck[]>('/health'),
   });
 
-  private commandsQuery = createQuery({
-    queryKey: ['/command'],
-    queryFn: () => http.get<Command[]>('/command'),
-    refetchInterval: 10000,
+  private runningTasksQuery = createQuery({
+    queryKey: ['/system/task/running'],
+    queryFn: () => http.get<RunningTask[]>('/system/task/running'),
+    refetchInterval: 3000,
   });
 
   private cancelMutation = createMutation({
-    mutationFn: (id: number) => http.delete<void>(`/command/${id}`),
+    mutationFn: (id: string) => http.delete<void>(`/command/${id}`),
     onSuccess: () => {
+      invalidateQueries(['/system/task/running']);
       invalidateQueries(['/command']);
     },
   });
@@ -91,16 +101,13 @@ export class SystemStatusPage extends BaseComponent {
     this.watch(this.statusQuery.isLoading);
     this.watch(this.diskSpaceQuery.data);
     this.watch(this.healthQuery.data);
-    this.watch(this.commandsQuery.data);
+    this.watch(this.runningTasksQuery.data);
   }
 
   protected onMount(): void {
     this.elapsedTimer = window.setInterval(() => {
-      const commands = this.commandsQuery.data.value ?? [];
-      const hasRunning = commands.some(
-        (c) => c.status === 'queued' || c.status === 'started',
-      );
-      if (hasRunning) {
+      const tasks = this.runningTasksQuery.data.value ?? [];
+      if (tasks.length > 0) {
         this.requestUpdate();
       }
     }, 1000);
@@ -117,12 +124,8 @@ export class SystemStatusPage extends BaseComponent {
     const status = this.statusQuery.data.value;
     const diskSpace = this.diskSpaceQuery.data.value ?? [];
     const health = this.healthQuery.data.value ?? [];
+    const runningTasks = this.runningTasksQuery.data.value ?? [];
     const isLoading = this.statusQuery.isLoading.value;
-
-    const allCommands = this.commandsQuery.data.value ?? [];
-    const runningCommands = allCommands.filter(
-      (c) => c.status === 'queued' || c.status === 'started',
-    );
 
     if (isLoading) {
       return html`
@@ -136,11 +139,11 @@ export class SystemStatusPage extends BaseComponent {
       <div class="status-page">
         <h1 class="page-title">System Status</h1>
 
-        ${runningCommands.length > 0 ? html`
+        ${runningTasks.length > 0 ? html`
           <div class="running-section">
             <h2 class="section-title">Running Tasks</h2>
             <div class="running-list">
-              ${runningCommands.map((cmd) => html`
+              ${runningTasks.map((task) => html`
                 <div class="running-item">
                   <div class="running-icon">
                     <svg class="spinner-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -148,24 +151,27 @@ export class SystemStatusPage extends BaseComponent {
                     </svg>
                   </div>
                   <div class="running-content">
-                    <div class="running-name">${escapeHtml(this.formatCommandName(cmd.name))}</div>
+                    <div class="running-name">${escapeHtml(this.formatTaskName(task))}</div>
                     <div class="running-detail">
-                      <span class="running-status">${cmd.status === 'queued' ? 'Queued' : 'Running'}</span>
-                      ${cmd.started ? html`<span class="running-elapsed">${this.formatElapsed(cmd.started)}</span>` : ''}
-                      ${cmd.message ? html`<span class="running-message">${escapeHtml(cmd.message)}</span>` : ''}
+                      <span class="running-status">${task.status === 'queued' ? 'Queued' : 'Running'}</span>
+                      ${task.started ? html`<span class="running-elapsed">${this.formatElapsed(task.started)}</span>` : ''}
+                      ${task.detail ? html`<span class="running-message">${escapeHtml(task.detail)}</span>` : ''}
+                      ${task.message ? html`<span class="running-message">${escapeHtml(task.message)}</span>` : ''}
                     </div>
                   </div>
-                  <button
-                    class="cancel-btn"
-                    onclick="this.closest('system-status-page').handleCancelCommand(${cmd.id})"
-                    title="Cancel task"
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <circle cx="12" cy="12" r="10"></circle>
-                      <line x1="15" y1="9" x2="9" y2="15"></line>
-                      <line x1="9" y1="9" x2="15" y2="15"></line>
-                    </svg>
-                  </button>
+                  ${task.taskType === 'command' ? html`
+                    <button
+                      class="cancel-btn"
+                      onclick="this.closest('system-status-page').handleCancelTask('${escapeHtml(task.id)}')"
+                      title="Cancel task"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="15" y1="9" x2="9" y2="15"></line>
+                        <line x1="9" y1="9" x2="15" y2="15"></line>
+                      </svg>
+                    </button>
+                  ` : ''}
                 </div>
               `).join('')}
             </div>
@@ -560,12 +566,15 @@ export class SystemStatusPage extends BaseComponent {
     `;
   }
 
-  handleCancelCommand(id: number): void {
+  handleCancelTask(id: string): void {
     this.cancelMutation.mutate(id);
   }
 
-  private formatCommandName(name: string): string {
-    return name.replace(/([A-Z])/g, ' $1').trim();
+  private formatTaskName(task: RunningTask): string {
+    if (task.taskType === 'scan') {
+      return task.name;
+    }
+    return task.name.replace(/([A-Z])/g, ' $1').trim();
   }
 
   private formatElapsed(started: string): string {

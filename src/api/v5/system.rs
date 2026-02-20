@@ -9,7 +9,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::core::datastore::repositories::RootFolderRepository;
+use crate::core::datastore::repositories::{CommandRepository, RootFolderRepository};
+use crate::core::scanner::consumer::RunningJobInfo;
 use crate::web::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -17,6 +18,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/status", get(get_status))
         .route("/health", get(get_health))
         .route("/diskspace", get(get_disk_space))
+        .route("/task/running", get(get_running_tasks))
         .route("/backup", get(list_backups).post(create_backup))
         .route("/backup/restore", post(restore_backup))
         .route("/logs", get(get_logs))
@@ -73,6 +75,75 @@ async fn get_status(
         package_author: "pir9".to_string(),
         package_update_mechanism: "builtIn".to_string(),
     })
+}
+
+/// GET /api/v5/system/task/running - Combined running commands + scan jobs
+async fn get_running_tasks(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> Json<Vec<RunningTask>> {
+    let mut tasks = Vec::new();
+
+    // Running commands from DB
+    let repo = CommandRepository::new(state.db.clone());
+    if let Ok(commands) = repo.get_all().await {
+        for cmd in commands {
+            if cmd.status == "queued" || cmd.status == "started" {
+                tasks.push(RunningTask {
+                    id: cmd.id.to_string(),
+                    task_type: "command".to_string(),
+                    name: cmd.name.clone(),
+                    status: cmd.status.clone(),
+                    started: cmd.started.map(|t| t.to_rfc3339()),
+                    message: cmd.message,
+                    detail: None,
+                });
+            }
+        }
+    }
+
+    // Running scan jobs from worker consumer
+    if let Some(consumer) = state.scan_result_consumer.get() {
+        let jobs = consumer.get_running_jobs().await;
+        for job in jobs {
+            let name = match job.scan_type {
+                crate::core::messaging::ScanType::RescanSeries => "Scan Series".to_string(),
+                crate::core::messaging::ScanType::RescanMovie => "Scan Movie".to_string(),
+                crate::core::messaging::ScanType::DownloadedEpisodesScan => {
+                    "Scan Downloads".to_string()
+                }
+                crate::core::messaging::ScanType::RescanPodcast => "Scan Podcasts".to_string(),
+                crate::core::messaging::ScanType::RescanMusic => "Scan Music".to_string(),
+            };
+            let detail = if job.results_received > 0 {
+                Some(format!("{} files found", job.results_received))
+            } else {
+                Some("Scanning...".to_string())
+            };
+            tasks.push(RunningTask {
+                id: job.job_id,
+                task_type: "scan".to_string(),
+                name,
+                status: "started".to_string(),
+                started: None,
+                message: None,
+                detail,
+            });
+        }
+    }
+
+    Json(tasks)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunningTask {
+    pub id: String,
+    pub task_type: String,
+    pub name: String,
+    pub status: String,
+    pub started: Option<String>,
+    pub message: Option<String>,
+    pub detail: Option<String>,
 }
 
 async fn get_health() -> Json<Vec<HealthCheck>> {
