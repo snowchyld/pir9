@@ -297,6 +297,25 @@ pub enum Message {
         #[serde(default)]
         known_files: HashMap<String, KnownFileInfo>,
     },
+    /// Progress update from worker during file enrichment (probe + hash)
+    ScanProgress {
+        /// Unique job ID matching the scan request
+        job_id: String,
+        /// Worker instance ID
+        worker_id: String,
+        /// Current stage: "scanning", "probing", "hashing"
+        stage: String,
+        /// File currently being processed
+        current_file: Option<String>,
+        /// Total number of files to process
+        files_total: usize,
+        /// Number of files fully processed so far
+        files_processed: usize,
+        /// Overall percent complete (0-100)
+        percent: u8,
+        /// Detail string after probe: e.g. "1080p x265 HDR10", or "unchanged" for skipped files
+        detail: Option<String>,
+    },
     /// Result sent from worker back to server
     ScanResult {
         /// Job ID matching the request

@@ -45,6 +45,7 @@ fn message_type_name(message: &Message) -> &'static str {
         Message::ConfigUpdated => "ConfigUpdated",
         Message::NotificationSent { .. } => "NotificationSent",
         Message::ScanRequest { .. } => "ScanRequest",
+        Message::ScanProgress { .. } => "ScanProgress",
         Message::ScanResult { .. } => "ScanResult",
         Message::WorkerOnline { .. } => "WorkerOnline",
         Message::WorkerOffline { .. } => "WorkerOffline",
@@ -307,8 +308,29 @@ impl WorkerRunner {
                                 file_count, path_str
                             );
 
+                            publish_progress(&event_bus, &job_id, &this.worker_id, "scanning", None, file_count, 0, 0, None).await;
+
+                            let dl_total_steps = file_count * 2;
+                            let mut dl_completed_steps: usize = 0;
+
                             for (idx, file) in files.iter_mut().enumerate() {
-                                enrich_scanned_file(file, (idx + 1, file_count)).await;
+                                // Probe stage
+                                let probe_pct = if dl_total_steps > 0 { (dl_completed_steps * 100 / dl_total_steps).min(100) as u8 } else { 0 };
+                                publish_progress(&event_bus, &job_id, &this.worker_id, "probing", Some(&file.filename), file_count, idx, probe_pct, None).await;
+
+                                let probe_detail = probe_scanned_file(file, (idx + 1, file_count)).await;
+                                dl_completed_steps += 1;
+
+                                let after_probe_pct = if dl_total_steps > 0 { (dl_completed_steps * 100 / dl_total_steps).min(100) as u8 } else { 50 };
+                                publish_progress(&event_bus, &job_id, &this.worker_id, "probing", Some(&file.filename), file_count, idx, after_probe_pct, probe_detail).await;
+
+                                // Hash stage
+                                publish_progress(&event_bus, &job_id, &this.worker_id, "hashing", Some(&file.filename), file_count, idx, after_probe_pct, None).await;
+                                hash_scanned_file(file, (idx + 1, file_count)).await;
+                                dl_completed_steps += 1;
+
+                                let after_hash_pct = if dl_total_steps > 0 { (dl_completed_steps * 100 / dl_total_steps).min(100) as u8 } else { 100 };
+                                publish_progress(&event_bus, &job_id, &this.worker_id, "hashing", Some(&file.filename), file_count, idx + 1, after_hash_pct, None).await;
 
                                 // Publish per-file result immediately — server can start
                                 // matching and dispatching file moves right away
@@ -351,7 +373,7 @@ impl WorkerRunner {
                     // Batch mode for non-download scans (RescanSeries, RescanMovie, etc.)
                     let relevant_refs: Vec<(i64, &String)> =
                         relevant.iter().map(|(id, p)| (*id, p)).collect();
-                    let result = self.execute_scan(job_id, scan_type, &relevant_refs, known_files).await;
+                    let result = self.execute_scan(job_id, scan_type, &relevant_refs, known_files, event_bus).await;
                     for scan_result in result {
                         event_bus.publish(scan_result).await;
                     }
@@ -527,8 +549,8 @@ impl WorkerRunner {
                     })
                     .await;
             }
-            // Scan results and import results are for the server, not workers
-            Message::ScanResult { .. } | Message::ImportFilesResult { .. } | Message::DeletePathsResult { .. } => {
+            // Scan results, progress updates, and import results are for the server, not workers
+            Message::ScanResult { .. } | Message::ScanProgress { .. } | Message::ImportFilesResult { .. } | Message::DeletePathsResult { .. } => {
                 // Ignore - these are for the server to process
             }
             // Log other message types at trace level
@@ -555,12 +577,14 @@ impl WorkerRunner {
     ///
     /// `known_files` contains DB metadata from the server. Files whose path+size match
     /// a known entry skip FFmpeg probe + BLAKE3 hash — a massive speedup for unchanged libraries.
+    #[cfg(feature = "redis-events")]
     async fn execute_scan(
         &self,
         job_id: &str,
         scan_type: &ScanType,
         series_paths: &[(i64, &String)],
         known_files: &HashMap<String, KnownFileInfo>,
+        event_bus: &crate::core::messaging::HybridEventBus,
     ) -> Vec<Message> {
         let mut results = Vec::new();
         let mut total_files_found: u64 = 0;
@@ -590,6 +614,13 @@ impl WorkerRunner {
                     let file_count = files.len();
                     info!("[scan][{}] Found {} video file(s) in {}", media_type, file_count, path_str);
 
+                    // Publish initial scanning progress
+                    publish_progress(event_bus, job_id, &self.worker_id, "scanning", None, file_count, 0, 0, None).await;
+
+                    // Each file = 2 steps (probe + hash); skipped files count as 2 steps instantly
+                    let total_steps = file_count * 2;
+                    let mut completed_steps: usize = 0;
+
                     // Enrich each file with FFmpeg probe + BLAKE3 hash (LOCAL disk = fast)
                     // Skip files whose path+size match known DB records (unchanged files)
                     for (idx, file) in files.iter_mut().enumerate() {
@@ -604,10 +635,31 @@ impl WorkerRunner {
                                     idx + 1, file_count, file.filename, format_size(file.size as u64)
                                 );
                                 skipped_count += 1;
+                                completed_steps += 2;
+                                let pct = if total_steps > 0 { (completed_steps * 100 / total_steps).min(100) as u8 } else { 100 };
+                                publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), file_count, idx + 1, pct, Some("unchanged".to_string())).await;
                                 continue;
                             }
                         }
-                        enrich_scanned_file(file, (idx + 1, file_count)).await;
+
+                        // Probe stage
+                        let probe_pct = if total_steps > 0 { (completed_steps * 100 / total_steps).min(100) as u8 } else { 0 };
+                        publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), file_count, idx, probe_pct, None).await;
+
+                        let probe_detail = probe_scanned_file(file, (idx + 1, file_count)).await;
+                        completed_steps += 1;
+
+                        let after_probe_pct = if total_steps > 0 { (completed_steps * 100 / total_steps).min(100) as u8 } else { 50 };
+                        publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), file_count, idx, after_probe_pct, probe_detail).await;
+
+                        // Hash stage
+                        publish_progress(event_bus, job_id, &self.worker_id, "hashing", Some(&file.filename), file_count, idx, after_probe_pct, None).await;
+
+                        hash_scanned_file(file, (idx + 1, file_count)).await;
+                        completed_steps += 1;
+
+                        let after_hash_pct = if total_steps > 0 { (completed_steps * 100 / total_steps).min(100) as u8 } else { 100 };
+                        publish_progress(event_bus, job_id, &self.worker_id, "hashing", Some(&file.filename), file_count, idx + 1, after_hash_pct, None).await;
                     }
 
                     let elapsed = scan_start.elapsed();
@@ -658,6 +710,7 @@ impl WorkerRunner {
                                     "[skip][movie] {} — unchanged ({}) in {:.1}s",
                                     file.filename, format_size(file.size as u64), elapsed.as_secs_f64()
                                 );
+                                publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), 1, 1, 100, Some("unchanged".to_string())).await;
                                 total_files_found += 1;
                                 results.push(Message::ScanResult {
                                     job_id: job_id.to_string(),
@@ -670,7 +723,16 @@ impl WorkerRunner {
                             }
                         }
 
-                        enrich_scanned_file(&mut file, (1, 1)).await;
+                        // Probe stage
+                        publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), 1, 0, 0, None).await;
+                        let probe_detail = probe_scanned_file(&mut file, (1, 1)).await;
+                        publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), 1, 0, 50, probe_detail).await;
+
+                        // Hash stage
+                        publish_progress(event_bus, job_id, &self.worker_id, "hashing", Some(&file.filename), 1, 0, 50, None).await;
+                        hash_scanned_file(&mut file, (1, 1)).await;
+                        publish_progress(event_bus, job_id, &self.worker_id, "hashing", Some(&file.filename), 1, 1, 100, None).await;
+
                         total_files_found += 1;
                         let elapsed = scan_start.elapsed();
                         info!(
@@ -876,20 +938,62 @@ fn infer_media_type(path: &std::path::Path) -> &'static str {
     }
 }
 
-/// Enrich a scanned file with FFmpeg media info and BLAKE3 content hash.
-///
-/// This runs on the worker with LOCAL disk access, making it fast (seconds
-/// instead of minutes over NFS). The enriched data travels back to the server
-/// via Redis so the server can skip redundant I/O.
-///
-/// `progress` is a `(current, total)` tuple for logging progress like "(3/10)".
-async fn enrich_scanned_file(file: &mut ScannedFile, progress: (usize, usize)) {
-    use crate::core::mediafiles::compute_file_hash;
+/// Publish a scan progress update via the event bus
+#[cfg(feature = "redis-events")]
+async fn publish_progress(
+    event_bus: &crate::core::messaging::HybridEventBus,
+    job_id: &str,
+    worker_id: &str,
+    stage: &str,
+    current_file: Option<&str>,
+    files_total: usize,
+    files_processed: usize,
+    percent: u8,
+    detail: Option<String>,
+) {
+    event_bus
+        .publish(Message::ScanProgress {
+            job_id: job_id.to_string(),
+            worker_id: worker_id.to_string(),
+            stage: stage.to_string(),
+            current_file: current_file.map(|s| s.to_string()),
+            files_total,
+            files_processed,
+            percent,
+            detail,
+        })
+        .await;
+}
 
+/// Extract a human-readable media detail string from a ScannedFile's media_info JSON.
+/// Returns something like "1080p x265 HDR10" or None if no useful info.
+fn extract_media_detail(file: &ScannedFile) -> Option<String> {
+    let info_str = file.media_info.as_deref()?;
+    let info: serde_json::Value = serde_json::from_str(info_str).ok()?;
+    let resolution = info["resolution"].as_str().unwrap_or("?");
+    let codec = info["videoCodec"].as_str()
+        .or_else(|| info["video_codec"].as_str())
+        .unwrap_or("?");
+    let mut parts = vec![format!("{}p", resolution), codec.to_string()];
+    // HDR detection
+    if let Some(ct) = info["videoColourTransfer"].as_str()
+        .or_else(|| info["video_colour_transfer"].as_str())
+    {
+        if ct == "smpte2084" {
+            parts.push("HDR10".to_string());
+        } else if ct == "arib-std-b67" {
+            parts.push("HLG".to_string());
+        }
+    }
+    Some(parts.join(" "))
+}
+
+/// Probe a scanned file with FFmpeg (sets media_info + quality).
+/// Returns the probe detail string for progress reporting.
+async fn probe_scanned_file(file: &mut ScannedFile, progress: (usize, usize)) -> Option<String> {
     let path = std::path::Path::new(&file.path);
     let (current, total) = progress;
 
-    // FFmpeg probe (feature-gated)
     #[cfg(feature = "media-probe")]
     {
         use crate::core::mediafiles::{derive_quality_from_media, MediaAnalyzer};
@@ -910,6 +1014,7 @@ async fn enrich_scanned_file(file: &mut ScannedFile, progress: (usize, usize)) {
                 );
                 file.quality = serde_json::to_string(&quality).ok();
                 file.media_info = serde_json::to_string(&info).ok();
+                return extract_media_detail(file);
             }
             Err(e) => {
                 let elapsed = probe_start.elapsed();
@@ -921,7 +1026,21 @@ async fn enrich_scanned_file(file: &mut ScannedFile, progress: (usize, usize)) {
         }
     }
 
-    // BLAKE3 content hash (pure Rust, no feature gate needed)
+    #[cfg(not(feature = "media-probe"))]
+    {
+        let _ = (path, current, total);
+    }
+
+    None
+}
+
+/// Hash a scanned file with BLAKE3 (sets file_hash).
+async fn hash_scanned_file(file: &mut ScannedFile, progress: (usize, usize)) {
+    use crate::core::mediafiles::compute_file_hash;
+
+    let path = std::path::Path::new(&file.path);
+    let (current, total) = progress;
+
     let hash_start = std::time::Instant::now();
     info!("[hash] ({}/{}) {}", current, total, file.filename);
     match compute_file_hash(path).await {
@@ -945,6 +1064,15 @@ async fn enrich_scanned_file(file: &mut ScannedFile, progress: (usize, usize)) {
             );
         }
     }
+}
+
+/// Enrich a scanned file with FFmpeg media info and BLAKE3 content hash.
+///
+/// Convenience wrapper that calls probe + hash sequentially.
+/// Used by code paths that don't need per-stage progress reporting.
+async fn enrich_scanned_file(file: &mut ScannedFile, progress: (usize, usize)) {
+    probe_scanned_file(file, progress).await;
+    hash_scanned_file(file, progress).await;
 }
 
 #[cfg(test)]

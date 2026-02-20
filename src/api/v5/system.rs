@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::core::datastore::repositories::{CommandRepository, RootFolderRepository};
-use crate::core::scanner::consumer::RunningJobInfo;
+use crate::core::scanner::consumer::{RunningJobInfo, ScanProgressInfo};
 use crate::web::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -98,6 +98,7 @@ async fn get_running_tasks(
                     message: cmd.message,
                     detail: None,
                     worker_id: None,
+                    progress: None,
                 });
             }
         }
@@ -119,7 +120,20 @@ async fn get_running_tasks(
             let total = job.entity_ids.len();
             let has_worker = job.worker_id.is_some();
             let status = if has_worker { "started" } else { "queued" };
-            let detail = if job.results_received > 0 {
+            let detail = if let Some(ref prog) = job.progress {
+                Some(format!(
+                    "{} {}/{} ({}%)",
+                    match prog.stage.as_str() {
+                        "scanning" => "Discovering files...",
+                        "probing" => "Probing",
+                        "hashing" => "Hashing",
+                        _ => &prog.stage,
+                    },
+                    prog.files_processed,
+                    prog.files_total,
+                    prog.percent
+                ))
+            } else if job.results_received > 0 {
                 if total > 1 {
                     Some(format!("{}/{} done", job.results_received, total))
                 } else {
@@ -139,6 +153,7 @@ async fn get_running_tasks(
                 message: None,
                 detail,
                 worker_id: job.worker_id,
+                progress: job.progress,
             });
         }
     }
@@ -157,6 +172,8 @@ pub struct RunningTask {
     pub message: Option<String>,
     pub detail: Option<String>,
     pub worker_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<ScanProgressInfo>,
 }
 
 /// DELETE /api/v5/system/task/scan/{id} - Cancel a running scan job

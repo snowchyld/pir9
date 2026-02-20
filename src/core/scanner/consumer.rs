@@ -46,6 +46,8 @@ struct PendingJob {
     worker_id: Option<String>,
     /// When the job was registered
     started_at: chrono::DateTime<chrono::Utc>,
+    /// Live progress from worker enrichment pipeline
+    progress: Option<ScanProgressInfo>,
 }
 
 /// Metadata needed to complete a download import after the worker moves files.
@@ -110,6 +112,24 @@ pub struct DownloadImportInfo {
     pub episodes: Vec<EpisodeDbModel>,
 }
 
+/// Progress info from a worker's scan enrichment pipeline
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanProgressInfo {
+    /// Current stage: "scanning", "probing", "hashing"
+    pub stage: String,
+    /// File currently being processed
+    pub current_file: Option<String>,
+    /// Total number of files to process
+    pub files_total: usize,
+    /// Number of files fully processed so far
+    pub files_processed: usize,
+    /// Overall percent complete (0-100)
+    pub percent: u8,
+    /// Detail string: "1080p x265 HDR10" or "unchanged"
+    pub detail: Option<String>,
+}
+
 /// Info about a currently running scan job, exposed to the API layer
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -120,6 +140,7 @@ pub struct RunningJobInfo {
     pub results_received: usize,
     pub worker_id: Option<String>,
     pub started_at: Option<String>,
+    pub progress: Option<ScanProgressInfo>,
 }
 
 /// Service that consumes scan results from workers and updates the database
@@ -162,6 +183,7 @@ impl ScanResultConsumer {
                 results_received: job.results_received,
                 worker_id: job.worker_id.clone(),
                 started_at: Some(job.started_at.to_rfc3339()),
+                progress: job.progress.clone(),
             })
             .collect()
     }
@@ -190,6 +212,7 @@ impl ScanResultConsumer {
                 completed: false,
                 worker_id: None,
                 started_at: Utc::now(),
+                progress: None,
             },
         );
         debug!("Registered scan job: {} (type={:?})", job_id, scan_type);
@@ -306,6 +329,33 @@ impl ScanResultConsumer {
                                         errors,
                                     )
                                     .await;
+                                }
+                            }
+                        }
+                        Message::ScanProgress {
+                            job_id,
+                            worker_id,
+                            stage,
+                            current_file,
+                            files_total,
+                            files_processed,
+                            percent,
+                            detail,
+                        } => {
+                            let mut jobs = self.pending_jobs.write().await;
+                            if let Some(job) = jobs.jobs.get_mut(&job_id) {
+                                if !job.completed {
+                                    if job.worker_id.is_none() {
+                                        job.worker_id = Some(worker_id);
+                                    }
+                                    job.progress = Some(ScanProgressInfo {
+                                        stage,
+                                        current_file,
+                                        files_total,
+                                        files_processed,
+                                        percent,
+                                        detail,
+                                    });
                                 }
                             }
                         }

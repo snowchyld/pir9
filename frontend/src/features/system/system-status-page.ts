@@ -53,6 +53,15 @@ interface HealthCheck {
   wikiUrl?: string;
 }
 
+interface ScanProgress {
+  stage: string;
+  currentFile?: string;
+  filesTotal: number;
+  filesProcessed: number;
+  percent: number;
+  detail?: string;
+}
+
 interface RunningTask {
   id: string;
   taskType: 'command' | 'scan';
@@ -62,6 +71,7 @@ interface RunningTask {
   message?: string;
   detail?: string;
   workerId?: string;
+  progress?: ScanProgress;
 }
 
 @customElement('system-status-page')
@@ -160,13 +170,30 @@ export class SystemStatusPage extends BaseComponent {
                   </div>
                   <div class="running-content">
                     <div class="running-name">${escapeHtml(this.formatTaskName(task))}</div>
-                    <div class="running-detail">
-                      <span class="running-status">${task.status === 'queued' ? 'Queued' : 'Running'}</span>
-                      ${task.started ? html`<span class="running-elapsed">${this.formatElapsed(task.started)}</span>` : ''}
-                      ${task.workerId ? html`<span class="running-worker" title="Worker ID: ${escapeHtml(task.workerId)}">worker:${escapeHtml(task.workerId.substring(0, 8))}</span>` : ''}
-                      ${task.detail ? html`<span class="running-message">${escapeHtml(task.detail)}</span>` : ''}
-                      ${task.message ? html`<span class="running-message">${escapeHtml(task.message)}</span>` : ''}
-                    </div>
+                    ${task.progress ? html`
+                      <div class="running-progress">
+                        <div class="progress-bar">
+                          <div class="progress-fill" style="width: ${task.progress.percent}%"></div>
+                        </div>
+                        <span class="progress-text">${task.progress.filesProcessed}/${task.progress.filesTotal}</span>
+                        <span class="progress-pct">${task.progress.percent}%</span>
+                      </div>
+                      <div class="running-detail">
+                        <span class="running-stage">${escapeHtml(this.formatStage(task.progress.stage))}</span>
+                        ${task.started ? html`<span class="running-elapsed">${this.formatElapsed(task.started)}</span>` : ''}
+                        ${task.workerId ? html`<span class="running-worker" title="Worker ID: ${escapeHtml(task.workerId)}">worker:${escapeHtml(task.workerId.substring(0, 8))}</span>` : ''}
+                        ${task.progress.currentFile ? html`<span class="running-file" title="${escapeHtml(task.progress.currentFile)}">${escapeHtml(this.truncateFilename(task.progress.currentFile, 40))}</span>` : ''}
+                        ${task.progress.detail && task.progress.detail !== 'unchanged' ? html`<span class="running-metadata">${escapeHtml(task.progress.detail)}</span>` : ''}
+                      </div>
+                    ` : html`
+                      <div class="running-detail">
+                        <span class="running-status">${task.status === 'queued' ? 'Queued' : 'Running'}</span>
+                        ${task.started ? html`<span class="running-elapsed">${this.formatElapsed(task.started)}</span>` : ''}
+                        ${task.workerId ? html`<span class="running-worker" title="Worker ID: ${escapeHtml(task.workerId)}">worker:${escapeHtml(task.workerId.substring(0, 8))}</span>` : ''}
+                        ${task.detail ? html`<span class="running-message">${escapeHtml(task.detail)}</span>` : ''}
+                        ${task.message ? html`<span class="running-message">${escapeHtml(task.message)}</span>` : ''}
+                      </div>
+                    `}
                   </div>
                   <button
                     class="cancel-btn"
@@ -421,6 +448,63 @@ export class SystemStatusPage extends BaseComponent {
           white-space: nowrap;
         }
 
+        .running-progress {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          margin-top: 0.25rem;
+        }
+
+        .progress-bar {
+          flex: 1;
+          height: 4px;
+          background-color: var(--bg-progress, rgba(255, 255, 255, 0.1));
+          border-radius: 2px;
+          overflow: hidden;
+        }
+
+        .progress-fill {
+          height: 100%;
+          background-color: var(--color-primary);
+          transition: width 0.3s ease;
+          border-radius: 2px;
+        }
+
+        .progress-text, .progress-pct {
+          font-size: 0.75rem;
+          font-family: monospace;
+          color: var(--text-color-muted);
+          white-space: nowrap;
+        }
+
+        .progress-pct {
+          min-width: 2.5rem;
+          text-align: right;
+        }
+
+        .running-stage {
+          font-weight: 500;
+          text-transform: capitalize;
+        }
+
+        .running-file {
+          font-family: monospace;
+          font-size: 0.75rem;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          max-width: 300px;
+        }
+
+        .running-metadata {
+          font-size: 0.6875rem;
+          padding: 0.0625rem 0.375rem;
+          background: rgba(var(--color-success-rgb, 92, 184, 92), 0.15);
+          color: var(--color-success, #5cb85c);
+          border-radius: 0.1875rem;
+          white-space: nowrap;
+        }
+
         .cancel-btn {
           display: flex;
           align-items: center;
@@ -616,6 +700,28 @@ export class SystemStatusPage extends BaseComponent {
     const hours = Math.floor(minutes / 60);
     const remainingMinutes = minutes % 60;
     return `${hours}h ${remainingMinutes}m`;
+  }
+
+  private formatStage(stage: string): string {
+    switch (stage) {
+      case 'scanning': return 'Discovering';
+      case 'probing': return 'Probing';
+      case 'hashing': return 'Hashing';
+      default: return stage;
+    }
+  }
+
+  private truncateFilename(filename: string, maxLen: number): string {
+    if (filename.length <= maxLen) return filename;
+    const ext = filename.lastIndexOf('.');
+    if (ext > 0 && filename.length - ext <= 6) {
+      const extStr = filename.substring(ext);
+      const nameLen = maxLen - extStr.length - 3;
+      if (nameLen > 0) {
+        return `${filename.substring(0, nameLen)}...${extStr}`;
+      }
+    }
+    return `${filename.substring(0, maxLen - 3)}...`;
   }
 
   private formatBytes(bytes: number): string {

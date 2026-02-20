@@ -177,6 +177,7 @@ impl NotificationService {
             | Message::NotificationSent { .. }
             // Distributed scanning events (internal, no notifications)
             | Message::ScanRequest { .. }
+            | Message::ScanProgress { .. }
             | Message::ScanResult { .. }
             | Message::WorkerOnline { .. }
             | Message::WorkerOffline { .. }
