@@ -3,8 +3,9 @@
  */
 
 import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
+import type { Command } from '../../core/http';
 import { http } from '../../core/http';
-import { createQuery } from '../../core/query';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 
 interface SystemStatus {
   appName: string;
@@ -70,11 +71,46 @@ export class SystemStatusPage extends BaseComponent {
     queryFn: () => http.get<HealthCheck[]>('/health'),
   });
 
+  private commandsQuery = createQuery({
+    queryKey: ['/command'],
+    queryFn: () => http.get<Command[]>('/command'),
+    refetchInterval: 10000,
+  });
+
+  private cancelMutation = createMutation({
+    mutationFn: (id: number) => http.delete<void>(`/command/${id}`),
+    onSuccess: () => {
+      invalidateQueries(['/command']);
+    },
+  });
+
+  private elapsedTimer: number | null = null;
+
   protected onInit(): void {
     this.watch(this.statusQuery.data);
     this.watch(this.statusQuery.isLoading);
     this.watch(this.diskSpaceQuery.data);
     this.watch(this.healthQuery.data);
+    this.watch(this.commandsQuery.data);
+  }
+
+  protected onMount(): void {
+    this.elapsedTimer = window.setInterval(() => {
+      const commands = this.commandsQuery.data.value ?? [];
+      const hasRunning = commands.some(
+        (c) => c.status === 'queued' || c.status === 'started',
+      );
+      if (hasRunning) {
+        this.requestUpdate();
+      }
+    }, 1000);
+  }
+
+  protected onDestroy(): void {
+    if (this.elapsedTimer !== null) {
+      clearInterval(this.elapsedTimer);
+      this.elapsedTimer = null;
+    }
   }
 
   protected template(): string {
@@ -82,6 +118,11 @@ export class SystemStatusPage extends BaseComponent {
     const diskSpace = this.diskSpaceQuery.data.value ?? [];
     const health = this.healthQuery.data.value ?? [];
     const isLoading = this.statusQuery.isLoading.value;
+
+    const allCommands = this.commandsQuery.data.value ?? [];
+    const runningCommands = allCommands.filter(
+      (c) => c.status === 'queued' || c.status === 'started',
+    );
 
     if (isLoading) {
       return html`
@@ -95,9 +136,43 @@ export class SystemStatusPage extends BaseComponent {
       <div class="status-page">
         <h1 class="page-title">System Status</h1>
 
-        ${
-          health.length > 0
-            ? html`
+        ${runningCommands.length > 0 ? html`
+          <div class="running-section">
+            <h2 class="section-title">Running Tasks</h2>
+            <div class="running-list">
+              ${runningCommands.map((cmd) => html`
+                <div class="running-item">
+                  <div class="running-icon">
+                    <svg class="spinner-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
+                    </svg>
+                  </div>
+                  <div class="running-content">
+                    <div class="running-name">${escapeHtml(this.formatCommandName(cmd.name))}</div>
+                    <div class="running-detail">
+                      <span class="running-status">${cmd.status === 'queued' ? 'Queued' : 'Running'}</span>
+                      ${cmd.started ? html`<span class="running-elapsed">${this.formatElapsed(cmd.started)}</span>` : ''}
+                      ${cmd.message ? html`<span class="running-message">${escapeHtml(cmd.message)}</span>` : ''}
+                    </div>
+                  </div>
+                  <button
+                    class="cancel-btn"
+                    onclick="this.closest('system-status-page').handleCancelCommand(${cmd.id})"
+                    title="Cancel task"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <line x1="15" y1="9" x2="9" y2="15"></line>
+                      <line x1="9" y1="9" x2="15" y2="15"></line>
+                    </svg>
+                  </button>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        ` : ''}
+
+        ${health.length > 0 ? html`
           <div class="health-section">
             <h2 class="section-title">Health</h2>
             <div class="health-list">
@@ -129,9 +204,7 @@ export class SystemStatusPage extends BaseComponent {
                 .join('')}
             </div>
           </div>
-        `
-            : ''
-        }
+        ` : ''}
 
         <div class="info-section">
           <h2 class="section-title">About</h2>
@@ -250,11 +323,15 @@ export class SystemStatusPage extends BaseComponent {
           to { transform: rotate(360deg); }
         }
 
-        .health-section, .info-section {
+        .running-section, .health-section, .info-section {
           padding: 1.5rem;
           background-color: var(--bg-card);
           border: 1px solid var(--border-color);
           border-radius: 0.5rem;
+        }
+
+        .running-section {
+          border-color: var(--color-primary);
         }
 
         .section-title {
@@ -263,6 +340,81 @@ export class SystemStatusPage extends BaseComponent {
           margin: 0 0 1rem 0;
           padding-bottom: 0.75rem;
           border-bottom: 1px solid var(--border-color);
+        }
+
+        .running-list {
+          display: flex;
+          flex-direction: column;
+          gap: 0.5rem;
+        }
+
+        .running-item {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          padding: 0.75rem;
+          background-color: var(--bg-card-alt);
+          border-radius: 0.375rem;
+        }
+
+        .running-icon {
+          display: flex;
+          flex-shrink: 0;
+          color: var(--color-primary);
+        }
+
+        .spinner-icon {
+          animation: spin 1s linear infinite;
+        }
+
+        .running-content {
+          flex: 1;
+          min-width: 0;
+        }
+
+        .running-name {
+          font-weight: 500;
+        }
+
+        .running-detail {
+          display: flex;
+          gap: 0.75rem;
+          font-size: 0.8125rem;
+          color: var(--text-color-muted);
+          margin-top: 0.125rem;
+        }
+
+        .running-status {
+          text-transform: capitalize;
+        }
+
+        .running-elapsed {
+          font-family: monospace;
+          font-size: 0.75rem;
+        }
+
+        .running-message {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .cancel-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 0.375rem;
+          background: transparent;
+          border: none;
+          border-radius: 0.25rem;
+          color: var(--text-color-muted);
+          cursor: pointer;
+          flex-shrink: 0;
+        }
+
+        .cancel-btn:hover {
+          color: var(--color-danger);
+          background-color: rgba(var(--color-danger-rgb, 217, 83, 79), 0.1);
         }
 
         .health-list {
@@ -406,6 +558,35 @@ export class SystemStatusPage extends BaseComponent {
         }
       </style>
     `;
+  }
+
+  handleCancelCommand(id: number): void {
+    this.cancelMutation.mutate(id);
+  }
+
+  private formatCommandName(name: string): string {
+    return name.replace(/([A-Z])/g, ' $1').trim();
+  }
+
+  private formatElapsed(started: string): string {
+    const startTime = new Date(started).getTime();
+    const elapsed = Math.max(0, Date.now() - startTime);
+    const seconds = Math.floor(elapsed / 1000);
+
+    if (seconds < 60) {
+      return `${seconds}s`;
+    }
+
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+
+    if (minutes < 60) {
+      return `${minutes}m ${remainingSeconds}s`;
+    }
+
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return `${hours}h ${remainingMinutes}m`;
   }
 
   private formatBytes(bytes: number): string {

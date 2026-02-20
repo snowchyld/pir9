@@ -213,6 +213,7 @@ export const api = {
     list: () => http.get<Command[]>('/command'),
     execute: (name: string, body?: Record<string, unknown>) =>
       http.post<Command>('/command', { name, ...body }),
+    cancel: (id: number) => http.delete<void>(`/command/${id}`),
   },
 
   // Movies
