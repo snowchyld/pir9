@@ -1,0 +1,192 @@
+# Docker Compose for Pir9
+# Multi-container deployment with PostgreSQL, Redis, and IMDB service
+#
+# Usage:
+#   docker compose up -d          # Start all services
+#   docker compose up -d --build  # Rebuild and start
+#   docker compose down           # Stop all services
+#
+# Environment variables (create .env file or export):
+#   PUID, PGID          - User/Group IDs for file permissions
+#   TZ                  - Timezone (e.g., America/New_York)
+#   PIR9_DB_CONNECTION  - Database connection string
+#   POSTGRES_USER       - PostgreSQL username (default: pir9)
+#   POSTGRES_PASSWORD   - PostgreSQL password (default: pir9)
+#   POSTGRES_DB         - PostgreSQL database name (default: pir9)
+#   PIR9_IMDB_ENABLED   - Enable IMDB service integration (default: true)
+
+
+services:
+  # ============================================================================
+  # Frontend - nginx serving Web Components app
+  # ============================================================================
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    image: pir9-frontend:latest
+    container_name: pir9-frontend
+    restart: unless-stopped
+    ports:
+      - "8989:80"
+    networks:
+      - pir9-network
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ============================================================================
+  # API - Rust backend server with PostgreSQL
+  # ============================================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: pir9-api:latest
+    container_name: pir9-api
+    restart: unless-stopped
+    command:
+      - "--mode"
+      - "server"
+      - "--redis-url"
+      - "redis://redis:6379"
+    volumes:
+      - ./config:/config
+      - ./data:/data
+      - ./logs:/logs
+      - ./backups:/backups
+      - ./cache:/app/cache
+      - /volume1/Shows:/volume1/Shows
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - RUST_LOG=info,pir9=debug
+      - PIR9_PORT=8989
+      - PIR9_BIND=0.0.0.0
+      - PIR9_DB_CONNECTION=postgresql://${POSTGRES_USER:-pir9}:${POSTGRES_PASSWORD:-pir9}@postgres:5432/${POSTGRES_DB:-pir9}
+      - PIR9_IMDB_SERVICE_URL=http://imdb:8990
+      - PIR9_IMDB_ENABLED=${PIR9_IMDB_ENABLED:-true}
+      - TZ=${TZ:-UTC}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      imdb:
+        condition: service_healthy
+    networks:
+      - pir9-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8989/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ============================================================================
+  # Redis - Event bus for cross-container messaging
+  # Exposed on port 6311 for external workers (Synology)
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: pir9-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6311:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - pir9-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ============================================================================
+  # PostgreSQL - Main application database
+  # ============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: pir9-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pir9}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pir9}
+      POSTGRES_DB: ${POSTGRES_DB:-pir9}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"  # External 5434 to avoid conflicts
+    networks:
+      - pir9-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pir9}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # PostgreSQL - IMDB database (separate from main app)
+  # ============================================================================
+  postgres-imdb:
+    image: postgres:16-alpine
+    container_name: pir9-postgres-imdb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pir9}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pir9}
+      POSTGRES_DB: pir9_imdb
+    volumes:
+      - postgres-imdb-data:/var/lib/postgresql/data
+    ports:
+      - "5435:5432"  # External 5435 for IMDB database
+    networks:
+      - pir9-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pir9} -d pir9_imdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # IMDB Service - Manages IMDB dataset sync and lookups
+  # ============================================================================
+  imdb:
+    build:
+      context: ./services/pir9-imdb
+      dockerfile: Dockerfile
+    image: pir9-imdb:latest
+    container_name: pir9-imdb
+    restart: unless-stopped
+    environment:
+      - RUST_LOG=info,pir9_imdb=debug
+      - PIR9_IMDB_PORT=8990
+      - PIR9_IMDB_DB_URL=postgresql://${POSTGRES_USER:-pir9}:${POSTGRES_PASSWORD:-pir9}@postgres-imdb:5432/pir9_imdb
+    depends_on:
+      postgres-imdb:
+        condition: service_healthy
+    networks:
+      - pir9-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8990/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  postgres-data:
+  postgres-imdb-data:
+  redis-data:
+
+networks:
+  pir9-network:
+    driver: bridge

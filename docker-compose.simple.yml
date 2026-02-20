@@ -1,0 +1,43 @@
+# Docker Compose for Pir9 - Simple Single-Container Deployment
+#
+# This is the simplest way to run Pir9 for development or small deployments.
+# No Redis or multi-container complexity.
+#
+# Usage:
+#   docker-compose -f docker-compose.simple.yml up
+#
+# For production multi-container deployment, use docker-compose.yml with --profile production
+
+version: '3.8'
+
+services:
+  pir9:
+    build: .
+    image: pir9-rust:latest
+    container_name: pir9-rust
+    restart: unless-stopped
+    ports:
+      - "8989:8989"
+    volumes:
+      - ./config:/config
+      - ./data:/data
+      - ./logs:/logs
+      - ./backups:/backups
+      - ./cache:/app/cache
+      # Mount your TV shows directory (set TV_SHOWS_PATH environment variable)
+      - ${TV_SHOWS_PATH:-./tv}:/tv
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - RUST_LOG=info,pir9=debug
+      - PIR9_PORT=8989
+      - PIR9_BIND=0.0.0.0
+      - PIR9_DB_TYPE=sqlite
+      - PIR9_DB_CONNECTION=/config/pir9.db
+      - TZ=${TZ:-UTC}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8989/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s

@@ -1,0 +1,63 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Configuration
+config/*.toml
+!config/config.example.toml
+
+# Database
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Logs
+logs/
+*.log
+
+# Backups
+backups/
+
+# Data
+data/
+
+# Frontend build
+frontend/dist/
+frontend/node_modules/
+
+# Environment
+.env
+.env.local
+
+# Secrets & certificates
+certs/
+*.key
+
+# Runtime cache
+cache/
+
+# Claude Code
+.claude/
+
+# Playwright MCP
+.playwright-mcp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp

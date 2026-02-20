@@ -1,0 +1,86 @@
+# Dockerfile for Pir9 API server
+# Multi-stage build for minimal final image
+
+# ============================================================================
+# Stage 1: Build the Rust application
+# ============================================================================
+FROM rust:1.93-bookworm AS builder
+
+WORKDIR /app
+
+# Install build dependencies (curl needed for utoipa-swagger-ui build)
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Cargo files for dependency caching
+COPY Cargo.toml Cargo.lock ./
+COPY migration ./migration
+
+# Create a dummy main.rs to build dependencies first (cache layer)
+RUN mkdir src && \
+    echo "fn main() {}" > src/main.rs && \
+    echo "fn main() {}" > src/cli.rs
+
+# Build dependencies only (this layer will be cached)
+RUN cargo build --release --features "redis-events" && \
+    rm -rf src target/release/.fingerprint/pir9-*
+
+# Copy the actual source code
+COPY src ./src
+COPY migrations ./migrations
+
+# Build the application
+RUN cargo build --release --features "redis-events"
+
+# ============================================================================
+# Stage 2: Create minimal runtime image
+# ============================================================================
+FROM debian:bookworm-slim AS runtime
+
+WORKDIR /app
+
+# Install runtime dependencies and gosu for proper privilege dropping
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    gosu \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directories
+RUN mkdir -p /config /data /logs /backups /app/cache /volume1
+
+# Copy the compiled binary
+COPY --from=builder /app/target/release/pir9 /app/pir9
+
+# Copy migrations
+COPY --from=builder /app/migrations /app/migrations
+
+# Copy entrypoint script
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Environment variables
+ENV PUID=1000
+ENV PGID=1000
+ENV RUST_LOG=info,pir9=debug
+ENV PIR9_PORT=8989
+ENV PIR9_BIND=0.0.0.0
+ENV PIR9_DB_TYPE=sqlite
+ENV PIR9_DB_CONNECTION=/config/pir9.db
+
+# Expose port
+EXPOSE 8989
+
+# Volumes
+VOLUME ["/config", "/data", "/logs", "/backups"]
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8989/health || exit 1
+
+# Run via entrypoint (handles PUID/PGID)
+ENTRYPOINT ["/entrypoint.sh"]
