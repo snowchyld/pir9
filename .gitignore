@@ -43,6 +43,7 @@ frontend/node_modules/
 # Secrets & certificates
 certs/
 *.key
+*.crt
 
 # Runtime cache
 cache/
