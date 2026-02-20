@@ -1501,7 +1501,54 @@ async fn import_queue_item(
         episodes,
     };
 
-    // Run the import in the background to avoid proxy timeouts.
+    // Dispatch to Redis worker when available — worker has fast local disk access
+    // for FFmpeg probing + BLAKE3 hashing instead of going over NFS
+    if let Some(ref hybrid_bus) = state.hybrid_event_bus {
+        if hybrid_bus.is_redis_enabled() {
+            if let Some(consumer) = state.scan_result_consumer.get() {
+                let job_id = uuid::Uuid::new_v4().to_string();
+
+                let import_info = crate::core::scanner::DownloadImportInfo {
+                    download_id: pending.download_id.clone(),
+                    download_client_id: pending.download_client_id,
+                    download_client_name: pending.download_client_name.clone(),
+                    title: pending.title.clone(),
+                    output_path: pending.output_path.clone(),
+                    parsed_info: pending.parsed_info.clone(),
+                    series: pending.series.clone(),
+                    episodes: pending.episodes.clone(),
+                };
+
+                consumer
+                    .register_download_import(&job_id, vec![import_info])
+                    .await;
+                consumer
+                    .register_job(
+                        &job_id,
+                        crate::core::messaging::ScanType::DownloadedEpisodesScan,
+                        vec![0],
+                    )
+                    .await;
+
+                let message = crate::core::messaging::Message::ScanRequest {
+                    job_id: job_id.clone(),
+                    scan_type: crate::core::messaging::ScanType::DownloadedEpisodesScan,
+                    series_ids: vec![0],
+                    paths: vec![output_path.clone()],
+                };
+                hybrid_bus.publish(message).await;
+
+                tracing::info!(
+                    "Queue series import: dispatched '{}' to worker (job_id={})",
+                    pending.title,
+                    job_id,
+                );
+                return Json(QueueActionResponse { success: true });
+            }
+        }
+    }
+
+    // Fallback: run the import locally (no Redis worker available).
     // Season/multi-season packs can take minutes (FFmpeg probing + hashing per file).
     let db = state.db.clone();
     tokio::spawn(async move {

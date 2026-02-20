@@ -1126,8 +1126,22 @@ impl EpisodeRepository {
         episode_number: i32,
     ) -> Result<Option<super::models::EpisodeDbModel>> {
         let pool = self.db.pool();
+        // Primary: match by current season/episode numbers
         let row = sqlx::query_as::<_, super::models::EpisodeDbModel>(
             "SELECT * FROM episodes WHERE series_id = $1 AND season_number = $2 AND episode_number = $3"
+        )
+        .bind(series_id)
+        .bind(season_number)
+        .bind(episode_number)
+        .fetch_optional(pool)
+        .await?;
+        if row.is_some() {
+            return Ok(row);
+        }
+        // Fallback: match by scene (original aired) numbers — handles DVD/alternate orderings
+        // where season_number/episode_number hold the remapped values but filenames use aired numbers
+        let row = sqlx::query_as::<_, super::models::EpisodeDbModel>(
+            "SELECT * FROM episodes WHERE series_id = $1 AND scene_season_number = $2 AND scene_episode_number = $3"
         )
         .bind(series_id)
         .bind(season_number)

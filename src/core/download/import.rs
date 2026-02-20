@@ -504,6 +504,16 @@ impl ImportService {
             episode_map.insert((ep.season_number, ep.episode_number), ep);
         }
 
+        // Scene numbering fallback: when episode ordering is non-default (e.g. DVD),
+        // season_number/episode_number hold the DVD values but filenames use aired numbers
+        // which are backed up in scene_season_number/scene_episode_number.
+        let mut scene_map: HashMap<(i32, i32), &EpisodeDbModel> = HashMap::new();
+        for ep in all_episodes {
+            if let (Some(ss), Some(se)) = (ep.scene_season_number, ep.scene_episode_number) {
+                scene_map.insert((ss, se), ep);
+            }
+        }
+
         // Phase 1: Match each file to episodes, resolving duplicates by file size
         // Key: episode DB id -> (file path, file size, all matched episodes for that file)
         let mut file_assignments: HashMap<PathBuf, (Vec<&EpisodeDbModel>, u64)> = HashMap::new();
@@ -560,10 +570,15 @@ impl ImportService {
 
             let file_size = std::fs::metadata(video_file).map(|m| m.len()).unwrap_or(0);
 
-            // Find matching episodes from our candidate set
+            // Find matching episodes from our candidate set.
+            // Try primary map first (current season/episode numbers), then fall back
+            // to scene_map (original aired numbers backed up during ordering remap).
             let mut matched: Vec<&EpisodeDbModel> = Vec::new();
             for (season, ep_num) in &parsed_eps {
-                if let Some(ep) = episode_map.get(&(*season, *ep_num)) {
+                if let Some(ep) = episode_map
+                    .get(&(*season, *ep_num))
+                    .or_else(|| scene_map.get(&(*season, *ep_num)))
+                {
                     matched.push(ep);
                 }
             }
