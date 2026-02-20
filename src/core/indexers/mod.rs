@@ -123,6 +123,7 @@ pub struct ReleaseInfo {
     pub seed_ratio: Option<f64>,
     pub source_title: Option<String>,
     pub indexer_flags: i32,
+    pub categories: Vec<i32>,
 }
 
 /// Search criteria for indexer queries

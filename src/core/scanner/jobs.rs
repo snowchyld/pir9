@@ -428,6 +428,7 @@ impl JobTrackerService {
         use crate::core::datastore::repositories::{
             EpisodeFileRepository, EpisodeRepository, SeriesRepository,
         };
+        use crate::core::mediafiles::MediaAnalyzer;
         use crate::core::scanner;
         use chrono::Utc;
         use std::path::Path;
@@ -481,6 +482,8 @@ impl JobTrackerService {
 
                 let languages_json = serde_json::json!([{"id": 1, "name": "English"}]);
 
+                let media_info = MediaAnalyzer::analyze_to_json(Path::new(&file_path_str)).await;
+
                 let episode_file = EpisodeFileDbModel {
                     id: 0,
                     series_id: *series_id,
@@ -493,7 +496,7 @@ impl JobTrackerService {
                     release_group: file.release_group.clone(),
                     quality: quality_json.to_string(),
                     languages: languages_json.to_string(),
-                    media_info: None,
+                    media_info,
                     original_file_path: Some(file_path_str.clone()),
                 };
 

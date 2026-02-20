@@ -201,6 +201,18 @@ impl MediaAnalyzer {
         }
     }
 
+    /// Analyze a file and return the result as a JSON string suitable for DB storage.
+    /// Returns None on failure (non-fatal — media info is optional).
+    pub async fn analyze_to_json(path: &std::path::Path) -> Option<String> {
+        match Self::analyze(path).await {
+            Ok(info) => serde_json::to_string(&info).ok(),
+            Err(e) => {
+                debug!("Media analysis failed for {}: {}", path.display(), e);
+                None
+            }
+        }
+    }
+
     /// Get video resolution from media info
     pub fn get_resolution(media_info: &MediaInfoModel) -> Option<(i32, i32)> {
         media_info.resolution.as_ref().and_then(|res| {

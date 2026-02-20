@@ -160,7 +160,7 @@ impl NewznabClient {
         let mut episode: Option<i32> = None;
         let mut seeders: Option<i32> = None;
         let mut peers: Option<i32> = None;
-        let mut _category = String::new();
+        let mut categories: Vec<i32> = Vec::new();
         let mut info_hash: Option<String> = None;
 
         for attr in &item.newznab_attrs {
@@ -172,7 +172,11 @@ impl NewznabClient {
                 "episode" | "ep" => episode = attr.value.parse().ok(),
                 "seeders" => seeders = attr.value.parse().ok(),
                 "peers" => peers = attr.value.parse().ok(),
-                "category" => _category = attr.value.clone(),
+                "category" => {
+                    if let Ok(cat) = attr.value.parse::<i32>() {
+                        categories.push(cat);
+                    }
+                }
                 "infohash" => info_hash = Some(attr.value.clone()),
                 _ => {}
             }
@@ -251,6 +255,7 @@ impl NewznabClient {
             seed_ratio: None,
             source_title: Some(item.title.clone().unwrap_or_default()),
             indexer_flags: 0,
+            categories,
         })
     }
 }

@@ -53,6 +53,7 @@ pub struct ReleaseResource {
     pub seeders: Option<i32>,
     pub leechers: Option<i32>,
     pub protocol: String,
+    pub categories: Vec<i32>,
 }
 
 fn release_to_resource(release: &ReleaseInfo) -> ReleaseResource {
@@ -93,6 +94,7 @@ fn release_to_resource(release: &ReleaseInfo) -> ReleaseResource {
         seeders: release.seeders,
         leechers: release.leechers,
         protocol: protocol.to_string(),
+        categories: release.categories.clone(),
     }
 }
 

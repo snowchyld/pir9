@@ -15,6 +15,7 @@ use crate::core::datastore::repositories::{
 };
 use crate::core::datastore::Database;
 use crate::core::download::clients::{create_client_from_model, DownloadState, DownloadStatus};
+use crate::core::mediafiles::MediaAnalyzer;
 use crate::core::parser::{best_series_match, parse_title, ParsedEpisodeInfo};
 
 /// Result of an import operation
@@ -311,6 +312,8 @@ impl ImportService {
             .to_string_lossy()
             .to_string();
 
+        let media_info = MediaAnalyzer::analyze_to_json(&dest_path).await;
+
         let episode_file = EpisodeFileDbModel {
             id: 0, // Will be set by insert
             series_id: series.id,
@@ -323,7 +326,7 @@ impl ImportService {
             release_group: parsed_info.release_group.clone(),
             quality: serde_json::to_string(&parsed_info.quality).unwrap_or_default(),
             languages: serde_json::to_string(&parsed_info.languages).unwrap_or_default(),
-            media_info: None,
+            media_info,
             original_file_path: Some(source_file.to_string_lossy().to_string()),
         };
 

@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use crate::core::datastore::models::{MovieDbModel, MovieFileDbModel};
 use crate::core::datastore::repositories::{MovieFileRepository, MovieRepository};
+use crate::core::mediafiles::MediaAnalyzer;
 use crate::web::AppState;
 
 // Re-use ApiError from series module
@@ -1041,7 +1042,11 @@ async fn import_movies(
                 tracing::info!("Imported movie: id={}, title={}", id, title);
 
                 // Scan folder for video file
-                if let Some(movie_file) = scan_movie_folder(&full_path, id) {
+                if let Some(mut movie_file) = scan_movie_folder(&full_path, id) {
+                    // Analyze media info from filename (async, so done after sync scan)
+                    movie_file.media_info =
+                        MediaAnalyzer::analyze_to_json(std::path::Path::new(&movie_file.path))
+                            .await;
                     match file_repo.insert(&movie_file).await {
                         Ok(file_id) => {
                             // Update movie with file info

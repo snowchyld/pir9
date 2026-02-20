@@ -147,6 +147,8 @@ pub struct ReleaseResource {
     pub is_absolute_numbering: bool,
     pub is_possible_special_episode: bool,
     pub special: bool,
+    #[serde(default)]
+    pub categories: Vec<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -264,6 +266,7 @@ fn release_to_resource(release: &ReleaseInfo) -> ReleaseResource {
         is_absolute_numbering: release.is_absolute_numbering,
         is_possible_special_episode: release.is_possible_special_episode,
         special: release.special,
+        categories: release.categories.clone(),
     }
 }
 

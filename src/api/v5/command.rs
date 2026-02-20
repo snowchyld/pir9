@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::core::datastore::repositories::CommandRepository;
+use crate::core::mediafiles::MediaAnalyzer;
 use crate::web::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1106,6 +1107,9 @@ async fn execute_rescan_series(
                         "name": "English"
                     }]);
 
+                    let media_info =
+                        MediaAnalyzer::analyze_to_json(std::path::Path::new(&file_path_str)).await;
+
                     let episode_file = EpisodeFileDbModel {
                         id: 0,
                         series_id: *series_id,
@@ -1118,7 +1122,7 @@ async fn execute_rescan_series(
                         release_group,
                         quality: quality_json.to_string(),
                         languages: languages_json.to_string(),
-                        media_info: None,
+                        media_info,
                         original_file_path: Some(file_path_str.clone()),
                     };
 
