@@ -198,7 +198,7 @@ This project uses semver. **Every commit MUST bump the version.**
    - Blank line, then body explaining what changed and why
    - End with `Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>`
 
-### Current version: 0.10.0
+### Current version: 0.11.0
 
 ### Commit types
 - `feat:` — new feature or capability
