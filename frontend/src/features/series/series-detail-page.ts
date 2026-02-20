@@ -604,7 +604,7 @@ export class SeriesDetailPage extends BaseComponent {
           color: var(--text-color-muted);
         }
 
-        .season-rescan-btn {
+        .season-action-btn {
           display: flex;
           align-items: center;
           justify-content: center;
@@ -618,11 +618,11 @@ export class SeriesDetailPage extends BaseComponent {
           transition: opacity 0.15s, color 0.15s;
         }
 
-        .season-header:hover .season-rescan-btn {
+        .season-header:hover .season-action-btn {
           opacity: 1;
         }
 
-        .season-rescan-btn:hover {
+        .season-action-btn:hover {
           color: var(--color-primary);
         }
 
@@ -895,12 +895,24 @@ export class SeriesDetailPage extends BaseComponent {
             </div>
           </div>
           <button
-            class="season-rescan-btn"
+            class="season-action-btn"
             onclick="event.stopPropagation(); this.closest('series-detail-page').rescanSeason(${season.seasonNumber})"
             title="Rescan ${seasonLabel} files on disk"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"></path>
+            </svg>
+          </button>
+          <button
+            class="season-action-btn"
+            onclick="event.stopPropagation(); this.closest('series-detail-page').organizeSeason(${season.seasonNumber})"
+            title="Organize ${seasonLabel} files"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
             </svg>
           </button>
         </div>
@@ -1092,6 +1104,16 @@ export class SeriesDetailPage extends BaseComponent {
     const id = this.seriesId.value;
     if (!id) return;
     this.rescanSeasonMutation.mutate({ seriesId: id, seasonNumber });
+  }
+
+  organizeSeason(seasonNumber: number): void {
+    const series = this.seriesQuery?.data.value;
+    if (!series) return;
+
+    const dialog = this.querySelector('episode-rename-dialog') as EpisodeRenameDialog | null;
+    if (dialog) {
+      dialog.open(series.id, series.title, seasonNumber);
+    }
   }
 
   searchEpisode(episodeId: number): void {

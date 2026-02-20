@@ -29,6 +29,7 @@ export class EpisodeRenameDialog extends BaseComponent {
   private isOpen = signal(false);
   private seriesId = signal<number | null>(null);
   private seriesTitle = signal('');
+  private seasonFilter = signal<number | null>(null);
   private previews = signal<RenamePreviewItem[]>([]);
   private isLoading = signal(false);
   private selectedIds = signal<Set<number>>(new Set());
@@ -64,9 +65,10 @@ export class EpisodeRenameDialog extends BaseComponent {
     this.watch(this.renameMutation.isLoading);
   }
 
-  async open(seriesId: number, seriesTitle: string): Promise<void> {
+  async open(seriesId: number, seriesTitle: string, seasonNumber?: number): Promise<void> {
     this.seriesId.set(seriesId);
     this.seriesTitle.set(seriesTitle);
+    this.seasonFilter.set(seasonNumber ?? null);
     this.selectedIds.set(new Set());
     this.isOpen.set(true);
     await this.loadPreview(seriesId);
@@ -81,9 +83,12 @@ export class EpisodeRenameDialog extends BaseComponent {
   private async loadPreview(seriesId: number): Promise<void> {
     this.isLoading.set(true);
     try {
-      const items = await http.get<RenamePreviewItem[]>('/rename', {
+      const allItems = await http.get<RenamePreviewItem[]>('/rename', {
         params: { seriesId },
       });
+      // Filter to target season when set
+      const sn = this.seasonFilter.value;
+      const items = sn !== null ? allItems.filter((i) => i.seasonNumber === sn) : allItems;
       this.previews.set(items);
       // Select all by default
       this.selectedIds.set(new Set(items.map((i) => i.episodeFileId)));
@@ -164,12 +169,14 @@ export class EpisodeRenameDialog extends BaseComponent {
     const selected = this.selectedIds.value;
     const isRenaming = this.renameMutation.isLoading.value;
     const title = this.seriesTitle.value;
+    const sn = this.seasonFilter.value;
+    const seasonSuffix = sn !== null ? (sn === 0 ? ' - Specials' : ` - Season ${sn}`) : '';
 
     return html`
       <div class="rename-backdrop">
         <div class="rename-dialog" role="dialog" aria-modal="true">
           <div class="rename-header">
-            <h2>Organize Files - ${escapeHtml(title)}</h2>
+            <h2>Organize Files - ${escapeHtml(title)}${seasonSuffix}</h2>
             <button class="close-btn" onclick="this.closest('episode-rename-dialog').close()" aria-label="Close">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="18" y1="6" x2="6" y2="18"></line>
