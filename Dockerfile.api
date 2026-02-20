@@ -15,8 +15,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Cargo files for dependency caching
-COPY Cargo.toml Cargo.lock ./
+# Copy Cargo files and build script for dependency caching
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY migration ./migration
 
 # Create a dummy main.rs to build dependencies first (cache layer)

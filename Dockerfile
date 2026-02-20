@@ -11,8 +11,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy manifests
-COPY Cargo.toml Cargo.lock ./
+# Copy manifests and build script
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY migration ./migration
 
 # Copy source code
