@@ -813,6 +813,412 @@ impl DownloadClient for SabnzbdClient {
 }
 
 // ============================================================================
+// NZBGet Client Implementation
+// ============================================================================
+
+/// NZBGet JSON-RPC API client
+/// Implements the NZBGet API
+/// https://nzbget.net/api
+pub struct NzbgetClient {
+    base_url: String,
+    username: String,
+    password: String,
+    http_client: Client,
+}
+
+impl NzbgetClient {
+    pub fn new(url: String, username: String, password: String) -> Self {
+        let http_client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
+
+        let base_url = url.trim_end_matches('/').to_string();
+
+        Self {
+            base_url,
+            username,
+            password,
+            http_client,
+        }
+    }
+
+    /// Make a JSON-RPC request to NZBGet
+    async fn rpc_call(
+        &self,
+        method: &str,
+        params: Vec<serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/jsonrpc", self.base_url);
+
+        let body = serde_json::json!({
+            "method": method,
+            "params": params,
+        });
+
+        let response = self
+            .http_client
+            .post(&url)
+            .basic_auth(&self.username, Some(&self.password))
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to connect to NZBGet")?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            anyhow::bail!("NZBGet authentication failed: invalid username or password");
+        }
+
+        if !response.status().is_success() {
+            anyhow::bail!("NZBGet API error: {}", response.status());
+        }
+
+        let resp_body: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse NZBGet response")?;
+
+        // Check for JSON-RPC error
+        if let Some(error) = resp_body.get("error") {
+            if !error.is_null() {
+                anyhow::bail!("NZBGet RPC error: {}", error);
+            }
+        }
+
+        Ok(resp_body
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null))
+    }
+}
+
+/// NZBGet group (download) info from listgroups
+#[derive(Debug, Deserialize)]
+#[allow(non_snake_case)]
+struct NzbgetGroup {
+    NZBID: i64,
+    NZBName: String,
+    #[serde(default)]
+    FileSizeMB: f64,
+    #[serde(default)]
+    RemainingSizeMB: f64,
+    Status: String,
+    #[serde(default)]
+    Category: String,
+    #[serde(default)]
+    DestDir: String,
+    #[serde(default)]
+    DownloadRate: i64,
+    #[serde(default)]
+    RemainingSec: i64,
+}
+
+impl NzbgetGroup {
+    fn to_download_status(&self) -> DownloadStatus {
+        let state = match self.Status.as_str() {
+            "QUEUED" => DownloadState::Queued,
+            "PAUSED" => DownloadState::Paused,
+            "DOWNLOADING" => DownloadState::Downloading,
+            "FETCHING" => DownloadState::Downloading,
+            s if s.starts_with("PP_") || s == "POST_PROCESSING" => DownloadState::Downloading,
+            "UNPACKING" => DownloadState::Downloading,
+            _ => DownloadState::Queued,
+        };
+
+        let size = (self.FileSizeMB * 1024.0 * 1024.0) as i64;
+        let size_left = (self.RemainingSizeMB * 1024.0 * 1024.0) as i64;
+        let progress = if size > 0 {
+            ((size - size_left) as f64 / size as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let eta = if self.RemainingSec > 0 {
+            Some(self.RemainingSec)
+        } else {
+            None
+        };
+
+        DownloadStatus {
+            id: self.NZBID.to_string(),
+            name: self.NZBName.clone(),
+            status: state,
+            size,
+            size_left,
+            progress,
+            download_speed: self.DownloadRate,
+            upload_speed: 0,
+            eta,
+            error_message: None,
+            output_path: if self.DestDir.is_empty() {
+                None
+            } else {
+                Some(self.DestDir.clone())
+            },
+            category: if self.Category.is_empty() {
+                None
+            } else {
+                Some(self.Category.clone())
+            },
+        }
+    }
+}
+
+/// NZBGet history item
+#[derive(Debug, Deserialize)]
+#[allow(non_snake_case)]
+struct NzbgetHistoryItem {
+    NZBID: i64,
+    Name: String,
+    #[serde(default)]
+    FileSizeMB: f64,
+    Status: String,
+    #[serde(default)]
+    Category: String,
+    #[serde(default)]
+    DestDir: String,
+}
+
+impl NzbgetHistoryItem {
+    fn to_download_status(&self) -> DownloadStatus {
+        let state = if self.Status.starts_with("SUCCESS") {
+            DownloadState::Completed
+        } else {
+            DownloadState::Failed
+        };
+
+        let size = (self.FileSizeMB * 1024.0 * 1024.0) as i64;
+
+        DownloadStatus {
+            id: self.NZBID.to_string(),
+            name: self.Name.clone(),
+            status: state,
+            size,
+            size_left: 0,
+            progress: 100.0,
+            download_speed: 0,
+            upload_speed: 0,
+            eta: None,
+            error_message: if state == DownloadState::Failed {
+                Some(format!("NZBGet status: {}", self.Status))
+            } else {
+                None
+            },
+            output_path: if self.DestDir.is_empty() {
+                None
+            } else {
+                Some(self.DestDir.clone())
+            },
+            category: if self.Category.is_empty() {
+                None
+            } else {
+                Some(self.Category.clone())
+            },
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl DownloadClient for NzbgetClient {
+    fn name(&self) -> &str {
+        "NZBGet"
+    }
+
+    fn protocol(&self) -> DownloadProtocol {
+        DownloadProtocol::Usenet
+    }
+
+    async fn test(&self) -> Result<()> {
+        self.get_version().await?;
+        Ok(())
+    }
+
+    async fn get_version(&self) -> Result<String> {
+        let result = self.rpc_call("version", vec![]).await?;
+        Ok(result.as_str().unwrap_or("unknown").to_string())
+    }
+
+    async fn add_from_url(&self, url: &str, options: DownloadOptions) -> Result<String> {
+        let category = options.category.unwrap_or_else(|| "tv-sonarr".to_string());
+
+        // NZBGet append params: (NZBFilename, NZBContent, Category, Priority, DupeKey, DupeScore, DupeMode, PPParameters)
+        // When NZBContent is empty string and NZBFilename is a URL, NZBGet downloads from the URL
+        let result = self
+            .rpc_call(
+                "append",
+                vec![
+                    serde_json::Value::String(url.to_string()), // NZBFilename (URL)
+                    serde_json::Value::String(String::new()), // NZBContent (empty = download from URL)
+                    serde_json::Value::String(category),      // Category
+                    serde_json::Value::Number(0.into()),      // Priority (0 = normal)
+                    serde_json::Value::Bool(false),           // AddToTop
+                    serde_json::Value::Bool(false),           // AddPaused
+                    serde_json::Value::String(String::new()), // DupeKey
+                    serde_json::Value::Number(0.into()),      // DupeScore
+                    serde_json::Value::String("SCORE".to_string()), // DupeMode
+                ],
+            )
+            .await?;
+
+        // append returns the NZBID (integer) on success, or 0 on failure
+        let nzb_id = result.as_i64().unwrap_or(0);
+        if nzb_id == 0 {
+            anyhow::bail!("NZBGet failed to add NZB from URL");
+        }
+
+        Ok(nzb_id.to_string())
+    }
+
+    async fn add_from_magnet(&self, _magnet: &str, _options: DownloadOptions) -> Result<String> {
+        anyhow::bail!("NZBGet does not support magnet links")
+    }
+
+    async fn add_from_file(
+        &self,
+        file_data: &[u8],
+        filename: &str,
+        options: DownloadOptions,
+    ) -> Result<String> {
+        use base64::{engine::general_purpose, Engine as _};
+
+        let category = options.category.unwrap_or_else(|| "tv-sonarr".to_string());
+        let encoded = general_purpose::STANDARD.encode(file_data);
+
+        let result = self
+            .rpc_call(
+                "append",
+                vec![
+                    serde_json::Value::String(filename.to_string()), // NZBFilename
+                    serde_json::Value::String(encoded),              // NZBContent (base64)
+                    serde_json::Value::String(category),             // Category
+                    serde_json::Value::Number(0.into()),             // Priority
+                    serde_json::Value::Bool(false),                  // AddToTop
+                    serde_json::Value::Bool(false),                  // AddPaused
+                    serde_json::Value::String(String::new()),        // DupeKey
+                    serde_json::Value::Number(0.into()),             // DupeScore
+                    serde_json::Value::String("SCORE".to_string()),  // DupeMode
+                ],
+            )
+            .await?;
+
+        let nzb_id = result.as_i64().unwrap_or(0);
+        if nzb_id == 0 {
+            anyhow::bail!("NZBGet failed to add NZB file");
+        }
+
+        Ok(nzb_id.to_string())
+    }
+
+    async fn get_downloads(&self) -> Result<Vec<DownloadStatus>> {
+        let mut downloads = Vec::new();
+
+        // Get active downloads from listgroups
+        let groups_result = self.rpc_call("listgroups", vec![]).await?;
+        if let Some(groups) = groups_result.as_array() {
+            for group in groups {
+                if let Ok(g) = serde_json::from_value::<NzbgetGroup>(group.clone()) {
+                    downloads.push(g.to_download_status());
+                }
+            }
+        }
+
+        // Get recently completed/failed from history (last 20)
+        let history_result = self
+            .rpc_call(
+                "history",
+                vec![
+                    serde_json::Value::Bool(false), // Hidden (false = not hidden only)
+                ],
+            )
+            .await?;
+        if let Some(items) = history_result.as_array() {
+            for (i, item) in items.iter().enumerate() {
+                if i >= 20 {
+                    break;
+                }
+                if let Ok(h) = serde_json::from_value::<NzbgetHistoryItem>(item.clone()) {
+                    downloads.push(h.to_download_status());
+                }
+            }
+        }
+
+        Ok(downloads)
+    }
+
+    async fn get_download(&self, id: &str) -> Result<Option<DownloadStatus>> {
+        let downloads = self.get_downloads().await?;
+        Ok(downloads.into_iter().find(|d| d.id == id))
+    }
+
+    async fn remove(&self, id: &str, delete_files: bool) -> Result<()> {
+        let nzb_id: i64 = id.parse().unwrap_or(0);
+        if nzb_id == 0 {
+            anyhow::bail!("Invalid NZBGet download ID: {}", id);
+        }
+
+        let command = if delete_files {
+            "GroupFinalDelete"
+        } else {
+            "GroupDelete"
+        };
+
+        // Try removing from queue first
+        let _ = self
+            .rpc_call(
+                "editqueue",
+                vec![
+                    serde_json::Value::String(command.to_string()),
+                    serde_json::Value::String(String::new()),
+                    serde_json::json!([nzb_id]),
+                ],
+            )
+            .await;
+
+        // Also try removing from history
+        let _ = self
+            .rpc_call(
+                "editqueue",
+                vec![
+                    serde_json::Value::String("HistoryFinalDelete".to_string()),
+                    serde_json::Value::String(String::new()),
+                    serde_json::json!([nzb_id]),
+                ],
+            )
+            .await;
+
+        Ok(())
+    }
+
+    async fn pause(&self, id: &str) -> Result<()> {
+        let nzb_id: i64 = id.parse().unwrap_or(0);
+        self.rpc_call(
+            "editqueue",
+            vec![
+                serde_json::Value::String("GroupPause".to_string()),
+                serde_json::Value::String(String::new()),
+                serde_json::json!([nzb_id]),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn resume(&self, id: &str) -> Result<()> {
+        let nzb_id: i64 = id.parse().unwrap_or(0);
+        self.rpc_call(
+            "editqueue",
+            vec![
+                serde_json::Value::String("GroupResume".to_string()),
+                serde_json::Value::String(String::new()),
+                serde_json::json!([nzb_id]),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+// ============================================================================
 // Download Client Factory
 // ============================================================================
 
@@ -888,6 +1294,36 @@ pub fn create_client_from_model(
             tracing::debug!("Creating SABnzbd client: url={}", url);
 
             Ok(Box::new(SabnzbdClient::new(url, api_key.to_string())))
+        }
+        "Nzbget" | "NZBGet" | "NzbGet" => {
+            let host = settings
+                .get("host")
+                .and_then(|v| v.as_str())
+                .unwrap_or("localhost");
+            let port = parse_port(settings.get("port"));
+            let use_ssl = settings
+                .get("useSsl")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let username = settings
+                .get("username")
+                .and_then(|v| v.as_str())
+                .unwrap_or("nzbget");
+            let password = settings
+                .get("password")
+                .and_then(|v| v.as_str())
+                .unwrap_or("tegbzn6789");
+
+            let protocol = if use_ssl { "https" } else { "http" };
+            let url = format!("{}://{}:{}", protocol, host, port);
+
+            tracing::debug!("Creating NZBGet client: url={}, username={}", url, username);
+
+            Ok(Box::new(NzbgetClient::new(
+                url,
+                username.to_string(),
+                password.to_string(),
+            )))
         }
         _ => {
             anyhow::bail!(
