@@ -1,7 +1,7 @@
 # pir9 Mental Model
 
 > Living document — updated as the codebase evolves.
-> **Version**: 0.36.1 | **Last updated**: 2026-02-16
+> **Version**: 0.37.2 | **Last updated**: 2026-02-16
 
 ## 1. What Is pir9?
 
@@ -143,6 +143,8 @@ async fn get_series(
 - **Duplicate prevention (v0.30.0)**: `RefreshMovies` pre-checks IMDB/TMDB conflicts before UPDATE — merges duplicates (transfers files, deletes duplicate) instead of hitting PostgreSQL unique constraint errors
 - **Status derivation (v0.30.0)**: When status==TBA and year>0, derives from year: past=Released, current=InCinemas, future=Announced
 - **Import dedup (v0.30.0)**: `get_by_path()` check before insert prevents duplicate movie records for same folder
+- **File-level dedup (v0.37.2)**: All 3 movie import paths (folder import, queue import, RescanMovie) check `movie_file_repo.get_by_movie_id()` before inserting file rows — prevents duplicate `movie_files` entries when re-importing
+- **Repository-level dupe defense (v0.37.1)**: `MovieRepository::update()` resolves tmdb_id AND imdb_id conflicts inline — marks conflicting movie as `[DUPE]` and clears its external ID, protecting ALL callers from unique constraint errors
 - **Bulk stats (v0.30.0)**: `list_movies` uses single `bulk_load_movie_sizes()` query instead of N+1 per-movie queries
 
 ### 6.3 Parser (`core/parser/`)
@@ -195,7 +197,7 @@ pub trait DownloadClient: Send + Sync {
 
 **ImportService** (`import.rs`): Processes completed downloads into the library. Handles single-file downloads AND multi-file season/multi-season packs. Per video file: parse filename → match to episode(s) → analyze media (FFmpeg) → compute file hash (BLAKE3) → rename via naming engine → move to series folder → create `EpisodeFileDbModel` + set `episode.has_file=true`. Returns `ImportResult { success, episode_file_ids, episode_ids, error_message }`.
 
-**History** (`history.rs`): `DownloadHistory` tracking with typed `HistoryEventType` enum: `Grabbed`, `DownloadFailed`, `DownloadFolderImported`, `DownloadIgnored`, `FileImported`, `FileDeleted`, `FileRenamed`. Persisted to `history` table via `HistoryRepository`.
+**History** (`history.rs`): `DownloadHistory` tracking with typed `HistoryEventType` enum: `Grabbed`, `DownloadFailed`, `DownloadFolderImported`, `DownloadIgnored`, `FileImported`, `FileDeleted`, `FileRenamed`. Persisted to `history` table via `HistoryRepository`. **v0.37.1**: `series_id` and `episode_id` are now `Option<i64>` (nullable), `movie_id: Option<i64>` added — supports both series and movie history entries without FK violations.
 
 ### 6.6 Indexers (`core/indexers/`)
 - **Structure**: `mod.rs`, `clients.rs`, `definitions.rs`, `rss.rs`, `search.rs`
@@ -267,8 +269,6 @@ Character-by-character template scanner (no regex). O(n) single-pass.
 - `jobs.rs` — JobTrackerService (timeout, retries)
 - `consumer.rs` — ScanResultConsumer (imports results from workers)
 - `registry.rs` — WorkerRegistryService (tracks online workers, heartbeats)
-
-**Video extensions**: `mkv, mp4, avi, wmv, m4v, ts, webm, mov`
 
 ### 6.11 Notifications (`core/notifications/`)
 - **Structure**: `mod.rs`, `providers.rs`, `service.rs`
@@ -385,7 +385,7 @@ For each release:
 
 **Two migration directories** (root `migrations/` has legacy names, `migrations/postgres/` is authoritative):
 
-`migrations/postgres/` (7 files — these are what SQLx runs):
+`migrations/postgres/` (9 files — these are what SQLx runs):
 1. `001_initial_schema.sql` — Core tables (series, episodes, files, profiles, clients, indexers, download_clients)
 2. `002_schema_sync.sql` — Schema alignment and sync fixes
 3. `003_additional_tables.sql` — Supplementary tables (IMDB cache, etc.)
@@ -393,6 +393,8 @@ For each release:
 5. `005_movies.sql` — Movie domain tables (movies, movie_files)
 6. `006_file_hash.sql` — `file_hash` column on episode_files and movie_files (BLAKE3)
 7. `007_fix_timestamp_types.sql` — Fix `TIMESTAMP` → `TIMESTAMPTZ` for DateTime<Utc> columns
+8. `008_queue_movie_tracking.sql` — Movie tracking in tracked_downloads + queue
+9. `009_history_nullable_episode.sql` — Make history.series_id/episode_id nullable, add movie_id FK
 
 **Critical**: Always use `TIMESTAMPTZ` for `DateTime<Utc>` columns. Migration 001 used `TIMESTAMP` (causes runtime decode errors with non-empty results).
 
@@ -526,10 +528,12 @@ WebSocket message → wsManager.on('series_refreshed')
 | `make dev-api` | `cargo build --release` |
 | `make dev-frontend` | `npm install && npm run build` |
 | `make watch-frontend` | Vite dev server with hot reload |
-| `make release` | Docker build + push to `reg.pir9.org:2443/pir9:latest` |
+| `make release` | Docker build + push to `nas.drew.red:2443/pir9:{version}` + `:latest` |
 | `make deploy` | Copy binary/frontend to running containers (no rebuild) |
 | `make test` | `cargo test` |
 | `make lint` | `cargo clippy -- -D warnings` + `npm run lint` |
+
+**Registry (v0.37.0)**: Images are tagged with both `:{version}` (from Cargo.toml) and `:latest`. Registry: `nas.drew.red:2443`.
 
 ### Distributed Architecture
 ```
@@ -600,3 +604,5 @@ WebSocket message → wsManager.on('series_refreshed')
 6. **pre-commit `pass_filenames: false`**: Checks ENTIRE project, not just staged files. Pre-existing debt blocks ALL commits.
 7. **Wanted API**: Always include series data with `titleSlug` — frontend crashes silently on `null.titleSlug`.
 8. **Docker `read_only: true`**: Incompatible with runtime `useradd` — bake user at build time.
+9. **Multiple import entry points**: Movies have 3 import paths (folder import, queue import, RescanMovie). Any guard (dupe check, quality check) must exist in ALL paths — easy to miss one.
+10. **History FK on episode_id=0**: Movie grabs have no episode. History `series_id`/`episode_id` are nullable (`Option<i64>`) since v0.37.1. Use `None` for movie-only history entries.
