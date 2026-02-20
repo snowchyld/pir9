@@ -28,8 +28,14 @@ impl DbRepository {
     }
 
     /// Search series by title
+    ///
+    /// Relevance ranking: exact match > starts-with > contains.
+    /// Within each tier, sorts by votes (popularity) then rating.
+    /// Excludes adult content from search results.
     pub async fn search_series(&self, query: &str, limit: u32) -> Result<Vec<ImdbSeries>> {
-        let search_pattern = format!("%{}%", query);
+        let exact_pattern = query.to_string();
+        let starts_pattern = format!("{}%", query);
+        let contains_pattern = format!("%{}%", query);
         let limit = limit.min(100) as i64;
 
         let rows = sqlx::query(
@@ -37,12 +43,22 @@ impl DbRepository {
             SELECT imdb_id, title, original_title, start_year, end_year,
                    runtime_minutes, genres, is_adult, title_type, rating, votes, last_synced_at
             FROM imdb_series
-            WHERE title ILIKE $1 OR original_title ILIKE $1
-            ORDER BY votes DESC NULLS LAST, rating DESC NULLS LAST
-            LIMIT $2
+            WHERE (title ILIKE $3 OR original_title ILIKE $3)
+              AND is_adult = false
+            ORDER BY
+                CASE
+                    WHEN title ILIKE $1 OR original_title ILIKE $1 THEN 0
+                    WHEN title ILIKE $2 OR original_title ILIKE $2 THEN 1
+                    ELSE 2
+                END,
+                votes DESC NULLS LAST,
+                rating DESC NULLS LAST
+            LIMIT $4
             "#,
         )
-        .bind(&search_pattern)
+        .bind(&exact_pattern)
+        .bind(&starts_pattern)
+        .bind(&contains_pattern)
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
@@ -146,8 +162,14 @@ impl DbRepository {
     }
 
     /// Search movies by title
+    ///
+    /// Relevance ranking: exact match > starts-with > contains.
+    /// Within each tier, sorts by votes (popularity) then rating.
+    /// Excludes adult content from search results.
     pub async fn search_movies(&self, query: &str, limit: u32) -> Result<Vec<ImdbMovie>> {
-        let search_pattern = format!("%{}%", query);
+        let exact_pattern = query.to_string();
+        let starts_pattern = format!("{}%", query);
+        let contains_pattern = format!("%{}%", query);
         let limit = limit.min(100) as i64;
 
         let rows = sqlx::query(
@@ -155,12 +177,22 @@ impl DbRepository {
             SELECT imdb_id, title, original_title, year,
                    runtime_minutes, genres, is_adult, rating, votes, last_synced_at
             FROM imdb_movies
-            WHERE title ILIKE $1 OR original_title ILIKE $1
-            ORDER BY votes DESC NULLS LAST, rating DESC NULLS LAST
-            LIMIT $2
+            WHERE (title ILIKE $3 OR original_title ILIKE $3)
+              AND is_adult = false
+            ORDER BY
+                CASE
+                    WHEN title ILIKE $1 OR original_title ILIKE $1 THEN 0
+                    WHEN title ILIKE $2 OR original_title ILIKE $2 THEN 1
+                    ELSE 2
+                END,
+                votes DESC NULLS LAST,
+                rating DESC NULLS LAST
+            LIMIT $4
             "#,
         )
-        .bind(&search_pattern)
+        .bind(&exact_pattern)
+        .bind(&starts_pattern)
+        .bind(&contains_pattern)
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
