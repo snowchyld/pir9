@@ -1,10 +1,10 @@
 [package]
 name = "pir9"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2021"
 rust-version = "1.93"
-authors = ["Pir9 Team"]
-description = "Pir9 - Smart PVR for TV and anime"
+authors = ["pir9 Team"]
+description = "pir9 - Smart PVR for TV and anime"
 license = "GPL-3.0"
 repository = "https://github.com/pir9/pir9"
 

@@ -33,9 +33,14 @@ async fn get_status(
     // Read OS pretty name from /etc/os-release (Linux), fall back to std::env::consts::OS
     let (os_name, os_version) = get_os_info();
 
+    let db_version = sqlx::query_scalar::<_, String>("SHOW server_version")
+        .fetch_one(state.db.pool())
+        .await
+        .unwrap_or_default();
+
     Json(SystemStatus {
-        app_name: "Pir9".to_string(),
-        instance_name: "Pir9".to_string(),
+        app_name: "pir9".to_string(),
+        instance_name: "pir9".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         build_time: chrono::Utc::now().to_rfc3339(),
         is_debug: cfg!(debug_assertions),
@@ -55,7 +60,7 @@ async fn get_status(
         branch: "develop".to_string(),
         authentication: "none".to_string(),
         database_type: db_type,
-        database_version: String::new(),
+        database_version: db_version,
         migration_version: 1,
         url_base: String::new(),
         runtime_version: env!("RUSTC_VERSION").to_string(),

@@ -122,9 +122,14 @@ pub async fn get_status(
         || std::env::var("DOCKER").is_ok();
     let (os_name, os_version) = get_os_info();
 
+    let db_version = sqlx::query_scalar::<_, String>("SHOW server_version")
+        .fetch_one(state.db.pool())
+        .await
+        .unwrap_or_default();
+
     Json(SystemResource {
-        app_name: "Pir9".to_string(),
-        instance_name: "Pir9".to_string(),
+        app_name: "pir9".to_string(),
+        instance_name: "pir9".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         build_time: Utc::now(),
         is_debug: cfg!(debug_assertions),
@@ -146,7 +151,7 @@ pub async fn get_status(
         branch: "develop".to_string(),
         authentication: "none".to_string(),
         database_type: db_type,
-        database_version: String::new(),
+        database_version: db_version,
         migration_version: 1,
         url_base: "".to_string(),
         runtime_version: env!("RUSTC_VERSION").to_string(),
