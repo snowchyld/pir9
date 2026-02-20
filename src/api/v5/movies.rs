@@ -263,6 +263,18 @@ async fn create_movie(
 
     tracing::info!("Created movie: id={}, title={}", id, options.title);
 
+    // Create the movie folder on disk
+    let movie_path = &db_movie.path;
+    if !movie_path.is_empty() {
+        let path = std::path::Path::new(movie_path);
+        if !path.exists() {
+            match tokio::fs::create_dir_all(path).await {
+                Ok(()) => tracing::info!("Created movie folder: {}", movie_path),
+                Err(e) => tracing::warn!("Failed to create movie folder {}: {}", movie_path, e),
+            }
+        }
+    }
+
     let created = repo
         .get_by_id(id)
         .await

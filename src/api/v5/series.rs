@@ -260,6 +260,18 @@ async fn create_series(
 
     tracing::info!("Created series: id={}, title={}", id, options.title);
 
+    // Create the series folder on disk
+    let series_path = &db_series.path;
+    if !series_path.is_empty() {
+        let path = std::path::Path::new(series_path);
+        if !path.exists() {
+            match tokio::fs::create_dir_all(path).await {
+                Ok(()) => tracing::info!("Created series folder: {}", series_path),
+                Err(e) => tracing::warn!("Failed to create series folder {}: {}", series_path, e),
+            }
+        }
+    }
+
     // Spawn background task to refresh series (fetch episodes) and rescan disk
     let db_clone = state.db.clone();
     let metadata_svc = state.metadata_service.clone();
