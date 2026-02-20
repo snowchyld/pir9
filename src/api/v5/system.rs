@@ -114,8 +114,13 @@ async fn get_running_tasks(
                 crate::core::messaging::ScanType::RescanPodcast => "Scan Podcasts".to_string(),
                 crate::core::messaging::ScanType::RescanMusic => "Scan Music".to_string(),
             };
+            let total = job.entity_ids.len();
             let detail = if job.results_received > 0 {
-                Some(format!("{} files found", job.results_received))
+                if total > 1 {
+                    Some(format!("{}/{} done", job.results_received, total))
+                } else {
+                    Some("Processing...".to_string())
+                }
             } else {
                 Some("Scanning...".to_string())
             };

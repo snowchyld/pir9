@@ -141,12 +141,14 @@ impl ScanResultConsumer {
         self.media_config = config;
     }
 
-    /// Get info about currently running scan jobs (for the UI)
+    /// Get info about currently running scan jobs (for the UI).
+    /// Also cleans up completed jobs to prevent unbounded HashMap growth.
     pub async fn get_running_jobs(&self) -> Vec<RunningJobInfo> {
-        let jobs = self.pending_jobs.read().await;
+        let mut jobs = self.pending_jobs.write().await;
+        // Clean up completed jobs
+        jobs.jobs.retain(|_, job| !job.completed);
         jobs.jobs
             .iter()
-            .filter(|(_, job)| !job.completed)
             .map(|(id, job)| RunningJobInfo {
                 job_id: id.clone(),
                 scan_type: job.scan_type,
@@ -1000,12 +1002,26 @@ impl ScanResultConsumer {
         .await;
     }
 
-    /// Mark a job result as received in the pending jobs tracker
+    /// Mark a job result as received in the pending jobs tracker.
+    /// Auto-completes the job when all expected results have arrived.
     async fn mark_job_result_received(&self, job_id: &str) {
         let mut jobs = self.pending_jobs.write().await;
         if let Some(job) = jobs.jobs.get_mut(job_id) {
             job.results_received += 1;
-            debug!("Job {} received result {}", job_id, job.results_received);
+            if !job.entity_ids.is_empty() && job.results_received >= job.entity_ids.len() {
+                job.completed = true;
+                info!(
+                    "Scan job {} completed ({}/{} results)",
+                    job_id, job.results_received, job.entity_ids.len()
+                );
+            } else {
+                debug!(
+                    "Job {} received result {}/{}",
+                    job_id,
+                    job.results_received,
+                    job.entity_ids.len()
+                );
+            }
         }
     }
 
