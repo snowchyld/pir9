@@ -1247,8 +1247,16 @@ impl ScanResultConsumer {
     }
 }
 
-/// Create a scan request message for series
-pub fn create_scan_request(series_ids: Vec<i64>, paths: Vec<String>) -> (String, Message) {
+/// Create a scan request message for series.
+///
+/// `known_files` maps file path → known DB metadata. The worker uses this to skip
+/// FFmpeg probe + BLAKE3 hash for files whose size hasn't changed. Pass an empty
+/// map for new imports where all files need enrichment.
+pub fn create_scan_request(
+    series_ids: Vec<i64>,
+    paths: Vec<String>,
+    known_files: HashMap<String, crate::core::messaging::KnownFileInfo>,
+) -> (String, Message) {
     let job_id = uuid::Uuid::new_v4().to_string();
 
     let message = Message::ScanRequest {
@@ -1256,13 +1264,21 @@ pub fn create_scan_request(series_ids: Vec<i64>, paths: Vec<String>) -> (String,
         scan_type: ScanType::RescanSeries,
         series_ids: series_ids.clone(),
         paths,
+        known_files,
     };
 
     (job_id, message)
 }
 
-/// Create a scan request message for movies
-pub fn create_movie_scan_request(movie_ids: Vec<i64>, paths: Vec<String>) -> (String, Message) {
+/// Create a scan request message for movies.
+///
+/// `known_files` maps file path → known DB metadata for skip-enrichment optimization.
+/// Pass an empty map for new imports.
+pub fn create_movie_scan_request(
+    movie_ids: Vec<i64>,
+    paths: Vec<String>,
+    known_files: HashMap<String, crate::core::messaging::KnownFileInfo>,
+) -> (String, Message) {
     let job_id = uuid::Uuid::new_v4().to_string();
 
     let message = Message::ScanRequest {
@@ -1270,6 +1286,7 @@ pub fn create_movie_scan_request(movie_ids: Vec<i64>, paths: Vec<String>) -> (St
         scan_type: ScanType::RescanMovie,
         series_ids: movie_ids.clone(), // reused field for movie IDs
         paths,
+        known_files,
     };
 
     (job_id, message)
@@ -1287,6 +1304,7 @@ pub fn create_podcast_scan_request(
         scan_type: ScanType::RescanPodcast,
         series_ids: podcast_ids,
         paths,
+        known_files: HashMap::new(),
     };
 
     (job_id, message)
@@ -1301,6 +1319,7 @@ pub fn create_music_scan_request(music_ids: Vec<i64>, paths: Vec<String>) -> (St
         scan_type: ScanType::RescanMusic,
         series_ids: music_ids,
         paths,
+        known_files: HashMap::new(),
     };
 
     (job_id, message)

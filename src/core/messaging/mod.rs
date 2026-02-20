@@ -5,6 +5,7 @@
 pub mod redis_bus;
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
 
@@ -28,6 +29,18 @@ pub enum ScanType {
     RescanPodcast,
     /// Placeholder for music library scanning (not yet implemented)
     RescanMusic,
+}
+
+/// Known file metadata sent from server to worker for skip-enrichment optimization.
+/// If a file's path and size match, the worker reuses the existing enrichment data
+/// instead of running expensive FFmpeg probe + BLAKE3 hash.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownFileInfo {
+    pub size: i64,
+    pub media_info: Option<String>,
+    pub quality: Option<String>,
+    pub file_hash: Option<String>,
 }
 
 // ============================================================================
@@ -278,6 +291,11 @@ pub enum Message {
         series_ids: Vec<i64>,
         /// Paths to scan (used by worker to know which paths it handles)
         paths: Vec<String>,
+        /// Known file data from DB (path → metadata) for skip-enrichment optimization.
+        /// Worker compares on-disk size against known size; if matched and enrichment
+        /// data exists, skips expensive FFmpeg probe + BLAKE3 hash.
+        #[serde(default)]
+        known_files: HashMap<String, KnownFileInfo>,
     },
     /// Result sent from worker back to server
     ScanResult {

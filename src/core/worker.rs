@@ -13,8 +13,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-use crate::core::messaging::{Message, ScannedFile, ScanType};
+use crate::core::messaging::{KnownFileInfo, Message, ScannedFile, ScanType};
 use crate::core::scanner;
+use std::collections::HashMap;
 
 /// Get a human-readable name for a message type (for logging)
 fn message_type_name(message: &Message) -> &'static str {
@@ -259,10 +260,11 @@ impl WorkerRunner {
                 scan_type,
                 series_ids,
                 paths,
+                known_files,
             } => {
                 info!(
-                    "Received scan request: job_id={}, type={:?}, series={:?}",
-                    job_id, scan_type, series_ids
+                    "Received scan request: job_id={}, type={:?}, series={:?}, known_files={}",
+                    job_id, scan_type, series_ids, known_files.len()
                 );
 
                 // Pair series_ids with paths (1:1 aligned), filter to paths we handle, own the data
@@ -348,7 +350,7 @@ impl WorkerRunner {
                     // Batch mode for non-download scans (RescanSeries, RescanMovie, etc.)
                     let relevant_refs: Vec<(i64, &String)> =
                         relevant.iter().map(|(id, p)| (*id, p)).collect();
-                    let result = self.execute_scan(job_id, scan_type, &relevant_refs).await;
+                    let result = self.execute_scan(job_id, scan_type, &relevant_refs, known_files).await;
                     for scan_result in result {
                         event_bus.publish(scan_result).await;
                     }
@@ -549,17 +551,22 @@ impl WorkerRunner {
     /// Each entry in `series_paths` is a `(series_id, path)` pair — the dispatcher
     /// keeps these aligned so the worker can tag each result with the correct series.
     /// For `RescanMovie`, series_id is actually movie_id (reused field).
+    ///
+    /// `known_files` contains DB metadata from the server. Files whose path+size match
+    /// a known entry skip FFmpeg probe + BLAKE3 hash — a massive speedup for unchanged libraries.
     async fn execute_scan(
         &self,
         job_id: &str,
         scan_type: &ScanType,
         series_paths: &[(i64, &String)],
+        known_files: &HashMap<String, KnownFileInfo>,
     ) -> Vec<Message> {
         let mut results = Vec::new();
         let mut total_files_found: u64 = 0;
 
         match scan_type {
             ScanType::RescanSeries => {
+                let mut skipped_count: usize = 0;
                 for &(series_id, path_str) in series_paths {
                     let path = PathBuf::from(path_str);
                     let media_type = infer_media_type(&path);
@@ -583,15 +590,31 @@ impl WorkerRunner {
                     info!("[scan][{}] Found {} video file(s) in {}", media_type, file_count, path_str);
 
                     // Enrich each file with FFmpeg probe + BLAKE3 hash (LOCAL disk = fast)
+                    // Skip files whose path+size match known DB records (unchanged files)
                     for (idx, file) in files.iter_mut().enumerate() {
+                        let path_key = file.path.to_string_lossy().to_string();
+                        if let Some(known) = known_files.get(&path_key) {
+                            if known.size == file.size && known.file_hash.is_some() {
+                                file.media_info = known.media_info.clone();
+                                file.quality = known.quality.clone();
+                                file.file_hash = known.file_hash.clone();
+                                info!(
+                                    "[skip] ({}/{}) {} — unchanged ({})",
+                                    idx + 1, file_count, file.filename, format_size(file.size as u64)
+                                );
+                                skipped_count += 1;
+                                continue;
+                            }
+                        }
                         enrich_scanned_file(file, (idx + 1, file_count)).await;
                     }
 
                     let elapsed = scan_start.elapsed();
                     total_files_found += file_count as u64;
                     info!(
-                        "[scan][{}] Complete — {} file(s) enriched in {:.1}s (id={})",
-                        media_type, file_count, elapsed.as_secs_f64(), series_id
+                        "[scan][{}] Complete — {} file(s) ({} skipped, {} enriched) in {:.1}s (id={})",
+                        media_type, file_count, skipped_count, file_count - skipped_count,
+                        elapsed.as_secs_f64(), series_id
                     );
 
                     results.push(Message::ScanResult {
@@ -622,6 +645,30 @@ impl WorkerRunner {
                     let scan_start = std::time::Instant::now();
                     info!("[scan][movie] Scanning {} (id={})", path_str, movie_id);
                     if let Some(mut file) = scanner::scan_movie_directory(&path) {
+                        // Check known_files for skip-enrichment
+                        let path_key = file.path.to_string_lossy().to_string();
+                        if let Some(known) = known_files.get(&path_key) {
+                            if known.size == file.size && known.file_hash.is_some() {
+                                file.media_info = known.media_info.clone();
+                                file.quality = known.quality.clone();
+                                file.file_hash = known.file_hash.clone();
+                                let elapsed = scan_start.elapsed();
+                                info!(
+                                    "[skip][movie] {} — unchanged ({}) in {:.1}s",
+                                    file.filename, format_size(file.size as u64), elapsed.as_secs_f64()
+                                );
+                                total_files_found += 1;
+                                results.push(Message::ScanResult {
+                                    job_id: job_id.to_string(),
+                                    series_id: movie_id,
+                                    worker_id: self.worker_id.clone(),
+                                    files_found: vec![file],
+                                    errors: vec![],
+                                });
+                                continue;
+                            }
+                        }
+
                         enrich_scanned_file(&mut file, (1, 1)).await;
                         total_files_found += 1;
                         let elapsed = scan_start.elapsed();

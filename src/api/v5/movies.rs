@@ -1443,6 +1443,7 @@ async fn import_movies(
                     crate::core::scanner::create_movie_scan_request(
                         vec![movie_id],
                         vec![full_path.clone()],
+                        std::collections::HashMap::new(),
                     );
                 if let Some(consumer) = state.scan_result_consumer.get() {
                     consumer

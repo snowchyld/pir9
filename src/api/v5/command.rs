@@ -1428,8 +1428,10 @@ async fn execute_rescan_series_distributed(
     db: &crate::core::datastore::Database,
     hybrid_event_bus: &crate::core::messaging::HybridEventBus,
 ) -> Result<String, String> {
-    use crate::core::datastore::repositories::SeriesRepository;
+    use crate::core::datastore::repositories::{EpisodeFileRepository, SeriesRepository};
+    use crate::core::messaging::KnownFileInfo;
     use crate::core::scanner::create_scan_request;
+    use std::collections::HashMap;
 
     tracing::info!(
         "RescanSeries: distributing scan for {} series to workers",
@@ -1437,16 +1439,36 @@ async fn execute_rescan_series_distributed(
     );
 
     let series_repo = SeriesRepository::new(db.clone());
+    let episode_file_repo = EpisodeFileRepository::new(db.clone());
 
     // Collect series paths for the scan request, keeping series_ids and paths aligned
     let mut valid_series_ids = Vec::new();
     let mut paths = Vec::new();
+    let mut known_files: HashMap<String, KnownFileInfo> = HashMap::new();
+
     for series_id in series_ids {
         match series_repo.get_by_id(*series_id).await {
             Ok(Some(series)) => {
                 valid_series_ids.push(series.id);
                 paths.push(series.path.clone());
                 tracing::debug!("Adding path for scan: {} ({})", series.title, series.path);
+
+                // Query existing episode files for this series to build known_files map
+                if let Ok(files) = episode_file_repo.get_by_series_id(series.id).await {
+                    for f in files {
+                        if f.file_hash.is_some() {
+                            known_files.insert(
+                                f.path.clone(),
+                                KnownFileInfo {
+                                    size: f.size,
+                                    media_info: f.media_info.clone(),
+                                    quality: Some(f.quality.clone()),
+                                    file_hash: f.file_hash.clone(),
+                                },
+                            );
+                        }
+                    }
+                }
             }
             _ => {
                 tracing::warn!("Series {} not found, skipping", series_id);
@@ -1458,14 +1480,17 @@ async fn execute_rescan_series_distributed(
         return Ok("No valid series paths to scan".to_string());
     }
 
+    let known_count = known_files.len();
+
     // Create and publish the scan request (series_ids and paths are 1:1 aligned)
-    let (job_id, message) = create_scan_request(valid_series_ids.clone(), paths.clone());
+    let (job_id, message) = create_scan_request(valid_series_ids.clone(), paths.clone(), known_files);
 
     tracing::info!(
-        "Publishing scan request: job_id={}, series={:?}, paths={}",
+        "Publishing scan request: job_id={}, series={:?}, paths={}, known_files={}",
         job_id,
         valid_series_ids,
-        paths.len()
+        paths.len(),
+        known_count
     );
 
     hybrid_event_bus.publish(message).await;
@@ -1628,6 +1653,7 @@ async fn execute_process_downloads_distributed(
             scan_type: ScanType::DownloadedEpisodesScan,
             series_ids: vec![0],
             paths: vec![output_path_str],
+            known_files: std::collections::HashMap::new(),
         };
 
         hybrid_bus.publish(message).await;
@@ -2113,9 +2139,26 @@ async fn execute_rescan_movie(
     // Prefer worker scanning when Redis is available
     if let Some(hybrid_bus) = hybrid_event_bus {
         if hybrid_bus.is_redis_enabled() {
+            // Build known_files map from existing movie file for skip-enrichment
+            let mut known_files = std::collections::HashMap::new();
+            if let Ok(Some(mf)) = file_repo.get_by_movie_id(movie_id).await {
+                if mf.file_hash.is_some() {
+                    known_files.insert(
+                        mf.path.clone(),
+                        crate::core::messaging::KnownFileInfo {
+                            size: mf.size,
+                            media_info: mf.media_info.clone(),
+                            quality: Some(mf.quality.clone()),
+                            file_hash: mf.file_hash.clone(),
+                        },
+                    );
+                }
+            }
+
             let (job_id, message) = crate::core::scanner::create_movie_scan_request(
                 vec![movie_id],
                 vec![movie.path.clone()],
+                known_files,
             );
             tracing::info!(
                 "RescanMovie: dispatching '{}' to worker (job_id={})",

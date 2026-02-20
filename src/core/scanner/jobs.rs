@@ -370,6 +370,7 @@ impl JobTrackerService {
             scan_type: job.scan_type.clone(),
             series_ids: job.series_ids.clone(),
             paths: job.paths.clone(),
+            known_files: std::collections::HashMap::new(),
         };
 
         self.event_bus.publish(message).await;

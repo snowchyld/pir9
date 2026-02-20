@@ -1280,6 +1280,7 @@ async fn import_queue_item(
                     crate::core::scanner::create_movie_scan_request(
                         vec![movie_id],
                         vec![output_path.clone()],
+                        std::collections::HashMap::new(),
                     );
                 if let Some(consumer) = state.scan_result_consumer.get() {
                     consumer
@@ -1535,6 +1536,7 @@ async fn import_queue_item(
                     scan_type: crate::core::messaging::ScanType::DownloadedEpisodesScan,
                     series_ids: vec![0],
                     paths: vec![output_path.clone()],
+                    known_files: std::collections::HashMap::new(),
                 };
                 hybrid_bus.publish(message).await;
 

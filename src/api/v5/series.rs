@@ -1844,6 +1844,7 @@ pub async fn auto_scan_series(
             let (job_id, message) = crate::core::scanner::create_scan_request(
                 vec![series_id],
                 vec![series.path.clone()],
+                std::collections::HashMap::new(),
             );
             if let Some(consumer) = scan_result_consumer {
                 consumer
