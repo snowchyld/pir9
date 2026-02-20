@@ -30,6 +30,7 @@ mod log;
 mod manualimport;
 mod mediacover;
 mod metadata;
+mod movie;
 mod notification;
 mod parse;
 mod qualitydefinition;
@@ -98,6 +99,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .nest("/importlist", importlist::routes()) // lowercase alias
         .nest("/notification", notification::routes())
         .nest("/metadata", metadata::routes())
+        // Movies (Radarr v3 compat)
+        .nest("/movie/lookup", movie::lookup_routes())
+        .nest("/movie", movie::routes())
         // System
         .nest("/system", system::routes())
         .nest("/system/backup", backup::routes())

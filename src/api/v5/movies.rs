@@ -708,6 +708,57 @@ async fn fetch_tmdb_movie_data(imdb_id: &str) -> Option<(i64, Vec<MovieImage>)> 
     Some((movie.id, images))
 }
 
+/// TMDB direct movie detail response (from `/3/movie/{id}`)
+#[derive(serde::Deserialize)]
+pub struct TmdbMovieDetail {
+    pub id: i64,
+    pub imdb_id: Option<String>,
+    pub title: Option<String>,
+    pub overview: Option<String>,
+    pub release_date: Option<String>,
+    pub runtime: Option<i32>,
+    pub poster_path: Option<String>,
+    pub backdrop_path: Option<String>,
+    pub genres: Option<Vec<TmdbGenre>>,
+    pub status: Option<String>,
+    pub vote_average: Option<f64>,
+    pub vote_count: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct TmdbGenre {
+    pub name: String,
+}
+
+/// Fetch full movie details from TMDB by TMDB ID.
+/// Calls `GET /3/movie/{tmdb_id}`. Returns None if API key absent or request fails.
+pub async fn fetch_tmdb_movie_by_id(tmdb_id: i64) -> Option<TmdbMovieDetail> {
+    static TMDB_API_KEY: once_cell::sync::Lazy<Option<String>> =
+        once_cell::sync::Lazy::new(|| std::env::var("PIR9_TMDB_API_KEY").ok());
+
+    let api_key = TMDB_API_KEY.as_deref()?;
+
+    let url = format!(
+        "https://api.themoviedb.org/3/movie/{}?api_key={}",
+        tmdb_id, api_key
+    );
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(&url)
+        .header("User-Agent", format!("pir9/{}", env!("CARGO_PKG_VERSION")))
+        .send()
+        .await
+        .ok()?;
+
+    if !resp.status().is_success() {
+        tracing::debug!("TMDB movie lookup returned {} for tmdb_id={}", resp.status(), tmdb_id);
+        return None;
+    }
+
+    resp.json().await.ok()
+}
+
 /// Fetch movie images and TMDB ID using a cascading strategy:
 /// 1. TMDB direct API (if PIR9_TMDB_API_KEY configured) — most reliable
 /// 2. Radarr metadata proxy — fallback
@@ -726,7 +777,7 @@ pub async fn fetch_movie_images_and_tmdb_id(imdb_id: &str) -> Option<(i64, Vec<M
     fetch_radarr_metadata(imdb_id).await
 }
 
-fn clean_title(title: &str) -> String {
+pub fn clean_title(title: &str) -> String {
     title
         .to_lowercase()
         .replace(|c: char| !c.is_alphanumeric() && c != ' ', " ")
@@ -735,7 +786,7 @@ fn clean_title(title: &str) -> String {
         .join(" ")
 }
 
-fn generate_slug(title: &str) -> String {
+pub fn generate_slug(title: &str) -> String {
     title
         .to_lowercase()
         .replace(|c: char| !c.is_alphanumeric() && c != ' ', "-")
@@ -780,7 +831,7 @@ pub struct CreateMovieRequest {
 }
 
 impl CreateMovieRequest {
-    fn validate(&self) -> Result<(), ApiError> {
+    pub fn validate(&self) -> Result<(), ApiError> {
         if self.tmdb_id == 0 && self.imdb_id.is_none() {
             return Err(ApiError::Validation(
                 "tmdbId or imdbId is required".to_string(),
@@ -797,7 +848,7 @@ impl CreateMovieRequest {
         Ok(())
     }
 
-    fn get_full_path(&self) -> String {
+    pub fn get_full_path(&self) -> String {
         if let Some(path) = &self.path {
             if !path.is_empty() {
                 return path.clone();
@@ -808,7 +859,7 @@ impl CreateMovieRequest {
         format!("{}/{}", root.trim_end_matches('/'), folder_name)
     }
 
-    fn get_root_folder_path(&self) -> String {
+    pub fn get_root_folder_path(&self) -> String {
         if let Some(root) = &self.root_folder_path {
             if !root.is_empty() {
                 return root.clone();
