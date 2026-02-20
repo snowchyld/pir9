@@ -465,30 +465,34 @@ pub async fn create_release(
                 let history_repo = HistoryRepository::new(state.db.clone());
                 let episode_id = episode_ids.first().copied().unwrap_or(0);
 
-                let history = HistoryDbModel {
-                    id: 0,
-                    series_id,
-                    episode_id,
-                    source_title: release.title.clone(),
-                    quality: serde_json::to_string(&release.quality).unwrap_or_default(),
-                    languages: serde_json::to_string(&release.languages).unwrap_or_default(),
-                    custom_formats: "[]".to_string(),
-                    custom_format_score: 0,
-                    quality_cutoff_not_met: false,
-                    date: Utc::now(),
-                    download_id: Some(format!("{}", tracked_id)),
-                    event_type: 1, // Grabbed
-                    data: serde_json::json!({
-                        "indexer": release.indexer,
-                        "releaseGroup": release.release_group,
-                        "size": release.size,
-                        "downloadClient": "auto",
-                    })
-                    .to_string(),
-                };
+                // Skip history for movie grabs (no valid episode_id)
+                if episode_id > 0 {
+                    let history = HistoryDbModel {
+                        id: 0,
+                        series_id: Some(series_id),
+                        episode_id: Some(episode_id),
+                        movie_id: None,
+                        source_title: release.title.clone(),
+                        quality: serde_json::to_string(&release.quality).unwrap_or_default(),
+                        languages: serde_json::to_string(&release.languages).unwrap_or_default(),
+                        custom_formats: "[]".to_string(),
+                        custom_format_score: 0,
+                        quality_cutoff_not_met: false,
+                        date: Utc::now(),
+                        download_id: Some(format!("{}", tracked_id)),
+                        event_type: 1, // Grabbed
+                        data: serde_json::json!({
+                            "indexer": release.indexer,
+                            "releaseGroup": release.release_group,
+                            "size": release.size,
+                            "downloadClient": "auto",
+                        })
+                        .to_string(),
+                    };
 
-                if let Err(e) = history_repo.insert(&history).await {
-                    tracing::warn!("Failed to record grab in history: {}", e);
+                    if let Err(e) = history_repo.insert(&history).await {
+                        tracing::warn!("Failed to record grab in history: {}", e);
+                    }
                 }
             }
 

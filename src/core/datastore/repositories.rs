@@ -375,15 +375,16 @@ impl HistoryRepository {
         let row: (i64,) = sqlx::query_as(
             r#"
             INSERT INTO history (
-                series_id, episode_id, source_title, quality, languages,
+                series_id, episode_id, movie_id, source_title, quality, languages,
                 custom_formats, custom_format_score, quality_cutoff_not_met,
                 date, download_id, event_type, data
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             RETURNING id
             "#,
         )
         .bind(history.series_id)
         .bind(history.episode_id)
+        .bind(history.movie_id)
         .bind(&history.source_title)
         .bind(&history.quality)
         .bind(&history.languages)
@@ -751,6 +752,59 @@ impl MovieRepository {
 
     pub async fn update(&self, movie: &super::models::MovieDbModel) -> Result<()> {
         let pool = self.db.pool();
+
+        // Resolve tmdb_id conflicts: mark conflicting movie as [DUPE]
+        if movie.tmdb_id > 0 {
+            if let Some(existing) = self.get_by_tmdb_id(movie.tmdb_id).await? {
+                if existing.id != movie.id {
+                    tracing::warn!(
+                        "Movie update: tmdb_id {} conflicts with movie id={} '{}', marking as duplicate",
+                        movie.tmdb_id, existing.id, existing.title
+                    );
+                    let dupe_title = if existing.title.starts_with("[DUPE] ") {
+                        existing.title.clone()
+                    } else {
+                        format!("[DUPE] {}", existing.title)
+                    };
+                    let _ = sqlx::query(
+                        "UPDATE movies SET tmdb_id = 0, title = $1, clean_title = $2 WHERE id = $3",
+                    )
+                    .bind(&dupe_title)
+                    .bind(&dupe_title.to_lowercase().replace(' ', ""))
+                    .bind(existing.id)
+                    .execute(pool)
+                    .await;
+                }
+            }
+        }
+
+        // Resolve imdb_id conflicts: mark conflicting movie as [DUPE]
+        if let Some(ref imdb_id) = movie.imdb_id {
+            if !imdb_id.is_empty() {
+                if let Some(existing) = self.get_by_imdb_id(imdb_id).await? {
+                    if existing.id != movie.id {
+                        tracing::warn!(
+                            "Movie update: imdb_id {} conflicts with movie id={} '{}', marking as duplicate",
+                            imdb_id, existing.id, existing.title
+                        );
+                        let dupe_title = if existing.title.starts_with("[DUPE] ") {
+                            existing.title.clone()
+                        } else {
+                            format!("[DUPE] {}", existing.title)
+                        };
+                        let _ = sqlx::query(
+                            "UPDATE movies SET imdb_id = NULL, title = $1, clean_title = $2 WHERE id = $3",
+                        )
+                        .bind(&dupe_title)
+                        .bind(&dupe_title.to_lowercase().replace(' ', ""))
+                        .bind(existing.id)
+                        .execute(pool)
+                        .await;
+                    }
+                }
+            }
+        }
+
         sqlx::query(
             r#"
             UPDATE movies SET

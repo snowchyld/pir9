@@ -796,9 +796,10 @@ impl ImportService {
 
         for episode_id in episode_ids {
             let history = HistoryDbModel {
-                id: 0, // Will be set by insert
-                series_id,
-                episode_id: *episode_id,
+                id: 0,
+                series_id: Some(series_id),
+                episode_id: Some(*episode_id),
+                movie_id: None,
                 source_title: source_title.to_string(),
                 quality: serde_json::to_string(quality).unwrap_or_default(),
                 languages: "[]".to_string(),

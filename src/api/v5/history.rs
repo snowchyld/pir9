@@ -215,8 +215,8 @@ fn db_to_resource(model: &HistoryDbModel) -> HistoryResource {
 
     HistoryResource {
         id: model.id,
-        episode_id: model.episode_id,
-        series_id: model.series_id,
+        episode_id: model.episode_id.unwrap_or(0),
+        series_id: model.series_id.unwrap_or(0),
         series_title_slug: None,
         source_title: model.source_title.clone(),
         languages,

@@ -270,8 +270,9 @@ pub struct TagDbModel {
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HistoryDbModel {
     pub id: i64,
-    pub series_id: i64,
-    pub episode_id: i64,
+    pub series_id: Option<i64>,
+    pub episode_id: Option<i64>,
+    pub movie_id: Option<i64>,
     pub source_title: String,
     pub quality: String,        // JSON serialized
     pub languages: String,      // JSON serialized

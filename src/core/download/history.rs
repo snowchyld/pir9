@@ -88,8 +88,9 @@ impl HistoryService {
         for &episode_id in &episode_ids {
             let model = HistoryDbModel {
                 id: 0,
-                series_id,
-                episode_id,
+                series_id: Some(series_id),
+                episode_id: Some(episode_id),
+                movie_id: None,
                 source_title: release.title.clone(),
                 quality: quality_json.clone(),
                 languages: languages_json.clone(),
@@ -120,8 +121,9 @@ impl HistoryService {
         for &episode_id in &episode_ids {
             let model = HistoryDbModel {
                 id: 0,
-                series_id,
-                episode_id,
+                series_id: Some(series_id),
+                episode_id: Some(episode_id),
+                movie_id: None,
                 source_title: String::new(),
                 quality: "{}".to_string(),
                 languages: "[]".to_string(),
@@ -155,8 +157,9 @@ impl HistoryService {
         for &episode_id in &episode_ids {
             let model = HistoryDbModel {
                 id: 0,
-                series_id,
-                episode_id,
+                series_id: Some(series_id),
+                episode_id: Some(episode_id),
+                movie_id: None,
                 source_title: String::new(),
                 quality: "{}".to_string(),
                 languages: "[]".to_string(),
