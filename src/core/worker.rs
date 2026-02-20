@@ -580,6 +580,36 @@ impl WorkerRunner {
                     }
                 }
             }
+            ScanType::RescanPodcast => {
+                for &(podcast_id, path_str) in series_paths {
+                    info!(
+                        "[scan][podcast] Podcast scanning not yet implemented (id={}, path={})",
+                        podcast_id, path_str
+                    );
+                    results.push(Message::ScanResult {
+                        job_id: job_id.to_string(),
+                        series_id: podcast_id,
+                        worker_id: self.worker_id.clone(),
+                        files_found: vec![],
+                        errors: vec!["Podcast scanning not yet implemented".to_string()],
+                    });
+                }
+            }
+            ScanType::RescanMusic => {
+                for &(music_id, path_str) in series_paths {
+                    info!(
+                        "[scan][music] Music scanning not yet implemented (id={}, path={})",
+                        music_id, path_str
+                    );
+                    results.push(Message::ScanResult {
+                        job_id: job_id.to_string(),
+                        series_id: music_id,
+                        worker_id: self.worker_id.clone(),
+                        files_found: vec![],
+                        errors: vec!["Music scanning not yet implemented".to_string()],
+                    });
+                }
+            }
             ScanType::DownloadedEpisodesScan => {
                 for &(series_id, path_str) in series_paths {
                     let path = PathBuf::from(path_str);

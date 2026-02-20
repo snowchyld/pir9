@@ -24,6 +24,10 @@ pub enum ScanType {
     DownloadedEpisodesScan,
     /// Rescan movie directories for video files
     RescanMovie,
+    /// Placeholder for podcast library scanning (not yet implemented)
+    RescanPodcast,
+    /// Placeholder for music library scanning (not yet implemented)
+    RescanMusic,
 }
 
 // ============================================================================

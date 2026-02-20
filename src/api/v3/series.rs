@@ -471,13 +471,20 @@ async fn add_series(
     // Spawn background refresh (fetch episodes + metadata from Skyhook/IMDB)
     let db_clone = state.db.clone();
     let metadata_svc = state.metadata_service.clone();
+    let hybrid_bus = state.hybrid_event_bus.clone();
+    let consumer = state.scan_result_consumer.get().cloned();
     let title_clone = body.title.clone();
     tokio::spawn(async move {
         tracing::info!("Auto-refreshing new series: {} (id={})", title_clone, id);
         if let Err(e) = crate::api::v5::series::auto_refresh_series(id, &db_clone, &metadata_svc).await {
             tracing::error!("Failed to auto-refresh series {}: {}", id, e);
         }
-        if let Err(e) = crate::api::v5::series::auto_scan_series(id, &db_clone).await {
+        if let Err(e) = crate::api::v5::series::auto_scan_series(
+            id,
+            &db_clone,
+            hybrid_bus.as_ref(),
+            consumer.as_ref(),
+        ).await {
             tracing::error!("Failed to auto-scan series {}: {}", id, e);
         }
     });

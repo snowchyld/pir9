@@ -1435,62 +1435,96 @@ async fn import_movies(
             }
         };
 
-        // Scan folder for video file
-        if let Some(mut movie_file) = scan_movie_folder(&full_path, movie_id) {
-            // Check if this file is already tracked (prevent duplicate imports)
-            if let Ok(existing_files) = file_repo.get_by_movie_id(movie_id).await {
-                if existing_files.iter().any(|f| f.path == movie_file.path) {
-                    tracing::info!(
-                        "Movie import: file already tracked for movie {}: {}",
-                        movie_id, movie_file.path
+        // Scan folder for video file — dispatch to worker when Redis is available,
+        // otherwise fall back to local FFmpeg probe + BLAKE3 hash over NFS.
+        let dispatched_to_worker = if let Some(ref hybrid_bus) = state.hybrid_event_bus {
+            if hybrid_bus.is_redis_enabled() {
+                let (job_id, message) =
+                    crate::core::scanner::create_movie_scan_request(
+                        vec![movie_id],
+                        vec![full_path.clone()],
                     );
-                    if let Ok(Some(created)) = repo.get_by_id(movie_id).await {
-                        let mut response = MovieResponse::from(created);
-                        enrich_movie_response(&mut response, &state.db).await;
-                        results.push(response);
+                if let Some(consumer) = state.scan_result_consumer.get() {
+                    consumer
+                        .register_job(
+                            &job_id,
+                            crate::core::messaging::ScanType::RescanMovie,
+                            vec![movie_id],
+                        )
+                        .await;
+                }
+                hybrid_bus.publish(message).await;
+                tracing::info!(
+                    "Movie import: dispatched '{}' to worker (job_id={})",
+                    title,
+                    job_id
+                );
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if !dispatched_to_worker {
+            // Local fallback: scan + probe + hash over NFS (slow)
+            if let Some(mut movie_file) = scan_movie_folder(&full_path, movie_id) {
+                // Check if this file is already tracked (prevent duplicate imports)
+                if let Ok(existing_files) = file_repo.get_by_movie_id(movie_id).await {
+                    if existing_files.iter().any(|f| f.path == movie_file.path) {
+                        tracing::info!(
+                            "Movie import: file already tracked for movie {}: {}",
+                            movie_id, movie_file.path
+                        );
+                        if let Ok(Some(created)) = repo.get_by_id(movie_id).await {
+                            let mut response = MovieResponse::from(created);
+                            enrich_movie_response(&mut response, &state.db).await;
+                            results.push(response);
+                        }
+                        continue;
                     }
-                    continue;
                 }
-            }
 
-            let file_path = std::path::Path::new(&movie_file.path);
+                let file_path = std::path::Path::new(&movie_file.path);
 
-            // Real media analysis via FFmpeg probe
-            let media_info_result = MediaAnalyzer::analyze(file_path).await;
-            movie_file.media_info = media_info_result
-                .as_ref()
-                .ok()
-                .and_then(|info| serde_json::to_string(info).ok());
+                // Real media analysis via FFmpeg probe
+                let media_info_result = MediaAnalyzer::analyze(file_path).await;
+                movie_file.media_info = media_info_result
+                    .as_ref()
+                    .ok()
+                    .and_then(|info| serde_json::to_string(info).ok());
 
-            // Derive quality from actual resolution (not filename)
-            if let Ok(ref info) = media_info_result {
-                let quality = derive_quality_from_media(info, &movie_file.path);
-                movie_file.quality =
-                    serde_json::to_string(&quality).unwrap_or_else(|_| movie_file.quality.clone());
-            }
-
-            // BLAKE3 file hash
-            movie_file.file_hash = compute_file_hash(file_path).await.ok();
-
-            match file_repo.insert(&movie_file).await {
-                Ok(file_id) => {
-                    // Update movie with file info
-                    let pool = state.db.pool();
-                    let _ = sqlx::query(
-                        "UPDATE movies SET has_file = true, movie_file_id = $1 WHERE id = $2",
-                    )
-                    .bind(file_id)
-                    .bind(movie_id)
-                    .execute(pool)
-                    .await;
-                    tracing::info!(
-                        "Found video file for movie {}: {}",
-                        movie_id,
-                        movie_file.path
-                    );
+                // Derive quality from actual resolution (not filename)
+                if let Ok(ref info) = media_info_result {
+                    let quality = derive_quality_from_media(info, &movie_file.path);
+                    movie_file.quality = serde_json::to_string(&quality)
+                        .unwrap_or_else(|_| movie_file.quality.clone());
                 }
-                Err(e) => {
-                    tracing::error!("Failed to insert movie file for {}: {}", movie_id, e);
+
+                // BLAKE3 file hash
+                movie_file.file_hash = compute_file_hash(file_path).await.ok();
+
+                match file_repo.insert(&movie_file).await {
+                    Ok(file_id) => {
+                        // Update movie with file info
+                        let pool = state.db.pool();
+                        let _ = sqlx::query(
+                            "UPDATE movies SET has_file = true, movie_file_id = $1 WHERE id = $2",
+                        )
+                        .bind(file_id)
+                        .bind(movie_id)
+                        .execute(pool)
+                        .await;
+                        tracing::info!(
+                            "Found video file for movie {}: {}",
+                            movie_id,
+                            movie_file.path
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to insert movie file for {}: {}", movie_id, e);
+                    }
                 }
             }
         }

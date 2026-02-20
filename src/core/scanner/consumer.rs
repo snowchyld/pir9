@@ -195,6 +195,14 @@ impl ScanResultConsumer {
                                     )
                                     .await;
                                 }
+                                Some(ScanType::RescanPodcast) => {
+                                    info!("Received podcast scan result for job {} — not yet implemented", job_id);
+                                    self.mark_job_result_received(&job_id).await;
+                                }
+                                Some(ScanType::RescanMusic) => {
+                                    info!("Received music scan result for job {} — not yet implemented", job_id);
+                                    self.mark_job_result_received(&job_id).await;
+                                }
                                 _ => {
                                     self.handle_scan_result(
                                         &job_id,
@@ -1115,6 +1123,37 @@ pub fn create_movie_scan_request(movie_ids: Vec<i64>, paths: Vec<String>) -> (St
         job_id: job_id.clone(),
         scan_type: ScanType::RescanMovie,
         series_ids: movie_ids.clone(), // reused field for movie IDs
+        paths,
+    };
+
+    (job_id, message)
+}
+
+/// Create a scan request for podcast libraries (stub — not yet implemented)
+pub fn create_podcast_scan_request(
+    podcast_ids: Vec<i64>,
+    paths: Vec<String>,
+) -> (String, Message) {
+    let job_id = uuid::Uuid::new_v4().to_string();
+
+    let message = Message::ScanRequest {
+        job_id: job_id.clone(),
+        scan_type: ScanType::RescanPodcast,
+        series_ids: podcast_ids,
+        paths,
+    };
+
+    (job_id, message)
+}
+
+/// Create a scan request for music libraries (stub — not yet implemented)
+pub fn create_music_scan_request(music_ids: Vec<i64>, paths: Vec<String>) -> (String, Message) {
+    let job_id = uuid::Uuid::new_v4().to_string();
+
+    let message = Message::ScanRequest {
+        job_id: job_id.clone(),
+        scan_type: ScanType::RescanMusic,
+        series_ids: music_ids,
         paths,
     };
 

@@ -19,7 +19,8 @@ use crate::core::messaging::ScannedFile;
 use crate::core::parser::normalize_title;
 
 pub use consumer::{
-    create_movie_scan_request, create_scan_request, DownloadImportInfo, ScanResultConsumer,
+    create_movie_scan_request, create_music_scan_request, create_podcast_scan_request,
+    create_scan_request, DownloadImportInfo, ScanResultConsumer,
 };
 pub use jobs::JobTrackerService;
 pub use registry::WorkerRegistryService;

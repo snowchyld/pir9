@@ -1267,6 +1267,40 @@ async fn import_queue_item(
 
     // Movie import: if this download is matched to a movie, use the movie import flow
     if let Some(movie_id) = tracked_movie_id {
+        // Dispatch to worker when Redis is available (fast local disk access)
+        if let Some(ref hybrid_bus) = state.hybrid_event_bus {
+            if hybrid_bus.is_redis_enabled() {
+                let movie_repo = MovieRepository::new(state.db.clone());
+                let movie_title = match movie_repo.get_by_id(movie_id).await {
+                    Ok(Some(m)) => m.title,
+                    _ => title.clone(),
+                };
+
+                let (job_id, message) =
+                    crate::core::scanner::create_movie_scan_request(
+                        vec![movie_id],
+                        vec![output_path.clone()],
+                    );
+                if let Some(consumer) = state.scan_result_consumer.get() {
+                    consumer
+                        .register_job(
+                            &job_id,
+                            crate::core::messaging::ScanType::RescanMovie,
+                            vec![movie_id],
+                        )
+                        .await;
+                }
+                hybrid_bus.publish(message).await;
+                tracing::info!(
+                    "Queue movie import: dispatched '{}' to worker (job_id={})",
+                    movie_title,
+                    job_id
+                );
+                return Json(QueueActionResponse { success: true });
+            }
+        }
+
+        // Local fallback: scan + probe + hash over NFS
         let movie_repo = MovieRepository::new(state.db.clone());
         let movie_file_repo = MovieFileRepository::new(state.db.clone());
 

@@ -275,6 +275,8 @@ async fn create_series(
     // Spawn background task to refresh series (fetch episodes) and rescan disk
     let db_clone = state.db.clone();
     let metadata_svc = state.metadata_service.clone();
+    let hybrid_bus = state.hybrid_event_bus.clone();
+    let consumer = state.scan_result_consumer.get().cloned();
     let series_id = id;
     let series_title = options.title.clone();
     tokio::spawn(async move {
@@ -290,7 +292,14 @@ async fn create_series(
         }
 
         // Trigger disk scan to find existing files
-        if let Err(e) = auto_scan_series(series_id, &db_clone).await {
+        if let Err(e) = auto_scan_series(
+            series_id,
+            &db_clone,
+            hybrid_bus.as_ref(),
+            consumer.as_ref(),
+        )
+        .await
+        {
             tracing::error!("Failed to auto-scan series {}: {}", series_id, e);
         }
     });
@@ -475,6 +484,8 @@ async fn import_series(
                     // Queue auto-refresh for this series
                     let db_clone = state.db.clone();
                     let metadata_svc = state.metadata_service.clone();
+                    let hybrid_bus = state.hybrid_event_bus.clone();
+                    let consumer = state.scan_result_consumer.get().cloned();
                     let series_title = options.title.clone();
                     tokio::spawn(async move {
                         tracing::info!(
@@ -485,7 +496,14 @@ async fn import_series(
                         if let Err(e) = auto_refresh_series(id, &db_clone, &metadata_svc).await {
                             tracing::error!("Failed to auto-refresh series {}: {}", id, e);
                         }
-                        if let Err(e) = auto_scan_series(id, &db_clone).await {
+                        if let Err(e) = auto_scan_series(
+                            id,
+                            &db_clone,
+                            hybrid_bus.as_ref(),
+                            consumer.as_ref(),
+                        )
+                        .await
+                        {
                             tracing::error!("Failed to auto-scan series {}: {}", id, e);
                         }
                     });
@@ -1744,10 +1762,16 @@ pub async fn auto_refresh_series(
     Ok(())
 }
 
-/// Auto-scan a series: scan disk for existing episode files
+/// Auto-scan a series: scan disk for existing episode files.
+///
+/// When a Redis-backed event bus and scan result consumer are provided,
+/// dispatches the scan to the NAS worker for fast local-disk I/O.
+/// Falls back to local scanning over NFS when worker infra is unavailable.
 pub async fn auto_scan_series(
     series_id: i64,
     db: &crate::core::datastore::Database,
+    hybrid_event_bus: Option<&crate::core::messaging::HybridEventBus>,
+    scan_result_consumer: Option<&Arc<crate::core::scanner::ScanResultConsumer>>,
 ) -> Result<(), String> {
     use crate::core::datastore::repositories::{
         EpisodeFileRepository, EpisodeRepository, SeriesRepository,
@@ -1767,6 +1791,32 @@ pub async fn auto_scan_series(
     if !series_path.exists() {
         tracing::info!("Series path does not exist yet: {}", series.path);
         return Ok(());
+    }
+
+    // Dispatch to worker when Redis is available
+    if let Some(hybrid_bus) = hybrid_event_bus {
+        if hybrid_bus.is_redis_enabled() {
+            let (job_id, message) = crate::core::scanner::create_scan_request(
+                vec![series_id],
+                vec![series.path.clone()],
+            );
+            if let Some(consumer) = scan_result_consumer {
+                consumer
+                    .register_job(
+                        &job_id,
+                        crate::core::messaging::ScanType::RescanSeries,
+                        vec![series_id],
+                    )
+                    .await;
+            }
+            hybrid_bus.publish(message).await;
+            tracing::info!(
+                "Auto-scan: dispatched '{}' to worker (job_id={})",
+                series.title,
+                job_id
+            );
+            return Ok(());
+        }
     }
 
     tracing::info!("Scanning disk for {}: {}", series.title, series.path);
