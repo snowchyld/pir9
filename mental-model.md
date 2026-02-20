@@ -1,7 +1,7 @@
 # pir9 Mental Model
 
 > Living document — updated as the codebase evolves.
-> **Version**: 0.30.0 | **Last updated**: 2026-02-15
+> **Version**: 0.31.1 | **Last updated**: 2026-02-16
 
 ## 1. What Is pir9?
 
@@ -428,8 +428,9 @@ frontend/src/
 │   ├── primitives/            # 16 UI components (button, input, dialog, table, badge, etc.)
 │   ├── layout/                # 5 layout components (sidebar, header, outlet, toast, modal)
 │   └── release-search-modal.ts
-└── features/                  # ~45 page components
-    ├── series/                # index, detail, edit dialog, match dialog
+└── features/                  # ~46 page components
+    ├── dashboard/             # dashboard page (system overview)
+    ├── series/                # index (network-grouped), detail, edit dialog, match dialog
     ├── movies/                # index, detail
     ├── add-series/            # add, import
     ├── add-movie/             # add, import
@@ -458,7 +459,10 @@ WebSocket message → wsManager.on('series_refreshed')
 - **Theming**: CSS custom properties, dark theme default
 - **Colors**: Primary blue (#5d9cec), protocol colors (torrent=#00853d, usenet=#17b1d9)
 
-### Frontend Patterns (v0.30.0)
+### Frontend Patterns (v0.31.0)
+- **Dashboard at `/`**: Quick stats, health cards, disk space bars, active downloads, system info — reuses existing query factories for cache sharing
+- **Series at `/series`**: Network grouping with collapsible headers, sorted alphabetically, "Unknown Network" at bottom
+- **Queue tabs**: Content-type filter tabs (All/Shows/Movies/Anime) with count badges, quality column shows real API data
 - **Slug routing**: Movie and series detail pages use `titleSlug` in URLs, do slug→ID lookup on mount via list query
 - **Column sorting**: Movies table headers are clickable — `handleColumnSort()` toggles direction or changes sort key, uses `safeHtml()` for SVG sort icons
 - **Rating display**: `formatRating()` prefers `ratings.value` over `imdbRating` field

@@ -60,9 +60,11 @@ pub async fn get_root_folders(
         .await
         .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folders: {}", e)))?;
 
-    let folders: Vec<RootFolderResource> = db_folders
-        .into_iter()
-        .map(|f| {
+    // Scan each root folder in spawn_blocking to avoid blocking the async
+    // runtime on NFS/network filesystem I/O
+    let mut tasks = Vec::new();
+    for f in db_folders {
+        tasks.push(tokio::task::spawn_blocking(move || {
             let (accessible, free_space) = check_path_accessible(&f.path);
             RootFolderResource {
                 id: f.id as i32,
@@ -74,8 +76,16 @@ pub async fn get_root_folders(
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or_default(),
             }
-        })
-        .collect();
+        }));
+    }
+
+    let mut folders = Vec::new();
+    for task in tasks {
+        match task.await {
+            Ok(resource) => folders.push(resource),
+            Err(e) => tracing::warn!("Root folder scan task failed: {}", e),
+        }
+    }
 
     Ok(Json(folders))
 }
@@ -93,18 +103,23 @@ pub async fn get_root_folder(
         .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folder: {}", e)))?
         .ok_or(RootFolderError::NotFound)?;
 
-    let (accessible, free_space) = check_path_accessible(&folder.path);
+    let resource = tokio::task::spawn_blocking(move || {
+        let (accessible, free_space) = check_path_accessible(&folder.path);
+        RootFolderResource {
+            id: folder.id as i32,
+            path: folder.path,
+            accessible,
+            free_space,
+            unmapped_folders: folder
+                .unmapped_folders
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
+        }
+    })
+    .await
+    .map_err(|e| RootFolderError::Internal(format!("Scan task failed: {}", e)))?;
 
-    Ok(Json(RootFolderResource {
-        id: folder.id as i32,
-        path: folder.path,
-        accessible,
-        free_space,
-        unmapped_folders: folder
-            .unmapped_folders
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default(),
-    }))
+    Ok(Json(resource))
 }
 
 /// POST /api/v3/rootfolder
@@ -113,18 +128,22 @@ pub async fn create_root_folder(
     Json(body): Json<CreateRootFolderRequest>,
 ) -> Result<Json<RootFolderResource>, RootFolderError> {
     // Validate path
-    let path = body.path.trim();
+    let path = body.path.trim().to_string();
     if path.is_empty() {
         return Err(RootFolderError::Validation("Path is required".to_string()));
     }
 
-    // Check if path exists
-    let (accessible, free_space) = check_path_accessible(path);
+    // Check if path exists (spawn_blocking for NFS safety)
+    let path_check = path.clone();
+    let (accessible, free_space) =
+        tokio::task::spawn_blocking(move || check_path_accessible(&path_check))
+            .await
+            .map_err(|e| RootFolderError::Internal(format!("Check task failed: {}", e)))?;
 
     // Insert into database
     let repo = RootFolderRepository::new(state.db.clone());
     let id = repo
-        .insert(path)
+        .insert(&path)
         .await
         .map_err(|e| RootFolderError::Internal(format!("Failed to create root folder: {}", e)))?;
 
@@ -132,7 +151,7 @@ pub async fn create_root_folder(
 
     Ok(Json(RootFolderResource {
         id: id as i32,
-        path: path.to_string(),
+        path,
         accessible,
         free_space,
         unmapped_folders: body.unmapped_folders.unwrap_or_default(),

@@ -63,13 +63,17 @@ pub async fn get_root_folders(
     let movie_paths = get_movie_paths(&state.db).await.unwrap_or_default();
     let mut mapped_paths = series_paths;
     mapped_paths.extend(movie_paths);
+    let mapped_paths = Arc::new(mapped_paths);
 
-    let folders: Vec<RootFolderResource> = db_folders
-        .into_iter()
-        .map(|f| {
+    // Scan each root folder in spawn_blocking to avoid blocking the async
+    // runtime on NFS/network filesystem I/O
+    let mut tasks = Vec::new();
+    for f in db_folders {
+        let mapped = mapped_paths.clone();
+        tasks.push(tokio::task::spawn_blocking(move || {
             let (accessible, free_space) = check_path_accessible(&f.path);
             let unmapped_folders = if accessible {
-                scan_unmapped_folders(&f.path, &mapped_paths)
+                scan_unmapped_folders(&f.path, &mapped)
             } else {
                 vec![]
             };
@@ -80,8 +84,16 @@ pub async fn get_root_folders(
                 free_space,
                 unmapped_folders,
             }
-        })
-        .collect();
+        }));
+    }
+
+    let mut folders = Vec::new();
+    for task in tasks {
+        match task.await {
+            Ok(resource) => folders.push(resource),
+            Err(e) => tracing::warn!("Root folder scan task failed: {}", e),
+        }
+    }
 
     Ok(Json(folders))
 }
@@ -104,20 +116,25 @@ pub async fn get_root_folder(
     let mut mapped_paths = series_paths;
     mapped_paths.extend(movie_paths);
 
-    let (accessible, free_space) = check_path_accessible(&folder.path);
-    let unmapped_folders = if accessible {
-        scan_unmapped_folders(&folder.path, &mapped_paths)
-    } else {
-        vec![]
-    };
+    let resource = tokio::task::spawn_blocking(move || {
+        let (accessible, free_space) = check_path_accessible(&folder.path);
+        let unmapped_folders = if accessible {
+            scan_unmapped_folders(&folder.path, &mapped_paths)
+        } else {
+            vec![]
+        };
+        RootFolderResource {
+            id: folder.id as i32,
+            path: folder.path,
+            accessible,
+            free_space,
+            unmapped_folders,
+        }
+    })
+    .await
+    .map_err(|e| RootFolderError::Internal(format!("Scan task failed: {}", e)))?;
 
-    Ok(Json(RootFolderResource {
-        id: folder.id as i32,
-        path: folder.path,
-        accessible,
-        free_space,
-        unmapped_folders,
-    }))
+    Ok(Json(resource))
 }
 
 pub async fn create_root_folder(
@@ -125,13 +142,17 @@ pub async fn create_root_folder(
     Json(body): Json<CreateRootFolderRequest>,
 ) -> Result<Json<RootFolderResource>, RootFolderError> {
     // Validate path
-    let path = body.path.trim();
+    let path = body.path.trim().to_string();
     if path.is_empty() {
         return Err(RootFolderError::Validation("Path is required".to_string()));
     }
 
-    // Check if path exists
-    let (accessible, free_space) = check_path_accessible(path);
+    // Check if path exists (spawn_blocking for NFS safety)
+    let path_check = path.clone();
+    let (accessible, free_space) =
+        tokio::task::spawn_blocking(move || check_path_accessible(&path_check))
+            .await
+            .map_err(|e| RootFolderError::Internal(format!("Check task failed: {}", e)))?;
 
     if !accessible {
         return Err(RootFolderError::Validation(format!(
@@ -143,7 +164,7 @@ pub async fn create_root_folder(
     // Insert into database
     let repo = RootFolderRepository::new(state.db.clone());
     let id = repo
-        .insert(path)
+        .insert(&path)
         .await
         .map_err(|e| RootFolderError::Internal(format!("Failed to create root folder: {}", e)))?;
 
@@ -154,11 +175,15 @@ pub async fn create_root_folder(
     let movie_paths = get_movie_paths(&state.db).await.unwrap_or_default();
     let mut mapped_paths = series_paths;
     mapped_paths.extend(movie_paths);
-    let unmapped_folders = scan_unmapped_folders(path, &mapped_paths);
+    let path_scan = path.clone();
+    let unmapped_folders =
+        tokio::task::spawn_blocking(move || scan_unmapped_folders(&path_scan, &mapped_paths))
+            .await
+            .unwrap_or_default();
 
     Ok(Json(RootFolderResource {
         id: id as i32,
-        path: path.to_string(),
+        path,
         accessible,
         free_space,
         unmapped_folders,
