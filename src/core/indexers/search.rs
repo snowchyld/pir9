@@ -1,0 +1,220 @@
+//! Indexer search functionality
+
+use anyhow::{Context, Result};
+
+use super::clients::{create_client_from_model, SearchQuery};
+use super::{ReleaseInfo, SearchCriteria};
+use crate::core::datastore::models::IndexerDbModel;
+
+/// Search service for indexers
+pub struct IndexerSearchService {
+    indexers: Vec<IndexerDbModel>,
+}
+
+impl IndexerSearchService {
+    pub fn new(indexers: Vec<IndexerDbModel>) -> Self {
+        Self { indexers }
+    }
+
+    /// Search for episodes across all enabled indexers
+    pub async fn search(&self, criteria: &SearchCriteria) -> Result<Vec<ReleaseInfo>> {
+        let mut all_releases = Vec::new();
+
+        for indexer in &self.indexers {
+            if !indexer.enable_automatic_search {
+                continue;
+            }
+
+            match self.search_indexer(indexer, criteria).await {
+                Ok(releases) => {
+                    tracing::debug!(
+                        "Indexer {} returned {} releases",
+                        indexer.name,
+                        releases.len()
+                    );
+                    all_releases.extend(releases);
+                }
+                Err(e) => {
+                    tracing::warn!("Indexer {} search failed: {}", indexer.name, e);
+                }
+            }
+        }
+
+        // Sort by quality and other criteria
+        all_releases.sort_by(|a, b| {
+            b.quality.quality.weight().cmp(&a.quality.quality.weight())
+        });
+
+        Ok(all_releases)
+    }
+
+    /// Search a specific indexer
+    pub async fn search_indexer(
+        &self,
+        indexer: &IndexerDbModel,
+        criteria: &SearchCriteria,
+    ) -> Result<Vec<ReleaseInfo>> {
+        let client = create_client_from_model(indexer)
+            .context("Failed to create indexer client")?;
+
+        // Sanitize series title for search (remove special characters)
+        let search_term = sanitize_title_for_search(&criteria.series_title);
+
+        // Build search query from criteria
+        // Use series title as the primary search term (works with all indexers)
+        // Also include TVDB ID for indexers that support it
+        let query = SearchQuery {
+            query: Some(search_term.clone()),
+            tvdb_id: Some(criteria.series_id),
+            season: criteria.season_number,
+            episode: criteria.episode_numbers.first().copied(),
+            limit: Some(100),
+            categories: vec![5000], // TV parent category - indexers will search subcategories
+            ..Default::default()
+        };
+
+        tracing::info!(
+            "Searching indexer {} for Term: [{}] | TVDbId: [{}] | S{:02}E{:02}",
+            indexer.name,
+            search_term,
+            criteria.series_id,
+            criteria.season_number.unwrap_or(0),
+            criteria.episode_numbers.first().copied().unwrap_or(0)
+        );
+
+        let mut releases = client.search(&query).await?;
+
+        // Set the indexer ID on all releases
+        for release in &mut releases {
+            release.indexer_id = indexer.id;
+            release.indexer = indexer.name.clone();
+        }
+
+        Ok(releases)
+    }
+
+    /// Interactive search with more results
+    pub async fn interactive_search(&self, criteria: &SearchCriteria) -> Result<Vec<ReleaseInfo>> {
+        let mut all_releases = Vec::new();
+
+        for indexer in &self.indexers {
+            if !indexer.enable_interactive_search {
+                continue;
+            }
+
+            match self.search_indexer(indexer, criteria).await {
+                Ok(releases) => {
+                    tracing::debug!(
+                        "Indexer {} returned {} releases for interactive search",
+                        indexer.name,
+                        releases.len()
+                    );
+                    all_releases.extend(releases);
+                }
+                Err(e) => {
+                    tracing::warn!("Indexer {} search failed: {}", indexer.name, e);
+                }
+            }
+        }
+
+        // Sort by quality
+        all_releases.sort_by(|a, b| {
+            b.quality.quality.weight().cmp(&a.quality.quality.weight())
+        });
+
+        Ok(all_releases)
+    }
+
+    /// Search by series name and title
+    pub async fn search_by_query(
+        &self,
+        series_title: &str,
+        season: Option<i32>,
+        episode: Option<i32>,
+    ) -> Result<Vec<ReleaseInfo>> {
+        let mut all_releases = Vec::new();
+
+        for indexer in &self.indexers {
+            if !indexer.enable_automatic_search && !indexer.enable_interactive_search {
+                continue;
+            }
+
+            match create_client_from_model(indexer) {
+                Ok(client) => {
+                    let query = SearchQuery {
+                        query: Some(series_title.to_string()),
+                        season,
+                        episode,
+                        limit: Some(100),
+                        categories: get_tv_categories(indexer.protocol),
+                        ..Default::default()
+                    };
+
+                    match client.search(&query).await {
+                        Ok(mut releases) => {
+                            for release in &mut releases {
+                                release.indexer_id = indexer.id;
+                                release.indexer = indexer.name.clone();
+                            }
+                            all_releases.extend(releases);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Indexer {} search failed: {}", indexer.name, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create client for {}: {}", indexer.name, e);
+                }
+            }
+        }
+
+        // Sort by quality
+        all_releases.sort_by(|a, b| {
+            b.quality.quality.weight().cmp(&a.quality.quality.weight())
+        });
+
+        Ok(all_releases)
+    }
+}
+
+/// Sanitize title for search queries
+/// Removes special characters that can break indexer searches
+fn sanitize_title_for_search(title: &str) -> String {
+    // Remove special characters that indexers often can't handle
+    // Keep alphanumeric, spaces, and common punctuation
+    let sanitized: String = title
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' || c == '-' || c == '\'' {
+                c
+            } else {
+                ' '  // Replace special chars with space
+            }
+        })
+        .collect();
+
+    // Collapse multiple spaces into one
+    let mut result = String::new();
+    let mut last_was_space = false;
+    for c in sanitized.chars() {
+        if c == ' ' {
+            if !last_was_space {
+                result.push(c);
+            }
+            last_was_space = true;
+        } else {
+            result.push(c);
+            last_was_space = false;
+        }
+    }
+
+    result.trim().to_string()
+}
+
+/// Get TV categories based on protocol
+fn get_tv_categories(protocol: i32) -> Vec<i32> {
+    // Standard Newznab TV categories
+    // 5000: TV, 5010: WEB-DL, 5020: Foreign, 5030: SD, 5040: HD, 5045: UHD, 5050: Other, 5060: Sport, 5070: Anime, 5080: Documentary
+    vec![5000, 5010, 5020, 5030, 5040, 5045, 5050, 5060, 5070, 5080]
+}
