@@ -69,6 +69,7 @@ services:
       - RUST_LOG=info,pir9=debug
       - PIR9_PORT=8989
       - PIR9_BIND=0.0.0.0
+      - PIR9_DB_TYPE=postgres
       - PIR9_DB_CONNECTION=postgresql://${POSTGRES_USER:-pir9}:${POSTGRES_PASSWORD:-pir9}@postgres:5432/${POSTGRES_DB:-pir9}
       - PIR9_IMDB_SERVICE_URL=http://imdb:8990
       - PIR9_IMDB_ENABLED=${PIR9_IMDB_ENABLED:-true}

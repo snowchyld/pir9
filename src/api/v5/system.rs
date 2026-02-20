@@ -30,6 +30,9 @@ async fn get_status(
     let is_docker = std::path::Path::new("/.dockerenv").exists()
         || std::env::var("DOCKER").is_ok();
 
+    // Read OS pretty name from /etc/os-release (Linux), fall back to std::env::consts::OS
+    let (os_name, os_version) = get_os_info();
+
     Json(SystemStatus {
         app_name: "Pir9".to_string(),
         instance_name: "Pir9".to_string(),
@@ -41,8 +44,8 @@ async fn get_status(
         is_user_interactive: false,
         startup_path: std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
         app_data: "./config".to_string(),
-        os_name: std::env::consts::OS.to_string(),
-        os_version: "".to_string(),
+        os_name,
+        os_version,
         is_net_core: false,
         is_docker,
         is_linux: cfg!(target_os = "linux"),
@@ -55,7 +58,7 @@ async fn get_status(
         database_version: String::new(),
         migration_version: 1,
         url_base: String::new(),
-        runtime_version: "Rust".to_string(),
+        runtime_version: env!("RUSTC_VERSION").to_string(),
         runtime_name: "Rust".to_string(),
         start_time: chrono::Utc::now().to_rfc3339(),
         package_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -245,4 +248,25 @@ pub struct UpdateActionResponse {
 #[serde(rename_all = "camelCase")]
 pub struct SystemActionResponse {
     pub success: bool,
+}
+
+/// Read OS name and version from /etc/os-release (Linux) or fall back to consts
+fn get_os_info() -> (String, String) {
+    if let Ok(content) = std::fs::read_to_string("/etc/os-release") {
+        let mut name = None;
+        let mut version = None;
+        for line in content.lines() {
+            if let Some(val) = line.strip_prefix("PRETTY_NAME=") {
+                name = Some(val.trim_matches('"').to_string());
+            } else if let Some(val) = line.strip_prefix("VERSION_ID=") {
+                version = Some(val.trim_matches('"').to_string());
+            }
+        }
+        (
+            name.unwrap_or_else(|| std::env::consts::OS.to_string()),
+            version.unwrap_or_default(),
+        )
+    } else {
+        (std::env::consts::OS.to_string(), String::new())
+    }
 }

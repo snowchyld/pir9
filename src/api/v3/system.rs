@@ -120,6 +120,7 @@ pub async fn get_status(
     let db_type = state.config.database.database_type.clone();
     let is_docker = std::path::Path::new("/.dockerenv").exists()
         || std::env::var("DOCKER").is_ok();
+    let (os_name, os_version) = get_os_info();
 
     Json(SystemResource {
         app_name: "Pir9".to_string(),
@@ -134,8 +135,8 @@ pub async fn get_status(
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default(),
         app_data: "./config".to_string(),
-        os_name: std::env::consts::OS.to_string(),
-        os_version: "".to_string(),
+        os_name,
+        os_version,
         is_net_core: false,
         is_linux: cfg!(target_os = "linux"),
         is_osx: cfg!(target_os = "macos"),
@@ -148,13 +149,34 @@ pub async fn get_status(
         database_version: String::new(),
         migration_version: 1,
         url_base: "".to_string(),
-        runtime_version: "Rust".to_string(),
+        runtime_version: env!("RUSTC_VERSION").to_string(),
         runtime_name: "Rust".to_string(),
         start_time: Utc::now(),
         package_version: env!("CARGO_PKG_VERSION").to_string(),
         package_author: "pir9".to_string(),
         package_update_mechanism: "builtIn".to_string(),
     })
+}
+
+/// Read OS name and version from /etc/os-release (Linux) or fall back to consts
+fn get_os_info() -> (String, String) {
+    if let Ok(content) = std::fs::read_to_string("/etc/os-release") {
+        let mut name = None;
+        let mut version = None;
+        for line in content.lines() {
+            if let Some(val) = line.strip_prefix("PRETTY_NAME=") {
+                name = Some(val.trim_matches('"').to_string());
+            } else if let Some(val) = line.strip_prefix("VERSION_ID=") {
+                version = Some(val.trim_matches('"').to_string());
+            }
+        }
+        (
+            name.unwrap_or_else(|| std::env::consts::OS.to_string()),
+            version.unwrap_or_default(),
+        )
+    } else {
+        (std::env::consts::OS.to_string(), String::new())
+    }
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
