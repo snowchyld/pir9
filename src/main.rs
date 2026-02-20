@@ -259,7 +259,9 @@ fn create_router(state: Arc<AppState>) -> Router {
         // WebSocket endpoint for real-time updates
         .route("/ws", get(web::websocket_handler))
 
-        // MediaCover routes - serve/proxy series artwork (must be before static files)
+        // MediaCover routes - serve/proxy artwork (must be before static files)
+        // Movie route must come first: literal "Movies" matches before {series_id} capture
+        .route("/MediaCover/Movies/{movie_id}/{filename}", get(movie_media_cover_handler))
         .route("/MediaCover/{series_id}/{filename}", get(media_cover_handler))
 
         // Static files (frontend) with SPA fallback
@@ -426,6 +428,143 @@ async fn media_cover_handler(
     };
 
     // Cache the image for future requests (fire and forget)
+    let cache_dir_clone = cache_dir.clone();
+    let cache_path_clone = cache_path.clone();
+    let image_data_clone = image_data.clone();
+    tokio::spawn(async move {
+        if tokio::fs::create_dir_all(&cache_dir_clone).await.is_ok() {
+            let _ = tokio::fs::write(&cache_path_clone, &image_data_clone).await;
+        }
+    });
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "max-age=86400")],
+        image_data,
+    ).into_response()
+}
+
+/// Handler for /MediaCover/Movies/:movie_id/:filename
+/// Fetches movie images from TMDB and caches them locally
+async fn movie_media_cover_handler(
+    State(state): State<Arc<AppState>>,
+    Path((movie_id, filename)): Path<(i64, String)>,
+) -> impl IntoResponse {
+    use crate::core::datastore::repositories::MovieRepository;
+
+    let cover_type = filename
+        .split('-')
+        .next()
+        .unwrap_or(&filename)
+        .split('.')
+        .next()
+        .unwrap_or("poster");
+
+    tracing::debug!(
+        "Movie MediaCover request: movie_id={}, filename={}, cover_type={}",
+        movie_id, filename, cover_type
+    );
+
+    let content_type = if filename.ends_with(".jpg") || filename.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if filename.ends_with(".png") {
+        "image/png"
+    } else {
+        "image/jpeg"
+    };
+
+    // Check local cache first
+    let cache_dir = format!("cache/MediaCover/Movies/{}", movie_id);
+    let cache_path = format!("{}/{}", cache_dir, filename);
+
+    if let Ok(data) = tokio::fs::read(&cache_path).await {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "max-age=86400")],
+            data,
+        ).into_response();
+    }
+
+    // Try fallback sizes
+    let fallback_sizes = ["500", "250", "1000"];
+    let extension = if filename.ends_with(".png") { "png" } else { "jpg" };
+
+    for size in fallback_sizes {
+        let fallback_path = format!("{}/{}-{}.{}", cache_dir, cover_type, size, extension);
+        if let Ok(data) = tokio::fs::read(&fallback_path).await {
+            return (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "max-age=86400")],
+                data,
+            ).into_response();
+        }
+    }
+
+    // No cache hit — look up movie in DB to get imdb_id and stored images
+    let repo = MovieRepository::new(state.db.clone());
+    let movie = match repo.get_by_id(movie_id).await {
+        Ok(Some(m)) => m,
+        _ => {
+            return (StatusCode::NOT_FOUND, "Movie not found").into_response();
+        }
+    };
+
+    // Check if images JSON has a remote_url for this cover type
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StoredImage {
+        cover_type: String,
+        #[serde(default)]
+        remote_url: Option<String>,
+    }
+
+    let stored_images: Vec<StoredImage> = serde_json::from_str(&movie.images).unwrap_or_default();
+    let stored_url = stored_images.into_iter()
+        .find(|img| img.cover_type.eq_ignore_ascii_case(cover_type))
+        .and_then(|img| img.remote_url);
+
+    // Resolve the image URL: use stored remote_url, or fall back to live TMDB lookup
+    let image_url = if let Some(url) = stored_url {
+        Some(url)
+    } else if let Some(ref imdb_id) = movie.imdb_id {
+        match state.tmdb_client.find_movie_by_imdb_id(imdb_id).await {
+            Ok(Some(tmdb)) => {
+                match cover_type {
+                    "poster" => tmdb.poster_url,
+                    "fanart" | "backdrop" => tmdb.fanart_url,
+                    _ => tmdb.poster_url,
+                }
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    let image_url = match image_url {
+        Some(url) => url,
+        None => {
+            return (StatusCode::NOT_FOUND, "No image available for this movie").into_response();
+        }
+    };
+
+    // Fetch the image from TMDB CDN
+    let client = reqwest::Client::new();
+    let image_response = match client.get(&image_url).send().await {
+        Ok(r) if r.status().is_success() => r,
+        _ => {
+            return (StatusCode::NOT_FOUND, "Failed to fetch image").into_response();
+        }
+    };
+
+    let image_data = match image_response.bytes().await {
+        Ok(b) => b.to_vec(),
+        Err(_) => {
+            return (StatusCode::NOT_FOUND, "Failed to read image data").into_response();
+        }
+    };
+
+    // Cache locally (fire and forget)
     let cache_dir_clone = cache_dir.clone();
     let cache_path_clone = cache_path.clone();
     let image_data_clone = image_data.clone();

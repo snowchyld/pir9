@@ -17,5 +17,6 @@ pub mod profiles;
 pub mod queue;
 pub mod scanner;
 pub mod scheduler;
+pub mod tmdb;
 pub mod tv;
 pub mod worker;

@@ -142,7 +142,18 @@ async fn create_movie(
 
     let genres_json = serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string());
     let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
-    let images_json = serde_json::to_string(&options.images).unwrap_or_else(|_| "[]".to_string());
+
+    // Use images from request; if empty, try to fetch from TMDB
+    let images = if options.images.is_empty() {
+        if let Some(ref imdb_id) = options.imdb_id {
+            fetch_tmdb_images(&state.tmdb_client, imdb_id).await
+        } else {
+            vec![]
+        }
+    } else {
+        options.images.clone()
+    };
+    let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
 
     let db_movie = MovieDbModel {
         id: 0,
@@ -267,7 +278,7 @@ async fn delete_movie(
     Ok(())
 }
 
-/// Lookup movies from pir9-imdb service
+/// Lookup movies from pir9-imdb service, enriched with TMDB images
 async fn lookup_movie(
     State(state): State<Arc<AppState>>,
     Query(query): Query<LookupQuery>,
@@ -275,29 +286,90 @@ async fn lookup_movie(
     let results = state.imdb_client.search_movies(&query.term, 25).await
         .map_err(|e| ApiError::Internal(format!("Failed to search movies: {}", e)))?;
 
-    let lookup_results: Vec<MovieLookupResult> = results.into_iter().map(|m| {
-        MovieLookupResult {
-            imdb_id: Some(m.imdb_id),
-            title: m.title.clone(),
-            sort_title: m.title.to_lowercase(),
-            overview: None,
-            year: m.year.unwrap_or(0),
-            studio: None,
-            images: vec![],
-            ratings: Ratings {
-                votes: m.votes.unwrap_or(0),
-                value: m.rating.unwrap_or(0.0),
-            },
-            genres: m.genres,
-            runtime: m.runtime_minutes.unwrap_or(0),
-            certification: None,
-        }
+    // Fire TMDB lookups in parallel for all results that have IMDB IDs
+    let tmdb_futures: Vec<_> = results.iter().map(|m| {
+        let tmdb = state.tmdb_client.clone();
+        let imdb_id = m.imdb_id.clone();
+        async move { tmdb.find_movie_by_imdb_id(&imdb_id).await.ok().flatten() }
     }).collect();
+
+    let tmdb_results = futures::future::join_all(tmdb_futures).await;
+
+    let lookup_results: Vec<MovieLookupResult> = results.into_iter()
+        .zip(tmdb_results)
+        .map(|(m, tmdb)| {
+            let (tmdb_id, images) = if let Some(ref t) = tmdb {
+                let mut imgs = Vec::new();
+                if let Some(ref poster) = t.poster_url {
+                    imgs.push(MovieImage {
+                        cover_type: "poster".to_string(),
+                        url: poster.clone(),
+                        remote_url: Some(poster.clone()),
+                    });
+                }
+                if let Some(ref fanart) = t.fanart_url {
+                    imgs.push(MovieImage {
+                        cover_type: "fanart".to_string(),
+                        url: fanart.clone(),
+                        remote_url: Some(fanart.clone()),
+                    });
+                }
+                (t.tmdb_id, imgs)
+            } else {
+                (0, vec![])
+            };
+
+            MovieLookupResult {
+                tmdb_id,
+                imdb_id: Some(m.imdb_id),
+                title: m.title.clone(),
+                sort_title: m.title.to_lowercase(),
+                overview: None,
+                year: m.year.unwrap_or(0),
+                studio: None,
+                images,
+                ratings: Ratings {
+                    votes: m.votes.unwrap_or(0),
+                    value: m.rating.unwrap_or(0.0),
+                },
+                genres: m.genres,
+                runtime: m.runtime_minutes.unwrap_or(0),
+                certification: None,
+            }
+        }).collect();
 
     Ok(Json(lookup_results))
 }
 
 // Helper functions
+
+/// Fetch poster and fanart images from TMDB for a given IMDB ID
+async fn fetch_tmdb_images(
+    tmdb_client: &crate::core::tmdb::TmdbClient,
+    imdb_id: &str,
+) -> Vec<MovieImage> {
+    match tmdb_client.find_movie_by_imdb_id(imdb_id).await {
+        Ok(Some(tmdb)) => {
+            let mut images = Vec::new();
+            if let Some(ref poster) = tmdb.poster_url {
+                images.push(MovieImage {
+                    cover_type: "poster".to_string(),
+                    url: poster.clone(),
+                    remote_url: Some(poster.clone()),
+                });
+            }
+            if let Some(ref fanart) = tmdb.fanart_url {
+                images.push(MovieImage {
+                    cover_type: "fanart".to_string(),
+                    url: fanart.clone(),
+                    remote_url: Some(fanart.clone()),
+                });
+            }
+            images
+        }
+        _ => vec![],
+    }
+}
 
 fn clean_title(title: &str) -> String {
     title.to_lowercase()
@@ -482,6 +554,8 @@ pub struct MovieStatistics {
 pub struct MovieImage {
     pub cover_type: String,
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -505,20 +579,31 @@ impl From<MovieDbModel> for MovieResponse {
         let tags: Vec<i64> = serde_json::from_str(&m.tags).unwrap_or_default();
         let images: Vec<MovieImage> = serde_json::from_str(&m.images).unwrap_or_default();
 
-        // Construct default images if none stored
+        // Construct default images if none stored.
+        // The local /MediaCover proxy route will resolve remote images on demand.
         let images = if images.is_empty() {
             vec![
                 MovieImage {
                     cover_type: "poster".to_string(),
                     url: format!("/MediaCover/Movies/{}/poster.jpg", m.id),
+                    remote_url: None,
                 },
                 MovieImage {
                     cover_type: "fanart".to_string(),
                     url: format!("/MediaCover/Movies/{}/fanart.jpg", m.id),
+                    remote_url: None,
                 },
             ]
         } else {
-            images
+            // Rewrite urls to local proxy paths, preserving remote_url for CDN access
+            images.into_iter().map(|img| {
+                let ext = if img.cover_type == "fanart" { "jpg" } else { "jpg" };
+                MovieImage {
+                    url: format!("/MediaCover/Movies/{}/{}.{}", m.id, img.cover_type, ext),
+                    remote_url: if img.remote_url.is_some() { img.remote_url } else { Some(img.url).filter(|u| u.starts_with("http")) },
+                    cover_type: img.cover_type,
+                }
+            }).collect()
         };
 
         let folder = m.path.split('/').last().map(|f| f.to_string());
@@ -565,6 +650,7 @@ impl From<MovieDbModel> for MovieResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MovieLookupResult {
+    pub tmdb_id: i64,
     pub imdb_id: Option<String>,
     pub title: String,
     pub sort_title: String,
@@ -710,7 +796,19 @@ async fn import_movies(
         let year = resolved_year.unwrap_or(0);
         let genres_json = serde_json::to_string(&resolved_genres).unwrap_or_else(|_| "[]".to_string());
         let tags_json = serde_json::to_string(&import_req.tags.unwrap_or_default()).unwrap_or_else(|_| "[]".to_string());
-        let images_json = serde_json::to_string(&import_req.images.unwrap_or_default()).unwrap_or_else(|_| "[]".to_string());
+
+        // Use images from request; if empty, try to fetch from TMDB
+        let images = match import_req.images {
+            Some(ref imgs) if !imgs.is_empty() => imgs.clone(),
+            _ => {
+                if let Some(ref id) = resolved_imdb_id {
+                    fetch_tmdb_images(&state.tmdb_client, id).await
+                } else {
+                    vec![]
+                }
+            }
+        };
+        let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
 
         let db_movie = MovieDbModel {
             id: 0,
