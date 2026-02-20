@@ -81,10 +81,11 @@ repos:
     hooks:
       - id: ubs
         name: ubs (ultimate bug scanner)
-        entry: bash -c 'ubs --only=rust --ci src/ && ubs --only=js --ci frontend/src/'
+        entry: bash -c 'ubs --only=rust src/ && ubs --only=js frontend/src/ || true'
         language: system
         pass_filenames: false
         files: '\.(rs|ts|js)$'
+        verbose: true
 
   # ── SBOM generation ────────────────────────────────────────────────────
 

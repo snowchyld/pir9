@@ -134,6 +134,7 @@ pub async fn get_wanted_missing(
                 Ok(Some(series)) => Some(serde_json::json!({
                     "id": series.id,
                     "title": series.title,
+                    "titleSlug": series.title_slug,
                     "path": series.path,
                     "tvdbId": series.tvdb_id,
                     "status": series.status,
@@ -202,6 +203,7 @@ pub async fn get_wanted_cutoff(
                 Ok(Some(series)) => Some(serde_json::json!({
                     "id": series.id,
                     "title": series.title,
+                    "titleSlug": series.title_slug,
                     "path": series.path,
                     "tvdbId": series.tvdb_id,
                 })),

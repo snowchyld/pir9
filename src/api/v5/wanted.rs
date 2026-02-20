@@ -15,11 +15,13 @@ use crate::web::AppState;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct WantedQuery {
     pub page: Option<i32>,
     pub page_size: Option<i32>,
     pub sort_key: Option<String>,
     pub sort_direction: Option<String>,
+    /// Accepted for backwards compatibility but series data is always included
     pub include_series: Option<bool>,
     pub monitored: Option<bool>,
 }
@@ -90,7 +92,6 @@ pub async fn get_wanted_missing(
         .clone()
         .unwrap_or("descending".to_string());
     let monitored_only = query.monitored.unwrap_or(true);
-    let include_series = query.include_series.unwrap_or(false);
 
     let episode_repo = EpisodeRepository::new(state.db.clone());
     let series_repo = SeriesRepository::new(state.db.clone());
@@ -113,20 +114,18 @@ pub async fn get_wanted_missing(
         }
     };
 
+    // Always include series data — the frontend needs it for display and navigation
     let mut records = Vec::new();
     for episode in &episodes {
-        let series_json = if include_series {
-            match series_repo.get_by_id(episode.series_id).await {
-                Ok(Some(series)) => Some(serde_json::json!({
-                    "id": series.id,
-                    "title": series.title,
-                    "path": series.path,
-                    "tvdbId": series.tvdb_id,
-                })),
-                _ => None,
-            }
-        } else {
-            None
+        let series_json = match series_repo.get_by_id(episode.series_id).await {
+            Ok(Some(series)) => Some(serde_json::json!({
+                "id": series.id,
+                "title": series.title,
+                "titleSlug": series.title_slug,
+                "path": series.path,
+                "tvdbId": series.tvdb_id,
+            })),
+            _ => None,
         };
 
         records.push(episode_to_resource(episode, series_json));
@@ -154,8 +153,6 @@ pub async fn get_wanted_cutoff(
         .sort_direction
         .clone()
         .unwrap_or("descending".to_string());
-    let include_series = query.include_series.unwrap_or(false);
-
     let episode_repo = EpisodeRepository::new(state.db.clone());
     let series_repo = SeriesRepository::new(state.db.clone());
 
@@ -177,20 +174,18 @@ pub async fn get_wanted_cutoff(
         }
     };
 
+    // Always include series data — the frontend needs it for display and navigation
     let mut records = Vec::new();
     for episode in &episodes {
-        let series_json = if include_series {
-            match series_repo.get_by_id(episode.series_id).await {
-                Ok(Some(series)) => Some(serde_json::json!({
-                    "id": series.id,
-                    "title": series.title,
-                    "path": series.path,
-                    "tvdbId": series.tvdb_id,
-                })),
-                _ => None,
-            }
-        } else {
-            None
+        let series_json = match series_repo.get_by_id(episode.series_id).await {
+            Ok(Some(series)) => Some(serde_json::json!({
+                "id": series.id,
+                "title": series.title,
+                "titleSlug": series.title_slug,
+                "path": series.path,
+                "tvdbId": series.tvdb_id,
+            })),
+            _ => None,
         };
 
         records.push(episode_to_resource(episode, series_json));
