@@ -51,14 +51,13 @@ pub struct BlocklistResourcePagingResource {
 }
 
 fn db_to_resource(model: &BlocklistDbModel) -> BlocklistResource {
-    let episode_ids: Vec<i32> = serde_json::from_str(&model.episode_ids)
-        .unwrap_or_default();
-    let quality: serde_json::Value = serde_json::from_str(&model.quality)
-        .unwrap_or(serde_json::json!({}));
-    let languages: serde_json::Value = serde_json::from_str(&model.languages)
-        .unwrap_or(serde_json::json!([]));
-    let custom_formats: serde_json::Value = serde_json::from_str(&model.custom_formats)
-        .unwrap_or(serde_json::json!([]));
+    let episode_ids: Vec<i32> = serde_json::from_str(&model.episode_ids).unwrap_or_default();
+    let quality: serde_json::Value =
+        serde_json::from_str(&model.quality).unwrap_or(serde_json::json!({}));
+    let languages: serde_json::Value =
+        serde_json::from_str(&model.languages).unwrap_or(serde_json::json!([]));
+    let custom_formats: serde_json::Value =
+        serde_json::from_str(&model.custom_formats).unwrap_or(serde_json::json!([]));
 
     BlocklistResource {
         id: model.id as i32,
@@ -83,10 +82,14 @@ pub async fn get_blocklist(
     let page = query.page.unwrap_or(1);
     let page_size = query.page_size.unwrap_or(20);
     let sort_key = query.sort_key.unwrap_or_else(|| "date".to_string());
-    let sort_direction = query.sort_direction.unwrap_or_else(|| "descending".to_string());
+    let sort_direction = query
+        .sort_direction
+        .unwrap_or_else(|| "descending".to_string());
 
     let repo = BlocklistRepository::new(state.db.clone());
-    let (items, total) = repo.get_paged(page, page_size, &sort_key, &sort_direction).await
+    let (items, total) = repo
+        .get_paged(page, page_size, &sort_key, &sort_direction)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(BlocklistResourcePagingResource {

@@ -56,7 +56,10 @@ pub async fn get_media_cover(
 
     // Fetch show data from Skyhook to get image URLs
     let client = reqwest::Client::new();
-    let url = format!("http://skyhook.sonarr.tv/v1/tvdb/shows/en/{}", series.tvdb_id);
+    let url = format!(
+        "http://skyhook.sonarr.tv/v1/tvdb/shows/en/{}",
+        series.tvdb_id
+    );
 
     let skyhook_response = match client
         .get(&url)
@@ -78,17 +81,24 @@ pub async fn get_media_cover(
     };
 
     // Find the matching image URL
-    let image_url = show_data.images
+    let image_url = show_data
+        .images
         .as_ref()
         .and_then(|images| {
-            images.iter().find(|img| img.cover_type.to_lowercase() == cover_type.to_lowercase())
+            images
+                .iter()
+                .find(|img| img.cover_type.to_lowercase() == cover_type.to_lowercase())
         })
         .map(|img| img.url.clone());
 
     let image_url = match image_url {
         Some(url) => url,
         None => {
-            tracing::debug!("Image type '{}' not found for series {}", cover_type, series_id);
+            tracing::debug!(
+                "Image type '{}' not found for series {}",
+                cover_type,
+                series_id
+            );
             return (StatusCode::NOT_FOUND, "Image not found").into_response();
         }
     };
@@ -127,7 +137,13 @@ pub async fn get_media_cover(
         .header(header::CONTENT_TYPE, content_type)
         .header(header::CACHE_CONTROL, "public, max-age=86400") // Cache for 24 hours
         .body(Body::from(bytes))
-        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response").into_response())
+        .unwrap_or_else(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to build response",
+            )
+                .into_response()
+        })
 }
 
 pub fn routes() -> Router<Arc<AppState>> {

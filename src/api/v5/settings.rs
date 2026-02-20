@@ -1,10 +1,6 @@
 //! Settings API endpoints (v5)
 
-use axum::{
-    response::Json,
-    routing::get,
-    Router,
-};
+use axum::{response::Json, routing::get, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -72,9 +68,14 @@ impl Default for NamingSettingsResource {
             colon_replacement_format: 4,
             custom_colon_replacement_format: None,
             multi_episode_style: 0,
-            standard_episode_format: "{Series Title} - S{season:00}E{episode:00} - {Episode Title} {Quality Full}".to_string(),
-            daily_episode_format: "{Series Title} - {Air-Date} - {Episode Title} {Quality Full}".to_string(),
-            anime_episode_format: "{Series Title} - S{season:00}E{episode:00} - {Episode Title} {Quality Full}".to_string(),
+            standard_episode_format:
+                "{Series Title} - S{season:00}E{episode:00} - {Episode Title} {Quality Full}"
+                    .to_string(),
+            daily_episode_format: "{Series Title} - {Air-Date} - {Episode Title} {Quality Full}"
+                .to_string(),
+            anime_episode_format:
+                "{Series Title} - S{season:00}E{episode:00} - {Episode Title} {Quality Full}"
+                    .to_string(),
             series_folder_format: "{Series Title}".to_string(),
             season_folder_format: "Season {season}".to_string(),
             specials_folder_format: "Specials".to_string(),
@@ -118,11 +119,16 @@ pub struct NamingExampleResource {
 impl Default for NamingExampleResource {
     fn default() -> Self {
         Self {
-            single_episode_example: "The Series Title - S01E01 - Episode Title HDTV-720p".to_string(),
-            multi_episode_example: "The Series Title - S01E01-E02-E03 - Episode Title HDTV-720p".to_string(),
-            daily_episode_example: "The Series Title - 2024-01-15 - Episode Title HDTV-720p".to_string(),
-            anime_episode_example: "The Series Title - S01E01 - Episode Title HDTV-720p".to_string(),
-            anime_multi_episode_example: "The Series Title - S01E01-E02-E03 - Episode Title HDTV-720p".to_string(),
+            single_episode_example: "The Series Title - S01E01 - Episode Title HDTV-720p"
+                .to_string(),
+            multi_episode_example: "The Series Title - S01E01-E02-E03 - Episode Title HDTV-720p"
+                .to_string(),
+            daily_episode_example: "The Series Title - 2024-01-15 - Episode Title HDTV-720p"
+                .to_string(),
+            anime_episode_example: "The Series Title - S01E01 - Episode Title HDTV-720p"
+                .to_string(),
+            anime_multi_episode_example:
+                "The Series Title - S01E01-E02-E03 - Episode Title HDTV-720p".to_string(),
             series_folder_example: "The Series Title".to_string(),
             season_folder_example: "Season 1".to_string(),
             specials_folder_example: "Specials".to_string(),
@@ -144,7 +150,9 @@ pub async fn get_naming_settings() -> Json<NamingSettingsResource> {
     Json(NamingSettingsResource::default())
 }
 
-pub async fn update_naming_settings(Json(body): Json<NamingSettingsResource>) -> Json<NamingSettingsResource> {
+pub async fn update_naming_settings(
+    Json(body): Json<NamingSettingsResource>,
+) -> Json<NamingSettingsResource> {
     Json(body)
 }
 
@@ -157,14 +165,22 @@ pub async fn get_update_settings() -> Json<UpdateSettingsResource> {
     Json(UpdateSettingsResource::default())
 }
 
-pub async fn update_update_settings(Json(body): Json<UpdateSettingsResource>) -> Json<UpdateSettingsResource> {
+pub async fn update_update_settings(
+    Json(body): Json<UpdateSettingsResource>,
+) -> Json<UpdateSettingsResource> {
     Json(body)
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/ui", get(get_ui_settings).put(update_ui_settings))
-        .route("/naming", get(get_naming_settings).put(update_naming_settings))
+        .route(
+            "/naming",
+            get(get_naming_settings).put(update_naming_settings),
+        )
         .route("/naming/examples", get(get_naming_examples))
-        .route("/update", get(get_update_settings).put(update_update_settings))
+        .route(
+            "/update",
+            get(get_update_settings).put(update_update_settings),
+        )
 }

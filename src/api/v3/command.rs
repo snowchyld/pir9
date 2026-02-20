@@ -3,8 +3,8 @@
 
 use axum::{
     extract::{Path, State},
-    response::{IntoResponse, Json},
     http::StatusCode,
+    response::{IntoResponse, Json},
     routing::get,
     Router,
 };
@@ -38,7 +38,8 @@ pub struct CommandResource {
 
 impl From<crate::core::datastore::repositories::CommandDbModel> for CommandResource {
     fn from(cmd: crate::core::datastore::repositories::CommandDbModel) -> Self {
-        let body: serde_json::Value = cmd.body
+        let body: serde_json::Value = cmd
+            .body
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or(serde_json::json!({}));
@@ -80,7 +81,10 @@ impl IntoResponse for CommandError {
             CommandError::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
             CommandError::Internal(msg) => {
                 tracing::error!("Command error: {}", msg);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
             }
         };
 
@@ -94,7 +98,9 @@ pub async fn get_commands(
 ) -> Result<Json<Vec<CommandResource>>, CommandError> {
     let repo = CommandRepository::new(state.db.clone());
 
-    let commands = repo.get_all().await
+    let commands = repo
+        .get_all()
+        .await
         .map_err(|e| CommandError::Internal(format!("Failed to fetch commands: {}", e)))?;
 
     let resources: Vec<CommandResource> = commands.into_iter().map(Into::into).collect();
@@ -108,7 +114,9 @@ pub async fn get_command(
 ) -> Result<Json<CommandResource>, CommandError> {
     let repo = CommandRepository::new(state.db.clone());
 
-    let command = repo.get_by_id(id as i64).await
+    let command = repo
+        .get_by_id(id as i64)
+        .await
         .map_err(|e| CommandError::Internal(format!("Failed to fetch command: {}", e)))?
         .ok_or(CommandError::NotFound)?;
 
@@ -121,20 +129,25 @@ pub async fn create_command(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<CommandResource>, CommandError> {
-    let name = body.get("name")
+    let name = body
+        .get("name")
         .and_then(|v| v.as_str())
         .ok_or_else(|| CommandError::Validation("Command name is required".to_string()))?;
 
     let repo = CommandRepository::new(state.db.clone());
 
     let body_str = serde_json::to_string(&body).ok();
-    let id = repo.insert(name, name, body_str.as_deref(), "manual").await
+    let id = repo
+        .insert(name, name, body_str.as_deref(), "manual")
+        .await
         .map_err(|e| CommandError::Internal(format!("Failed to create command: {}", e)))?;
 
     tracing::info!("v3: Queued command: id={}, name={}", id, name);
 
     // Fetch the created command to return
-    let command = repo.get_by_id(id).await
+    let command = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| CommandError::Internal(format!("Failed to fetch command: {}", e)))?
         .ok_or(CommandError::NotFound)?;
 
@@ -157,11 +170,13 @@ pub async fn create_command(
             }
 
             // Publish command started event
-            event_bus.publish(Message::CommandStarted {
-                command_id: cmd_id,
-                name: cmd_name.clone(),
-                message: Some(format!("Starting {}", cmd_name)),
-            }).await;
+            event_bus
+                .publish(Message::CommandStarted {
+                    command_id: cmd_id,
+                    name: cmd_name.clone(),
+                    message: Some(format!("Starting {}", cmd_name)),
+                })
+                .await;
 
             // Execute command based on type (reuse v5 with metadata service)
             let options = crate::api::v5::command::CommandExecutionOptions {
@@ -170,34 +185,54 @@ pub async fn create_command(
                 imdb_client: Some(imdb_client),
                 cancel_token: None,
             };
-            let result = crate::api::v5::command::execute_command_with_options(&cmd_name, &cmd_body, &db, &event_bus, options).await;
+            let result = crate::api::v5::command::execute_command_with_options(
+                &cmd_name, &cmd_body, &db, &event_bus, options,
+            )
+            .await;
 
             // Mark as completed or failed
             match result {
                 Ok(msg) => {
-                    if let Err(e) = repo.update_status(cmd_id, "completed", Some("successful")).await {
+                    if let Err(e) = repo
+                        .update_status(cmd_id, "completed", Some("successful"))
+                        .await
+                    {
                         tracing::error!("Failed to complete command {}: {}", cmd_id, e);
                     } else {
-                        tracing::info!("v3: Completed command: id={}, name={}, result={}", cmd_id, cmd_name, msg);
+                        tracing::info!(
+                            "v3: Completed command: id={}, name={}, result={}",
+                            cmd_id,
+                            cmd_name,
+                            msg
+                        );
                     }
-                    event_bus.publish(Message::CommandCompleted {
-                        command_id: cmd_id,
-                        name: cmd_name,
-                        message: Some(msg),
-                    }).await;
+                    event_bus
+                        .publish(Message::CommandCompleted {
+                            command_id: cmd_id,
+                            name: cmd_name,
+                            message: Some(msg),
+                        })
+                        .await;
                 }
                 Err(e) => {
                     let error_msg = e.to_string();
                     if let Err(e) = repo.update_status(cmd_id, "failed", Some("failed")).await {
                         tracing::error!("Failed to mark command {} as failed: {}", cmd_id, e);
                     }
-                    tracing::error!("v3: Failed command: id={}, name={}, error={}", cmd_id, cmd_name, error_msg);
-                    event_bus.publish(Message::CommandFailed {
-                        command_id: cmd_id,
-                        name: cmd_name,
-                        message: None,
-                        error: error_msg,
-                    }).await;
+                    tracing::error!(
+                        "v3: Failed command: id={}, name={}, error={}",
+                        cmd_id,
+                        cmd_name,
+                        error_msg
+                    );
+                    event_bus
+                        .publish(Message::CommandFailed {
+                            command_id: cmd_id,
+                            name: cmd_name,
+                            message: None,
+                            error: error_msg,
+                        })
+                        .await;
                 }
             }
         }
@@ -214,7 +249,8 @@ pub async fn delete_command(
     let repo = CommandRepository::new(state.db.clone());
 
     // Mark as cancelled
-    repo.update_status(id as i64, "cancelled", Some("cancelled")).await
+    repo.update_status(id as i64, "cancelled", Some("cancelled"))
+        .await
         .map_err(|e| CommandError::Internal(format!("Failed to cancel command: {}", e)))?;
 
     Ok(Json(serde_json::json!({})))

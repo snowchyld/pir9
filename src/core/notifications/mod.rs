@@ -5,9 +5,9 @@
 pub mod providers;
 pub mod service;
 
-use serde::{Deserialize, Serialize};
-use async_trait::async_trait;
 use anyhow::Result;
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 pub use providers::*;
 pub use service::NotificationService;

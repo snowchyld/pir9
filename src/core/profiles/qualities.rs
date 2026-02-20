@@ -57,21 +57,27 @@ impl Quality {
             Quality::Unknown => 0,
             Quality::SDTV | Quality::Dvd | Quality::WebDl480p => 480,
             Quality::Hdtv720p | Quality::WebDl720p | Quality::Bluray720p => 720,
-            Quality::Hdtv1080p | Quality::WebDl1080p | Quality::Bluray1080p | Quality::Bluray1080pRemux => 1080,
-            Quality::WebDl2160p | Quality::Hdtv2160p | Quality::Bluray2160p | Quality::Bluray2160pRemux => 2160,
+            Quality::Hdtv1080p
+            | Quality::WebDl1080p
+            | Quality::Bluray1080p
+            | Quality::Bluray1080pRemux => 1080,
+            Quality::WebDl2160p
+            | Quality::Hdtv2160p
+            | Quality::Bluray2160p
+            | Quality::Bluray2160pRemux => 2160,
         }
     }
-    
+
     /// Check if this is a high definition quality
     pub fn is_hd(&self) -> bool {
         matches!(self.resolution_width(), 720 | 1080 | 2160)
     }
-    
+
     /// Check if this is 4K/UHD
     pub fn is_uhd(&self) -> bool {
         self.resolution_width() >= 2160
     }
-    
+
     /// Get the weight (priority) of this quality
     pub fn weight(&self) -> i32 {
         match self {
@@ -92,13 +98,12 @@ impl Quality {
             Quality::Bluray2160pRemux => 14,
         }
     }
-    
+
     /// Compare two qualities
     pub fn compare(&self, other: &Quality) -> std::cmp::Ordering {
         self.weight().cmp(&other.weight())
     }
 }
-
 
 /// Quality model with revision info
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -160,7 +165,7 @@ impl Resolution {
             Resolution::R2160p => 3840,
         }
     }
-    
+
     pub fn height(&self) -> i32 {
         match self {
             Resolution::R360p => 360,

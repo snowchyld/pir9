@@ -217,10 +217,7 @@ async fn check_root_folders(state: &AppState, issues: &mut Vec<HealthResource>) 
                             issues.push(HealthResource::new(
                                 "RootFolderCheck",
                                 HealthCheckType::Error,
-                                &format!(
-                                    "Root folder is not accessible: {} ({})",
-                                    folder.path, e
-                                ),
+                                &format!("Root folder is not accessible: {} ({})", folder.path, e),
                             ));
                         }
                     }
@@ -263,9 +260,7 @@ async fn check_series_root_folders(state: &AppState, issues: &mut Vec<HealthReso
         // Check if series root folder exists in configured root folders
         if !root_folder_paths.contains(s.root_folder_path.as_str()) {
             // Check if the root folder path might just be a prefix match
-            let has_matching_root = root_folder_paths
-                .iter()
-                .any(|rf| s.path.starts_with(*rf));
+            let has_matching_root = root_folder_paths.iter().any(|rf| s.path.starts_with(*rf));
 
             if !has_matching_root {
                 missing_root_series.push(s.title.clone());
@@ -300,7 +295,9 @@ async fn check_series_root_folders(state: &AppState, issues: &mut Vec<HealthReso
                     count, sample
                 ),
             )
-            .with_wiki("https://wiki.servarr.com/sonarr/faq#series-removed-because-root-folder-is-missing"),
+            .with_wiki(
+                "https://wiki.servarr.com/sonarr/faq#series-removed-because-root-folder-is-missing",
+            ),
         );
     }
 

@@ -170,7 +170,14 @@ pub async fn get_import_list_schema() -> Json<Vec<ImportListResource>> {
 }
 
 /// Helper to create a field
-fn make_field(order: i32, name: &str, label: &str, field_type: &str, value: Option<serde_json::Value>, help_text: Option<&str>) -> FieldResource {
+fn make_field(
+    order: i32,
+    name: &str,
+    label: &str,
+    field_type: &str,
+    value: Option<serde_json::Value>,
+    help_text: Option<&str>,
+) -> FieldResource {
     FieldResource {
         order,
         name: name.to_string(),
@@ -186,14 +193,23 @@ fn make_field(order: i32, name: &str, label: &str, field_type: &str, value: Opti
         select_options_provider_action: None,
         section: None,
         hidden: None,
-        privacy: if field_type == "password" { Some("password".to_string()) } else { None },
+        privacy: if field_type == "password" {
+            Some("password".to_string())
+        } else {
+            None
+        },
         placeholder: None,
         is_float: None,
     }
 }
 
 /// Create default import list resource
-fn default_import_list(implementation: &str, implementation_name: &str, config_contract: &str, list_type: &str) -> ImportListResource {
+fn default_import_list(
+    implementation: &str,
+    implementation_name: &str,
+    config_contract: &str,
+    list_type: &str,
+) -> ImportListResource {
     ImportListResource {
         id: 0,
         name: String::new(),
@@ -220,63 +236,230 @@ fn default_import_list(implementation: &str, implementation_name: &str, config_c
 
 /// Trakt List schema
 fn create_trakt_list_schema() -> ImportListResource {
-    let mut schema = default_import_list("TraktListImport", "Trakt List", "TraktListSettings", "trakt");
+    let mut schema = default_import_list(
+        "TraktListImport",
+        "Trakt List",
+        "TraktListSettings",
+        "trakt",
+    );
     schema.fields = vec![
-        make_field(0, "authUser", "Auth User", "textbox", None, Some("Trakt username for authentication")),
-        make_field(1, "accessToken", "Access Token", "password", None, Some("Trakt API access token")),
-        make_field(2, "refreshToken", "Refresh Token", "password", None, Some("Trakt API refresh token")),
-        make_field(3, "expires", "Expires", "textbox", None, Some("Token expiration time")),
-        make_field(4, "username", "Username", "textbox", None, Some("Trakt username for list")),
-        make_field(5, "listname", "List Name", "textbox", None, Some("Name of the Trakt list")),
-        make_field(6, "traktAdditionalParameters", "Additional Parameters", "textbox", None, Some("Additional parameters to add to Trakt API request")),
+        make_field(
+            0,
+            "authUser",
+            "Auth User",
+            "textbox",
+            None,
+            Some("Trakt username for authentication"),
+        ),
+        make_field(
+            1,
+            "accessToken",
+            "Access Token",
+            "password",
+            None,
+            Some("Trakt API access token"),
+        ),
+        make_field(
+            2,
+            "refreshToken",
+            "Refresh Token",
+            "password",
+            None,
+            Some("Trakt API refresh token"),
+        ),
+        make_field(
+            3,
+            "expires",
+            "Expires",
+            "textbox",
+            None,
+            Some("Token expiration time"),
+        ),
+        make_field(
+            4,
+            "username",
+            "Username",
+            "textbox",
+            None,
+            Some("Trakt username for list"),
+        ),
+        make_field(
+            5,
+            "listname",
+            "List Name",
+            "textbox",
+            None,
+            Some("Name of the Trakt list"),
+        ),
+        make_field(
+            6,
+            "traktAdditionalParameters",
+            "Additional Parameters",
+            "textbox",
+            None,
+            Some("Additional parameters to add to Trakt API request"),
+        ),
     ];
     schema
 }
 
 /// Trakt User schema
 fn create_trakt_user_schema() -> ImportListResource {
-    let mut schema = default_import_list("TraktUserImport", "Trakt User", "TraktUserSettings", "trakt");
+    let mut schema = default_import_list(
+        "TraktUserImport",
+        "Trakt User",
+        "TraktUserSettings",
+        "trakt",
+    );
     schema.fields = vec![
-        make_field(0, "authUser", "Auth User", "textbox", None, Some("Trakt username for authentication")),
-        make_field(1, "accessToken", "Access Token", "password", None, Some("Trakt API access token")),
-        make_field(2, "refreshToken", "Refresh Token", "password", None, Some("Trakt API refresh token")),
-        make_field(3, "expires", "Expires", "textbox", None, Some("Token expiration time")),
-        make_field(4, "traktListType", "List Type", "select", Some(serde_json::json!(0)), Some("Type of user list")),
-        make_field(5, "traktAdditionalParameters", "Additional Parameters", "textbox", None, Some("Additional parameters to add to Trakt API request")),
+        make_field(
+            0,
+            "authUser",
+            "Auth User",
+            "textbox",
+            None,
+            Some("Trakt username for authentication"),
+        ),
+        make_field(
+            1,
+            "accessToken",
+            "Access Token",
+            "password",
+            None,
+            Some("Trakt API access token"),
+        ),
+        make_field(
+            2,
+            "refreshToken",
+            "Refresh Token",
+            "password",
+            None,
+            Some("Trakt API refresh token"),
+        ),
+        make_field(
+            3,
+            "expires",
+            "Expires",
+            "textbox",
+            None,
+            Some("Token expiration time"),
+        ),
+        make_field(
+            4,
+            "traktListType",
+            "List Type",
+            "select",
+            Some(serde_json::json!(0)),
+            Some("Type of user list"),
+        ),
+        make_field(
+            5,
+            "traktAdditionalParameters",
+            "Additional Parameters",
+            "textbox",
+            None,
+            Some("Additional parameters to add to Trakt API request"),
+        ),
     ];
     schema
 }
 
 /// Trakt Popular schema
 fn create_trakt_popular_schema() -> ImportListResource {
-    let mut schema = default_import_list("TraktPopularImport", "Trakt Popular", "TraktPopularSettings", "trakt");
+    let mut schema = default_import_list(
+        "TraktPopularImport",
+        "Trakt Popular",
+        "TraktPopularSettings",
+        "trakt",
+    );
     schema.fields = vec![
-        make_field(0, "authUser", "Auth User", "textbox", None, Some("Trakt username for authentication")),
-        make_field(1, "accessToken", "Access Token", "password", None, Some("Trakt API access token")),
-        make_field(2, "refreshToken", "Refresh Token", "password", None, Some("Trakt API refresh token")),
-        make_field(3, "expires", "Expires", "textbox", None, Some("Token expiration time")),
-        make_field(4, "traktListType", "List Type", "select", Some(serde_json::json!(0)), Some("Popular/Trending/Anticipated/etc")),
-        make_field(5, "limit", "Limit", "number", Some(serde_json::json!(100)), Some("Number of series to get")),
-        make_field(6, "traktAdditionalParameters", "Additional Parameters", "textbox", None, Some("Additional parameters")),
+        make_field(
+            0,
+            "authUser",
+            "Auth User",
+            "textbox",
+            None,
+            Some("Trakt username for authentication"),
+        ),
+        make_field(
+            1,
+            "accessToken",
+            "Access Token",
+            "password",
+            None,
+            Some("Trakt API access token"),
+        ),
+        make_field(
+            2,
+            "refreshToken",
+            "Refresh Token",
+            "password",
+            None,
+            Some("Trakt API refresh token"),
+        ),
+        make_field(
+            3,
+            "expires",
+            "Expires",
+            "textbox",
+            None,
+            Some("Token expiration time"),
+        ),
+        make_field(
+            4,
+            "traktListType",
+            "List Type",
+            "select",
+            Some(serde_json::json!(0)),
+            Some("Popular/Trending/Anticipated/etc"),
+        ),
+        make_field(
+            5,
+            "limit",
+            "Limit",
+            "number",
+            Some(serde_json::json!(100)),
+            Some("Number of series to get"),
+        ),
+        make_field(
+            6,
+            "traktAdditionalParameters",
+            "Additional Parameters",
+            "textbox",
+            None,
+            Some("Additional parameters"),
+        ),
     ];
     schema
 }
 
 /// IMDb List schema
 fn create_imdb_list_schema() -> ImportListResource {
-    let mut schema = default_import_list("IMDbListImport", "IMDb Lists", "IMDbListSettings", "imdb");
-    schema.fields = vec![
-        make_field(0, "listId", "List ID", "textbox", None, Some("IMDb List ID (e.g., ls012345678 or ur12345678)")),
-    ];
+    let mut schema =
+        default_import_list("IMDbListImport", "IMDb Lists", "IMDbListSettings", "imdb");
+    schema.fields = vec![make_field(
+        0,
+        "listId",
+        "List ID",
+        "textbox",
+        None,
+        Some("IMDb List ID (e.g., ls012345678 or ur12345678)"),
+    )];
     schema
 }
 
 /// Plex Watchlist schema
 fn create_plex_watchlist_schema() -> ImportListResource {
-    let mut schema = default_import_list("PlexImport", "Plex Watchlist", "PlexListSettings", "plex");
-    schema.fields = vec![
-        make_field(0, "accessToken", "Access Token", "password", None, Some("Plex authentication token")),
-    ];
+    let mut schema =
+        default_import_list("PlexImport", "Plex Watchlist", "PlexListSettings", "plex");
+    schema.fields = vec![make_field(
+        0,
+        "accessToken",
+        "Access Token",
+        "password",
+        None,
+        Some("Plex authentication token"),
+    )];
     schema
 }
 
@@ -284,23 +467,91 @@ fn create_plex_watchlist_schema() -> ImportListResource {
 fn create_sonarr_schema() -> ImportListResource {
     let mut schema = default_import_list("SonarrImport", "Sonarr", "SonarrSettings", "sonarr");
     schema.fields = vec![
-        make_field(0, "baseUrl", "Sonarr Server", "textbox", None, Some("URL of the Sonarr server to import from")),
-        make_field(1, "apiKey", "API Key", "password", None, Some("API key for the Sonarr server")),
-        make_field(2, "profileIds", "Quality Profiles", "textbox", None, Some("Quality profile IDs to import from (comma separated)")),
-        make_field(3, "tagIds", "Tags", "textbox", None, Some("Tag IDs to import from (comma separated)")),
-        make_field(4, "rootFolderPaths", "Root Folders", "textbox", None, Some("Root folder paths to import from (comma separated)")),
-        make_field(5, "languageProfileIds", "Language Profiles", "textbox", None, Some("Language profile IDs (comma separated)")),
+        make_field(
+            0,
+            "baseUrl",
+            "Sonarr Server",
+            "textbox",
+            None,
+            Some("URL of the Sonarr server to import from"),
+        ),
+        make_field(
+            1,
+            "apiKey",
+            "API Key",
+            "password",
+            None,
+            Some("API key for the Sonarr server"),
+        ),
+        make_field(
+            2,
+            "profileIds",
+            "Quality Profiles",
+            "textbox",
+            None,
+            Some("Quality profile IDs to import from (comma separated)"),
+        ),
+        make_field(
+            3,
+            "tagIds",
+            "Tags",
+            "textbox",
+            None,
+            Some("Tag IDs to import from (comma separated)"),
+        ),
+        make_field(
+            4,
+            "rootFolderPaths",
+            "Root Folders",
+            "textbox",
+            None,
+            Some("Root folder paths to import from (comma separated)"),
+        ),
+        make_field(
+            5,
+            "languageProfileIds",
+            "Language Profiles",
+            "textbox",
+            None,
+            Some("Language profile IDs (comma separated)"),
+        ),
     ];
     schema
 }
 
 /// Simkl User schema
 fn create_simkl_user_schema() -> ImportListResource {
-    let mut schema = default_import_list("SimklUserImport", "Simkl User Watchlist", "SimklUserSettings", "simkl");
+    let mut schema = default_import_list(
+        "SimklUserImport",
+        "Simkl User Watchlist",
+        "SimklUserSettings",
+        "simkl",
+    );
     schema.fields = vec![
-        make_field(0, "authUser", "Auth User", "textbox", None, Some("Simkl username")),
-        make_field(1, "accessToken", "Access Token", "password", None, Some("Simkl API access token")),
-        make_field(2, "listType", "List Type", "select", Some(serde_json::json!(0)), Some("Type of list to import")),
+        make_field(
+            0,
+            "authUser",
+            "Auth User",
+            "textbox",
+            None,
+            Some("Simkl username"),
+        ),
+        make_field(
+            1,
+            "accessToken",
+            "Access Token",
+            "password",
+            None,
+            Some("Simkl API access token"),
+        ),
+        make_field(
+            2,
+            "listType",
+            "List Type",
+            "select",
+            Some(serde_json::json!(0)),
+            Some("Type of list to import"),
+        ),
     ];
     schema
 }

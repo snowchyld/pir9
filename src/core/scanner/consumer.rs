@@ -10,11 +10,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
-use crate::core::datastore::Database;
 use crate::core::datastore::models::EpisodeFileDbModel;
 use crate::core::datastore::repositories::{
     EpisodeFileRepository, EpisodeRepository, SeriesRepository,
 };
+use crate::core::datastore::Database;
 use crate::core::messaging::{HybridEventBus, Message, ScannedFile};
 
 /// Tracks pending scan jobs and their results
@@ -51,11 +51,14 @@ impl ScanResultConsumer {
     /// Register a pending scan job
     pub async fn register_job(&self, job_id: &str, series_ids: Vec<i64>) {
         let mut jobs = self.pending_jobs.write().await;
-        jobs.jobs.insert(job_id.to_string(), PendingJob {
-            series_ids,
-            results_received: 0,
-            completed: false,
-        });
+        jobs.jobs.insert(
+            job_id.to_string(),
+            PendingJob {
+                series_ids,
+                results_received: 0,
+                completed: false,
+            },
+        );
         debug!("Registered scan job: {}", job_id);
     }
 
@@ -71,8 +74,22 @@ impl ScanResultConsumer {
         loop {
             match receiver.recv().await {
                 Ok(message) => {
-                    if let Message::ScanResult { job_id, series_id, worker_id, files_found, errors } = message {
-                        self.handle_scan_result(&job_id, series_id, &worker_id, files_found, errors).await;
+                    if let Message::ScanResult {
+                        job_id,
+                        series_id,
+                        worker_id,
+                        files_found,
+                        errors,
+                    } = message
+                    {
+                        self.handle_scan_result(
+                            &job_id,
+                            series_id,
+                            &worker_id,
+                            files_found,
+                            errors,
+                        )
+                        .await;
                     }
                     // Ignore other message types
                 }
@@ -100,17 +117,27 @@ impl ScanResultConsumer {
     ) {
         info!(
             "Received scan result: job_id={}, series_id={}, worker={}, files={}, errors={}",
-            job_id, series_id, worker_id, files_found.len(), errors.len()
+            job_id,
+            series_id,
+            worker_id,
+            files_found.len(),
+            errors.len()
         );
 
         // Log any errors from the worker
         for error in &errors {
-            warn!("Worker {} reported error for job {}: {}", worker_id, job_id, error);
+            warn!(
+                "Worker {} reported error for job {}: {}",
+                worker_id, job_id, error
+            );
         }
 
         // Process the files
         if let Err(e) = self.process_scanned_files(series_id, files_found).await {
-            error!("Failed to process scanned files for series {}: {}", series_id, e);
+            error!(
+                "Failed to process scanned files for series {}: {}",
+                series_id, e
+            );
         }
 
         // Update job tracking
@@ -124,11 +151,7 @@ impl ScanResultConsumer {
     }
 
     /// Process scanned files and update the database
-    async fn process_scanned_files(
-        &self,
-        series_id: i64,
-        files: Vec<ScannedFile>,
-    ) -> Result<()> {
+    async fn process_scanned_files(&self, series_id: i64, files: Vec<ScannedFile>) -> Result<()> {
         if files.is_empty() {
             return Ok(());
         }
@@ -138,12 +161,16 @@ impl ScanResultConsumer {
         let episode_file_repo = EpisodeFileRepository::new(self.db.clone());
 
         // Get series info
-        let series = series_repo.get_by_id(series_id).await
+        let series = series_repo
+            .get_by_id(series_id)
+            .await
             .context("Failed to fetch series")?
             .ok_or_else(|| anyhow::anyhow!("Series {} not found", series_id))?;
 
         // Get episodes for this series
-        let episodes = episode_repo.get_by_series_id(series_id).await
+        let episodes = episode_repo
+            .get_by_series_id(series_id)
+            .await
             .context("Failed to fetch episodes")?;
 
         let mut new_files = 0;
@@ -161,13 +188,18 @@ impl ScanResultConsumer {
             let season_number = file.season_number.unwrap_or(1);
 
             // Check if file already exists in database
-            let existing = episode_file_repo.get_by_path(&file_path_str).await.ok().flatten();
+            let existing = episode_file_repo
+                .get_by_path(&file_path_str)
+                .await
+                .ok()
+                .flatten();
 
             let episode_file_id = if let Some(ef) = existing {
                 ef.id
             } else {
                 // Calculate relative path
-                let relative_path = file.path
+                let relative_path = file
+                    .path
                     .strip_prefix(&series.path)
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|_| file.filename.clone());
@@ -223,7 +255,8 @@ impl ScanResultConsumer {
 
             // Link episodes to file
             for episode_num in &file.episode_numbers {
-                if let Some(mut ep) = episodes.iter()
+                if let Some(mut ep) = episodes
+                    .iter()
                     .find(|e| e.season_number == season_number && e.episode_number == *episode_num)
                     .cloned()
                 {
@@ -243,12 +276,16 @@ impl ScanResultConsumer {
 
             // Log multi-episode files
             if file.episode_numbers.len() > 1 {
-                let ep_list: Vec<String> = file.episode_numbers.iter()
+                let ep_list: Vec<String> = file
+                    .episode_numbers
+                    .iter()
                     .map(|e| format!("E{:02}", e))
                     .collect();
                 info!(
                     "Multi-episode file: {} -> S{:02}{}",
-                    file.filename, season_number, ep_list.join("")
+                    file.filename,
+                    season_number,
+                    ep_list.join("")
                 );
             }
         }
@@ -259,22 +296,21 @@ impl ScanResultConsumer {
         );
 
         // Publish series scanned event
-        self.event_bus.publish(Message::SeriesScanned {
-            series_id,
-            title: series.title,
-            files_found: new_files,
-            episodes_matched: matched_episodes,
-        }).await;
+        self.event_bus
+            .publish(Message::SeriesScanned {
+                series_id,
+                title: series.title,
+                files_found: new_files,
+                episodes_matched: matched_episodes,
+            })
+            .await;
 
         Ok(())
     }
 }
 
 /// Create a scan request message
-pub fn create_scan_request(
-    series_ids: Vec<i64>,
-    paths: Vec<String>,
-) -> (String, Message) {
+pub fn create_scan_request(series_ids: Vec<i64>, paths: Vec<String>) -> (String, Message) {
     let job_id = uuid::Uuid::new_v4().to_string();
 
     let message = Message::ScanRequest {

@@ -2,8 +2,8 @@
 
 use axum::{
     extract::{Path, State},
-    response::{IntoResponse, Json},
     http::StatusCode,
+    response::{IntoResponse, Json},
     routing::get,
     Router,
 };
@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::core::datastore::repositories::{
-    DelayProfileRepository, DownloadClientRepository, IndexerRepository,
-    NotificationRepository, TagRepository,
+    DelayProfileRepository, DownloadClientRepository, IndexerRepository, NotificationRepository,
+    TagRepository,
 };
 use crate::web::AppState;
 
@@ -45,12 +45,17 @@ pub async fn get_tags(
 ) -> Result<Json<Vec<TagResource>>, TagError> {
     let repo = TagRepository::new(state.db.clone());
 
-    let tags = repo.get_all().await
+    let tags = repo
+        .get_all()
+        .await
         .map_err(|e| TagError::Internal(format!("Failed to fetch tags: {}", e)))?;
 
     let resources: Vec<TagResource> = tags
         .into_iter()
-        .map(|(id, label)| TagResource { id: id as i32, label })
+        .map(|(id, label)| TagResource {
+            id: id as i32,
+            label,
+        })
         .collect();
 
     Ok(Json(resources))
@@ -63,13 +68,18 @@ pub async fn get_tag(
 ) -> Result<Json<TagResource>, TagError> {
     let repo = TagRepository::new(state.db.clone());
 
-    let tags = repo.get_all().await
+    let tags = repo
+        .get_all()
+        .await
         .map_err(|e| TagError::Internal(format!("Failed to fetch tags: {}", e)))?;
 
     let tag = tags
         .into_iter()
         .find(|(tag_id, _)| *tag_id == id as i64)
-        .map(|(id, label)| TagResource { id: id as i32, label })
+        .map(|(id, label)| TagResource {
+            id: id as i32,
+            label,
+        })
         .ok_or(TagError::NotFound)?;
 
     Ok(Json(tag))
@@ -86,7 +96,9 @@ pub async fn create_tag(
 
     let repo = TagRepository::new(state.db.clone());
 
-    let id = repo.insert(&body.label).await
+    let id = repo
+        .insert(&body.label)
+        .await
         .map_err(|e| TagError::Internal(format!("Failed to create tag: {}", e)))?;
 
     tracing::info!("Created tag: id={}, label={}", id, body.label);
@@ -110,14 +122,17 @@ pub async fn update_tag(
     let repo = TagRepository::new(state.db.clone());
 
     // Verify tag exists
-    let tags = repo.get_all().await
+    let tags = repo
+        .get_all()
+        .await
         .map_err(|e| TagError::Internal(format!("Failed to fetch tags: {}", e)))?;
 
     if !tags.iter().any(|(tag_id, _)| *tag_id == id as i64) {
         return Err(TagError::NotFound);
     }
 
-    repo.update(id as i64, &body.label).await
+    repo.update(id as i64, &body.label)
+        .await
         .map_err(|e| TagError::Internal(format!("Failed to update tag: {}", e)))?;
 
     tracing::info!("Updated tag: id={}, label={}", id, body.label);
@@ -135,7 +150,8 @@ pub async fn delete_tag(
 ) -> Result<Json<serde_json::Value>, TagError> {
     let repo = TagRepository::new(state.db.clone());
 
-    repo.delete(id as i64).await
+    repo.delete(id as i64)
+        .await
         .map_err(|e| TagError::Internal(format!("Failed to delete tag: {}", e)))?;
 
     tracing::info!("Deleted tag: id={}", id);
@@ -153,14 +169,28 @@ pub async fn get_tag_details(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<TagDetailsResource>>, TagError> {
     let tag_repo = TagRepository::new(state.db.clone());
-    let tags = tag_repo.get_all().await
+    let tags = tag_repo
+        .get_all()
+        .await
         .map_err(|e| TagError::Internal(format!("Failed to fetch tags: {}", e)))?;
 
     // Load all entities that carry tags
-    let delay_profiles = DelayProfileRepository::new(state.db.clone()).get_all().await.unwrap_or_default();
-    let notifications = NotificationRepository::new(state.db.clone()).get_all().await.unwrap_or_default();
-    let indexers = IndexerRepository::new(state.db.clone()).get_all().await.unwrap_or_default();
-    let download_clients = DownloadClientRepository::new(state.db.clone()).get_all().await.unwrap_or_default();
+    let delay_profiles = DelayProfileRepository::new(state.db.clone())
+        .get_all()
+        .await
+        .unwrap_or_default();
+    let notifications = NotificationRepository::new(state.db.clone())
+        .get_all()
+        .await
+        .unwrap_or_default();
+    let indexers = IndexerRepository::new(state.db.clone())
+        .get_all()
+        .await
+        .unwrap_or_default();
+    let download_clients = DownloadClientRepository::new(state.db.clone())
+        .get_all()
+        .await
+        .unwrap_or_default();
     // Note: series tags are not stored in the DB schema yet, so series_ids is always empty
 
     let resources: Vec<TagDetailsResource> = tags
@@ -168,19 +198,23 @@ pub async fn get_tag_details(
         .map(|(id, label)| {
             let tag_id = id;
 
-            let delay_profile_ids: Vec<i32> = delay_profiles.iter()
+            let delay_profile_ids: Vec<i32> = delay_profiles
+                .iter()
                 .filter(|dp| parse_tags(&dp.tags).contains(&tag_id))
                 .map(|dp| dp.id as i32)
                 .collect();
-            let notification_ids: Vec<i32> = notifications.iter()
+            let notification_ids: Vec<i32> = notifications
+                .iter()
                 .filter(|n| parse_tags(&n.tags).contains(&tag_id))
                 .map(|n| n.id as i32)
                 .collect();
-            let indexer_ids: Vec<i32> = indexers.iter()
+            let indexer_ids: Vec<i32> = indexers
+                .iter()
                 .filter(|i| parse_tags(&i.tags).contains(&tag_id))
                 .map(|i| i.id as i32)
                 .collect();
-            let download_client_ids: Vec<i32> = download_clients.iter()
+            let download_client_ids: Vec<i32> = download_clients
+                .iter()
                 .filter(|dc| parse_tags(&dc.tags).contains(&tag_id))
                 .map(|dc| dc.id as i32)
                 .collect();
@@ -219,7 +253,10 @@ impl IntoResponse for TagError {
             TagError::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
             TagError::Internal(msg) => {
                 tracing::error!("Tag error: {}", msg);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
             }
         };
 

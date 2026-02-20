@@ -32,20 +32,22 @@ pub struct LanguageResource {
 
 /// GET /api/v3/languageprofile
 pub async fn get_language_profiles() -> Json<Vec<LanguageProfileResource>> {
-    Json(vec![
-        LanguageProfileResource {
+    Json(vec![LanguageProfileResource {
+        id: 1,
+        name: "English".to_string(),
+        upgrade_allowed: true,
+        cutoff: LanguageResource {
             id: 1,
             name: "English".to_string(),
-            upgrade_allowed: true,
-            cutoff: LanguageResource { id: 1, name: "English".to_string() },
-            languages: vec![
-                LanguageProfileItemResource {
-                    language: LanguageResource { id: 1, name: "English".to_string() },
-                    allowed: true,
-                },
-            ],
         },
-    ])
+        languages: vec![LanguageProfileItemResource {
+            language: LanguageResource {
+                id: 1,
+                name: "English".to_string(),
+            },
+            allowed: true,
+        }],
+    }])
 }
 
 /// GET /api/v3/languageprofile/:id
@@ -55,13 +57,17 @@ pub async fn get_language_profile(Path(id): Path<i32>) -> Json<Option<LanguagePr
             id: 1,
             name: "English".to_string(),
             upgrade_allowed: true,
-            cutoff: LanguageResource { id: 1, name: "English".to_string() },
-            languages: vec![
-                LanguageProfileItemResource {
-                    language: LanguageResource { id: 1, name: "English".to_string() },
-                    allowed: true,
+            cutoff: LanguageResource {
+                id: 1,
+                name: "English".to_string(),
+            },
+            languages: vec![LanguageProfileItemResource {
+                language: LanguageResource {
+                    id: 1,
+                    name: "English".to_string(),
                 },
-            ],
+                allowed: true,
+            }],
         }))
     } else {
         Json(None)
@@ -74,13 +80,17 @@ pub async fn get_language_profile_schema() -> Json<LanguageProfileResource> {
         id: 0,
         name: "".to_string(),
         upgrade_allowed: true,
-        cutoff: LanguageResource { id: 1, name: "English".to_string() },
-        languages: vec![
-            LanguageProfileItemResource {
-                language: LanguageResource { id: 1, name: "English".to_string() },
-                allowed: true,
+        cutoff: LanguageResource {
+            id: 1,
+            name: "English".to_string(),
+        },
+        languages: vec![LanguageProfileItemResource {
+            language: LanguageResource {
+                id: 1,
+                name: "English".to_string(),
             },
-        ],
+            allowed: true,
+        }],
     })
 }
 

@@ -145,8 +145,8 @@ pub async fn get_host_config() -> Json<HostConfigResource> {
         ssl_port: 9898,
         enable_ssl: false,
         launch_browser: true,
-        authentication_method: "none".to_string(),  // Always disabled
-        authentication_required: "disabled".to_string(),  // Always disabled
+        authentication_method: "none".to_string(), // Always disabled
+        authentication_required: "disabled".to_string(), // Always disabled
         analytics_enabled: false,
         username: None,
         password: None,
@@ -211,9 +211,14 @@ pub async fn get_naming_config() -> Json<NamingConfigResource> {
         rename_episodes: true,
         replace_illegal_characters: true,
         multi_episode_style: 0,
-        standard_episode_format: "{Series Title} - S{season:00}E{episode:00} - {Episode Title} {Quality Full}".to_string(),
-        daily_episode_format: "{Series Title} - {Air-Date} - {Episode Title} {Quality Full}".to_string(),
-        anime_episode_format: "{Series Title} - S{season:00}E{episode:00} - {Episode Title} {Quality Full}".to_string(),
+        standard_episode_format:
+            "{Series Title} - S{season:00}E{episode:00} - {Episode Title} {Quality Full}"
+                .to_string(),
+        daily_episode_format: "{Series Title} - {Air-Date} - {Episode Title} {Quality Full}"
+            .to_string(),
+        anime_episode_format:
+            "{Series Title} - S{season:00}E{episode:00} - {Episode Title} {Quality Full}"
+                .to_string(),
         series_folder_format: "{Series Title}".to_string(),
         season_folder_format: "Season {season}".to_string(),
         specials_folder_format: "Specials".to_string(),
@@ -227,7 +232,9 @@ pub async fn get_naming_config() -> Json<NamingConfigResource> {
 }
 
 /// PUT /api/v3/config/naming
-pub async fn update_naming_config(Json(body): Json<NamingConfigResource>) -> Json<NamingConfigResource> {
+pub async fn update_naming_config(
+    Json(body): Json<NamingConfigResource>,
+) -> Json<NamingConfigResource> {
     Json(body)
 }
 
@@ -259,7 +266,9 @@ pub async fn get_media_management_config() -> Json<MediaManagementConfigResource
 }
 
 /// PUT /api/v3/config/mediamanagement
-pub async fn update_media_management_config(Json(body): Json<MediaManagementConfigResource>) -> Json<MediaManagementConfigResource> {
+pub async fn update_media_management_config(
+    Json(body): Json<MediaManagementConfigResource>,
+) -> Json<MediaManagementConfigResource> {
     Json(body)
 }
 
@@ -275,7 +284,9 @@ pub async fn get_indexer_config() -> Json<IndexerConfigResource> {
 }
 
 /// PUT /api/v3/config/indexer
-pub async fn update_indexer_config(Json(body): Json<IndexerConfigResource>) -> Json<IndexerConfigResource> {
+pub async fn update_indexer_config(
+    Json(body): Json<IndexerConfigResource>,
+) -> Json<IndexerConfigResource> {
     Json(body)
 }
 
@@ -291,7 +302,9 @@ pub async fn get_download_client_config() -> Json<DownloadClientConfigResource> 
 }
 
 /// PUT /api/v3/config/downloadclient
-pub async fn update_download_client_config(Json(body): Json<DownloadClientConfigResource>) -> Json<DownloadClientConfigResource> {
+pub async fn update_download_client_config(
+    Json(body): Json<DownloadClientConfigResource>,
+) -> Json<DownloadClientConfigResource> {
     Json(body)
 }
 
@@ -300,9 +313,24 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/host", get(get_host_config).put(update_host_config))
         .route("/ui", get(get_ui_config).put(update_ui_config))
         .route("/naming", get(get_naming_config).put(update_naming_config))
-        .route("/mediaManagement", get(get_media_management_config).put(update_media_management_config))
-        .route("/mediamanagement", get(get_media_management_config).put(update_media_management_config)) // lowercase alias
-        .route("/indexer", get(get_indexer_config).put(update_indexer_config))
-        .route("/downloadClient", get(get_download_client_config).put(update_download_client_config))
-        .route("/downloadclient", get(get_download_client_config).put(update_download_client_config)) // lowercase alias
+        .route(
+            "/mediaManagement",
+            get(get_media_management_config).put(update_media_management_config),
+        )
+        .route(
+            "/mediamanagement",
+            get(get_media_management_config).put(update_media_management_config),
+        ) // lowercase alias
+        .route(
+            "/indexer",
+            get(get_indexer_config).put(update_indexer_config),
+        )
+        .route(
+            "/downloadClient",
+            get(get_download_client_config).put(update_download_client_config),
+        )
+        .route(
+            "/downloadclient",
+            get(get_download_client_config).put(update_download_client_config),
+        ) // lowercase alias
 }

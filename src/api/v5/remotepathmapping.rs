@@ -28,7 +28,10 @@ pub async fn get_remote_path_mappings(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<RemotePathMappingResource>>, StatusCode> {
     let repo = RemotePathMappingRepository::new(state.db.clone());
-    let items = repo.get_all().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let items = repo
+        .get_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(items.iter().map(db_to_resource).collect()))
 }
 
@@ -37,7 +40,9 @@ pub async fn get_remote_path_mapping(
     Path(id): Path<i64>,
 ) -> Result<Json<RemotePathMappingResource>, StatusCode> {
     let repo = RemotePathMappingRepository::new(state.db.clone());
-    let item = repo.get_by_id(id).await
+    let item = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(db_to_resource(&item)))
@@ -49,8 +54,13 @@ pub async fn create_remote_path_mapping(
 ) -> Result<impl IntoResponse, StatusCode> {
     let repo = RemotePathMappingRepository::new(state.db.clone());
     let model = resource_to_db(&body, None);
-    let id = repo.insert(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let created = repo.get_by_id(id).await
+    let id = repo
+        .insert(&model)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let created = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok((StatusCode::CREATED, Json(db_to_resource(&created))))
@@ -62,11 +72,15 @@ pub async fn update_remote_path_mapping(
     Json(body): Json<RemotePathMappingResource>,
 ) -> Result<Json<RemotePathMappingResource>, StatusCode> {
     let repo = RemotePathMappingRepository::new(state.db.clone());
-    let _existing = repo.get_by_id(id).await
+    let _existing = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     let model = resource_to_db(&body, Some(id));
-    repo.update(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    repo.update(&model)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(db_to_resource(&model)))
 }
 
@@ -90,7 +104,10 @@ fn db_to_resource(model: &RemotePathMappingDbModel) -> RemotePathMappingResource
     }
 }
 
-fn resource_to_db(resource: &RemotePathMappingResource, id: Option<i64>) -> RemotePathMappingDbModel {
+fn resource_to_db(
+    resource: &RemotePathMappingResource,
+    id: Option<i64>,
+) -> RemotePathMappingDbModel {
     RemotePathMappingDbModel {
         id: id.unwrap_or(0),
         host: resource.host.clone(),
@@ -101,6 +118,14 @@ fn resource_to_db(resource: &RemotePathMappingResource, id: Option<i64>) -> Remo
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/", get(get_remote_path_mappings).post(create_remote_path_mapping))
-        .route("/{id}", get(get_remote_path_mapping).put(update_remote_path_mapping).delete(delete_remote_path_mapping))
+        .route(
+            "/",
+            get(get_remote_path_mappings).post(create_remote_path_mapping),
+        )
+        .route(
+            "/{id}",
+            get(get_remote_path_mapping)
+                .put(update_remote_path_mapping)
+                .delete(delete_remote_path_mapping),
+        )
 }

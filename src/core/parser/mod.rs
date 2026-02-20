@@ -2,12 +2,12 @@
 //! Parser module
 //! Parsing release titles to extract episode information
 
-use regex::Regex;
 use once_cell::sync::Lazy;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::core::profiles::qualities::{Quality, QualityModel, Revision};
 use crate::core::profiles::languages::Language;
+use crate::core::profiles::qualities::{Quality, QualityModel, Revision};
 
 // ============================================================================
 // Regex patterns for parsing
@@ -15,7 +15,10 @@ use crate::core::profiles::languages::Language;
 
 // Standard season/episode patterns: S01E02, S01E02E03, S1E2
 static SEASON_EPISODE_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)[.\s_-]S(\d{1,2})[\.\s_-]?E(\d{1,3})(?:[\.\s_-]?E(\d{1,3}))?(?:[\.\s_-]?E(\d{1,3}))?").unwrap()
+    Regex::new(
+        r"(?i)[.\s_-]S(\d{1,2})[\.\s_-]?E(\d{1,3})(?:[\.\s_-]?E(\d{1,3}))?(?:[\.\s_-]?E(\d{1,3}))?",
+    )
+    .unwrap()
 });
 
 // Alternative season/episode: 1x02, 1x02-03
@@ -29,9 +32,8 @@ static FULL_SEASON_REGEX: Lazy<Regex> = Lazy::new(|| {
 });
 
 // Daily show format: Show.2024.01.15 or Show.2024-01-15
-static DAILY_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)[\.\s_-](\d{4})[\.\s_-](\d{2})[\.\s_-](\d{2})[\.\s_-]").unwrap()
-});
+static DAILY_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)[\.\s_-](\d{4})[\.\s_-](\d{2})[\.\s_-](\d{2})[\.\s_-]").unwrap());
 
 // Absolute episode for anime: Show - 123, Show.123.720p
 static ABSOLUTE_EPISODE_REGEX: Lazy<Regex> = Lazy::new(|| {
@@ -39,68 +41,47 @@ static ABSOLUTE_EPISODE_REGEX: Lazy<Regex> = Lazy::new(|| {
 });
 
 // Year in title: Show (2020) or Show.2020
-static YEAR_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"[\.\s_\(\[-]*((?:19|20)\d{2})(?:[\.\s_\)\]-]|$)").unwrap()
-});
+static YEAR_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"[\.\s_\(\[-]*((?:19|20)\d{2})(?:[\.\s_\)\]-]|$)").unwrap());
 
 // Release group: -GROUP or [GROUP]
-static RELEASE_GROUP_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:-([A-Za-z0-9]+)$|\[([A-Za-z0-9]+)\]$)").unwrap()
-});
+static RELEASE_GROUP_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(?:-([A-Za-z0-9]+)$|\[([A-Za-z0-9]+)\]$)").unwrap());
 
 // Hash pattern: [ABCD1234]
-static HASH_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\[([A-Fa-f0-9]{8})\]").unwrap()
-});
+static HASH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[([A-Fa-f0-9]{8})\]").unwrap());
 
 // Quality patterns
-static QUALITY_2160P_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:2160p|4K|UHD)").unwrap()
-});
+static QUALITY_2160P_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(?:2160p|4K|UHD)").unwrap());
 
-static QUALITY_1080P_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)1080[pi]").unwrap()
-});
+static QUALITY_1080P_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)1080[pi]").unwrap());
 
-static QUALITY_720P_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)720p").unwrap()
-});
+static QUALITY_720P_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)720p").unwrap());
 
-static QUALITY_480P_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:480p|SD)").unwrap()
-});
+static QUALITY_480P_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(?:480p|SD)").unwrap());
 
-static SOURCE_BLURAY_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:BluRay|Blu-Ray|BDREMUX|BD[\.\s_-]?Rip)").unwrap()
-});
+static SOURCE_BLURAY_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(?:BluRay|Blu-Ray|BDREMUX|BD[\.\s_-]?Rip)").unwrap());
 
 static SOURCE_WEBDL_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)(?:WEB[\.\s_-]?DL|WEBDL|WEB[\.\s_-]?Rip|AMZN|DSNP|HMAX|NF|ATVP)").unwrap()
 });
 
-static SOURCE_HDTV_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:HDTV|PDTV|DSR)").unwrap()
-});
+static SOURCE_HDTV_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(?:HDTV|PDTV|DSR)").unwrap());
 
-static SOURCE_DVD_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:DVDRip|DVD[\.\s_-]?R|DVDSCR)").unwrap()
-});
+static SOURCE_DVD_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(?:DVDRip|DVD[\.\s_-]?R|DVDSCR)").unwrap());
 
-static REMUX_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:REMUX|BD[\.\s_-]?REMUX)").unwrap()
-});
+static REMUX_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(?:REMUX|BD[\.\s_-]?REMUX)").unwrap());
 
-static PROPER_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)[\.\s_-]PROPER[\.\s_-]").unwrap()
-});
+static PROPER_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)[\.\s_-]PROPER[\.\s_-]").unwrap());
 
-static REPACK_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)[\.\s_-]REPACK[\.\s_-]").unwrap()
-});
+static REPACK_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)[\.\s_-]REPACK[\.\s_-]").unwrap());
 
-static SPECIAL_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)[\.\s_-](?:Special|SPECIAL|Specials|OVA|OAD)[\.\s_-]").unwrap()
-});
+static SPECIAL_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)[\.\s_-](?:Special|SPECIAL|Specials|OVA|OAD)[\.\s_-]").unwrap());
 
 /// Parsed episode info from release title
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -226,9 +207,18 @@ pub fn parse_title(title: &str) -> Option<ParsedEpisodeInfo> {
     // Try daily show pattern
     else if let Some(caps) = DAILY_REGEX.captures(title) {
         info.is_daily = true;
-        let year: i32 = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
-        let month: u32 = caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
-        let day: u32 = caps.get(3).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+        let year: i32 = caps
+            .get(1)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0);
+        let month: u32 = caps
+            .get(2)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0);
+        let day: u32 = caps
+            .get(3)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0);
 
         if year > 0 && month > 0 && day > 0 {
             info.air_date = chrono::NaiveDate::from_ymd_opt(year, month, day);
@@ -259,7 +249,10 @@ pub fn parse_title(title: &str) -> Option<ParsedEpisodeInfo> {
     // Extract year from series title
     if !info.series_title.is_empty() {
         if let Some(caps) = YEAR_REGEX.captures(&info.series_title) {
-            let year: i32 = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+            let year: i32 = caps
+                .get(1)
+                .and_then(|m| m.as_str().parse().ok())
+                .unwrap_or(0);
             info.series_title_info.title = info.series_title.clone();
             info.series_title_info.year = year;
 
@@ -278,7 +271,10 @@ pub fn parse_title(title: &str) -> Option<ParsedEpisodeInfo> {
     }
 
     // Return None if we couldn't extract any useful info
-    if info.series_title.is_empty() && info.episode_numbers.is_empty() && info.absolute_episode_numbers.is_empty() {
+    if info.series_title.is_empty()
+        && info.episode_numbers.is_empty()
+        && info.absolute_episode_numbers.is_empty()
+    {
         return None;
     }
 
@@ -400,7 +396,9 @@ pub fn title_matches_series(info: &ParsedEpisodeInfo, series_title: &str) -> boo
     }
 
     // Check if one contains the other (for partial matches)
-    if normalized_parsed.contains(&normalized_series) || normalized_series.contains(&normalized_parsed) {
+    if normalized_parsed.contains(&normalized_series)
+        || normalized_series.contains(&normalized_parsed)
+    {
         return true;
     }
 
@@ -437,11 +435,7 @@ pub fn title_matches_series_with_year(
 /// -  40: partial title match + matching year
 /// -  30: partial title match + no year info
 /// -   0: no match
-fn score_series_match(
-    info: &ParsedEpisodeInfo,
-    series_title: &str,
-    series_year: i32,
-) -> u32 {
+fn score_series_match(info: &ParsedEpisodeInfo, series_title: &str, series_year: i32) -> u32 {
     if info.series_title.is_empty() {
         return 0;
     }
@@ -515,7 +509,8 @@ pub fn parse_path(path: &std::path::Path) -> Option<ParsedEpisodeInfo> {
 
 /// Sanitize a series title for searching
 pub fn sanitize_series_title(title: &str) -> String {
-    title.to_lowercase()
+    title
+        .to_lowercase()
         .replace(|c: char| !c.is_alphanumeric() && c != ' ', " ")
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -556,7 +551,10 @@ mod tests {
     fn test_parse_daily_show() {
         let parsed = parse_title("The.Daily.Show.2024.01.15.720p.WEB-DL").unwrap();
         assert!(parsed.is_daily);
-        assert_eq!(parsed.air_date, chrono::NaiveDate::from_ymd_opt(2024, 1, 15));
+        assert_eq!(
+            parsed.air_date,
+            chrono::NaiveDate::from_ymd_opt(2024, 1, 15)
+        );
         assert_eq!(parsed.series_title, "The Daily Show");
     }
 
@@ -569,9 +567,18 @@ mod tests {
 
     #[test]
     fn test_quality_detection() {
-        assert_eq!(parse_quality("Show.S01E01.2160p.BluRay.REMUX").quality, Quality::Bluray2160pRemux);
-        assert_eq!(parse_quality("Show.S01E01.1080p.WEB-DL").quality, Quality::WebDl1080p);
-        assert_eq!(parse_quality("Show.S01E01.720p.HDTV").quality, Quality::Hdtv720p);
+        assert_eq!(
+            parse_quality("Show.S01E01.2160p.BluRay.REMUX").quality,
+            Quality::Bluray2160pRemux
+        );
+        assert_eq!(
+            parse_quality("Show.S01E01.1080p.WEB-DL").quality,
+            Quality::WebDl1080p
+        );
+        assert_eq!(
+            parse_quality("Show.S01E01.720p.HDTV").quality,
+            Quality::Hdtv720p
+        );
     }
 
     #[test]
@@ -668,10 +675,7 @@ mod tests {
             imdb_votes: None,
         };
 
-        let candidates = vec![
-            make_series(1, 1990),
-            make_series(2, 2014),
-        ];
+        let candidates = vec![make_series(1, 1990), make_series(2, 2014)];
 
         // Should pick the 2014 version (index 1), not the 1990 version
         assert_eq!(best_series_match(&parsed, &candidates), Some(1));

@@ -5,18 +5,18 @@
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
-use crate::core::datastore::Database;
 use crate::core::datastore::repositories::{
-    IndexerRepository, DownloadClientRepository, SeriesRepository, RootFolderRepository,
-    EpisodeRepository, QualityProfileRepository, TrackedDownloadRepository,
+    DownloadClientRepository, EpisodeRepository, IndexerRepository, QualityProfileRepository,
+    RootFolderRepository, SeriesRepository, TrackedDownloadRepository,
 };
-use crate::core::indexers::rss::RssSyncService;
+use crate::core::datastore::Database;
 use crate::core::download::clients::create_client_from_model as create_download_client;
 use crate::core::download::import::ImportService;
 use crate::core::indexers::create_client_from_model as create_indexer_client;
-use crate::core::parser::{parse_title, best_series_match};
+use crate::core::indexers::rss::RssSyncService;
+use crate::core::parser::{best_series_match, parse_title};
 use crate::core::profiles::QualityProfileItem;
 use crate::core::queue::service::TrackedDownloadService;
 
@@ -41,7 +41,7 @@ impl JobScheduler {
     pub fn set_metadata_service(&mut self, service: crate::core::metadata::MetadataService) {
         self.metadata_service = Some(service);
     }
-    
+
     /// Initialize default scheduled jobs
     pub async fn initialize_default_jobs(&self) -> Result<()> {
         let default_jobs = vec![
@@ -109,21 +109,21 @@ impl JobScheduler {
                 next_execution: None,
             },
         ];
-        
+
         let mut jobs = self.jobs.write().await;
         *jobs = default_jobs;
-        
+
         info!("Initialized {} scheduled jobs", jobs.len());
         Ok(())
     }
-    
+
     /// Start the scheduler
     pub async fn start(&self) -> Result<()> {
         info!("Starting job scheduler...");
-        
+
         // Spawn task for each enabled job
         let jobs = self.jobs.read().await.clone();
-        
+
         for job in jobs {
             if job.enabled && job.interval_minutes > 0 {
                 let db = self.db.clone();
@@ -133,19 +133,20 @@ impl JobScheduler {
                 });
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Get all scheduled jobs
     pub async fn get_jobs(&self) -> Vec<ScheduledJob> {
         self.jobs.read().await.clone()
     }
-    
+
     /// Execute a job immediately
     pub async fn execute_job(&self, job_id: i64) -> Result<()> {
         let jobs = self.jobs.read().await;
-        let job = jobs.iter()
+        let job = jobs
+            .iter()
             .find(|j| j.id == job_id)
             .context("Job not found")?;
 
@@ -154,7 +155,7 @@ impl JobScheduler {
 
         Ok(())
     }
-    
+
     /// Enable/disable a job
     pub async fn set_job_enabled(&self, job_id: i64, enabled: bool) -> Result<()> {
         let mut jobs = self.jobs.write().await;
@@ -175,7 +176,10 @@ async fn run_job_loop(
     let interval = tokio::time::Duration::from_secs(job.interval_minutes as u64 * 60);
     let mut interval_timer = tokio::time::interval(interval);
 
-    info!("Started job loop for: {} (every {} minutes)", job.name, job.interval_minutes);
+    info!(
+        "Started job loop for: {} (every {} minutes)",
+        job.name, job.interval_minutes
+    );
 
     loop {
         interval_timer.tick().await;
@@ -268,18 +272,14 @@ async fn execute_rss_sync(db: &Database) -> Result<()> {
 
     // Pre-load quality profiles into a map for fast lookup
     let all_profiles = quality_repo.get_all().await?;
-    let profiles: std::collections::HashMap<i64, _> = all_profiles
-        .into_iter()
-        .map(|p| (p.id, p))
-        .collect();
+    let profiles: std::collections::HashMap<i64, _> =
+        all_profiles.into_iter().map(|p| (p.id, p)).collect();
 
     // Get currently downloading episode IDs to avoid duplicate grabs
     let active_downloads = tracked_repo.get_all_active().await.unwrap_or_default();
     let downloading_episode_ids: std::collections::HashSet<i64> = active_downloads
         .iter()
-        .flat_map(|d| {
-            serde_json::from_str::<Vec<i64>>(&d.episode_ids).unwrap_or_default()
-        })
+        .flat_map(|d| serde_json::from_str::<Vec<i64>>(&d.episode_ids).unwrap_or_default())
         .collect();
 
     let mut grabbed = 0u32;
@@ -309,8 +309,10 @@ async fn execute_rss_sync(db: &Database) -> Result<()> {
         let profile = match profiles.get(&series.quality_profile_id) {
             Some(p) => p,
             None => {
-                warn!("RSS: quality profile {} not found for series '{}'",
-                      series.quality_profile_id, series.title);
+                warn!(
+                    "RSS: quality profile {} not found for series '{}'",
+                    series.quality_profile_id, series.title
+                );
                 rejected += 1;
                 continue;
             }
@@ -323,8 +325,9 @@ async fn execute_rss_sync(db: &Database) -> Result<()> {
         // 4. Check if the release quality is allowed by the profile
         let release_weight = release.quality.quality.weight();
         let is_quality_allowed = profile_items.iter().any(|item| {
-            item.allowed && (item.quality.id == release_weight
-                || item.items.iter().any(|q| q.id == release_weight))
+            item.allowed
+                && (item.quality.id == release_weight
+                    || item.items.iter().any(|q| q.id == release_weight))
         });
 
         if !is_quality_allowed {
@@ -343,7 +346,10 @@ async fn execute_rss_sync(db: &Database) -> Result<()> {
         let mut episode_ids = Vec::new();
 
         for &ep_num in &parsed.episode_numbers {
-            if let Ok(Some(ep)) = episode_repo.get_by_series_season_episode(series.id, season, ep_num).await {
+            if let Ok(Some(ep)) = episode_repo
+                .get_by_series_season_episode(series.id, season, ep_num)
+                .await
+            {
                 // Episode must be monitored, missing, and already aired
                 if ep.monitored
                     && !ep.has_file
@@ -362,10 +368,19 @@ async fn execute_rss_sync(db: &Database) -> Result<()> {
 
         // 7. Grab the release
         release.series_id = Some(series.id);
-        info!("RSS auto-grab: '{}' → {} S{:02}E{} ({:?})",
-              release.title, series.title, season,
-              parsed.episode_numbers.iter().map(|e| format!("{:02}", e)).collect::<Vec<_>>().join("E"),
-              release.quality.quality);
+        info!(
+            "RSS auto-grab: '{}' → {} S{:02}E{} ({:?})",
+            release.title,
+            series.title,
+            season,
+            parsed
+                .episode_numbers
+                .iter()
+                .map(|e| format!("{:02}", e))
+                .collect::<Vec<_>>()
+                .join("E"),
+            release.quality.quality
+        );
 
         match tracked_service.grab_release(&release, episode_ids).await {
             Ok(tracked_id) => {
@@ -379,8 +394,12 @@ async fn execute_rss_sync(db: &Database) -> Result<()> {
         }
     }
 
-    info!("RSS sync complete: {} grabbed, {} skipped out of {} releases",
-          grabbed, rejected, grabbed + rejected);
+    info!(
+        "RSS sync complete: {} grabbed, {} skipped out of {} releases",
+        grabbed,
+        rejected,
+        grabbed + rejected
+    );
     Ok(())
 }
 
@@ -409,11 +428,15 @@ async fn execute_refresh_series(
             continue;
         }
 
-        info!("Refreshing series: {} (TVDB: {})", series.title, series.tvdb_id);
+        info!(
+            "Refreshing series: {} (TVDB: {})",
+            series.title, series.tvdb_id
+        );
 
         // Fetch metadata using MetadataService (IMDB-first) or Skyhook-only fallback
         let metadata = if let Some(svc) = metadata_service {
-            svc.fetch_series_metadata(series.tvdb_id, series.imdb_id.as_deref()).await
+            svc.fetch_series_metadata(series.tvdb_id, series.imdb_id.as_deref())
+                .await
         } else {
             crate::core::metadata::MetadataService::fetch_skyhook_only(series.tvdb_id).await
         };
@@ -425,12 +448,13 @@ async fn execute_refresh_series(
 
                 // Apply merged metadata
                 updated_series.overview = m.overview;
-                updated_series.status = match m.status.as_deref().map(|s| s.to_lowercase()).as_deref() {
-                    Some("continuing") => 0,
-                    Some("ended") => 1,
-                    Some("upcoming") => 2,
-                    _ => updated_series.status,
-                };
+                updated_series.status =
+                    match m.status.as_deref().map(|s| s.to_lowercase()).as_deref() {
+                        Some("continuing") => 0,
+                        Some("ended") => 1,
+                        Some("upcoming") => 2,
+                        _ => updated_series.status,
+                    };
                 updated_series.network = m.network;
                 updated_series.runtime = m.runtime.unwrap_or(updated_series.runtime);
                 updated_series.certification = m.certification;
@@ -451,13 +475,19 @@ async fn execute_refresh_series(
                 }
             }
             Err(e) => {
-                warn!("Failed to fetch metadata for series {}: {}", series.title, e);
+                warn!(
+                    "Failed to fetch metadata for series {}: {}",
+                    series.title, e
+                );
                 errors += 1;
             }
         }
     }
 
-    info!("Series refresh complete: {} refreshed, {} errors", refreshed, errors);
+    info!(
+        "Series refresh complete: {} refreshed, {} errors",
+        refreshed, errors
+    );
     Ok(())
 }
 
@@ -507,7 +537,7 @@ async fn execute_housekeeping(db: &Database) -> Result<()> {
 
     // Clean up old command history (older than 30 days)
     let result = sqlx::query(
-        "DELETE FROM commands WHERE started_at < $1 AND status IN ('completed', 'failed')"
+        "DELETE FROM commands WHERE started_at < $1 AND status IN ('completed', 'failed')",
     )
     .bind(thirty_days_ago)
     .execute(pool)
@@ -543,17 +573,15 @@ async fn execute_health_check(db: &Database) -> Result<()> {
         }
 
         match create_download_client(&client_model) {
-            Ok(client) => {
-                match client.test().await {
-                    Ok(()) => {
-                        info!("✓ Download client '{}' is healthy", client_model.name);
-                    }
-                    Err(e) => {
-                        error!("✗ Download client '{}' failed: {}", client_model.name, e);
-                        all_healthy = false;
-                    }
+            Ok(client) => match client.test().await {
+                Ok(()) => {
+                    info!("✓ Download client '{}' is healthy", client_model.name);
                 }
-            }
+                Err(e) => {
+                    error!("✗ Download client '{}' failed: {}", client_model.name, e);
+                    all_healthy = false;
+                }
+            },
             Err(e) => {
                 error!("✗ Failed to create client '{}': {}", client_model.name, e);
                 all_healthy = false;
@@ -584,7 +612,10 @@ async fn execute_health_check(db: &Database) -> Result<()> {
                 }
             }
             Err(e) => {
-                warn!("✗ Failed to create indexer client '{}': {}", indexer.name, e);
+                warn!(
+                    "✗ Failed to create indexer client '{}': {}",
+                    indexer.name, e
+                );
                 all_healthy = false;
             }
         }
@@ -637,7 +668,8 @@ async fn execute_backup(_db: &Database) -> Result<()> {
     let backup_dir = std::env::var("PIR9_BACKUP_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("/config/Backups"));
-    tokio::fs::create_dir_all(&backup_dir).await
+    tokio::fs::create_dir_all(&backup_dir)
+        .await
         .context("Failed to create backup directory")?;
 
     // Create timestamped backup filename
@@ -709,5 +741,8 @@ pub enum JobCommand {
     Backup,
     /// Process download queue (update statuses, trigger imports)
     ProcessDownloadQueue,
-    Custom { name: String, action: String },
+    Custom {
+        name: String,
+        action: String,
+    },
 }

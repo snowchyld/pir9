@@ -2,9 +2,9 @@
 //! Profiles module
 //! Quality profiles, language profiles, and delay profiles
 
-pub mod qualities;
-pub mod languages;
 pub mod delay;
+pub mod languages;
+pub mod qualities;
 
 use serde::{Deserialize, Serialize};
 

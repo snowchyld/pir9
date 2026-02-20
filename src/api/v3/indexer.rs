@@ -107,8 +107,8 @@ pub struct ProviderMessage {
 
 /// Convert DB model to API resource
 fn db_to_resource(model: &IndexerDbModel) -> IndexerResource {
-    let settings: serde_json::Value = serde_json::from_str(&model.settings)
-        .unwrap_or(serde_json::json!({}));
+    let settings: serde_json::Value =
+        serde_json::from_str(&model.settings).unwrap_or(serde_json::json!({}));
 
     let tags: Vec<i32> = serde_json::from_str(&model.tags).unwrap_or_default();
 
@@ -127,7 +127,10 @@ fn db_to_resource(model: &IndexerDbModel) -> IndexerResource {
         implementation_name: model.implementation.clone(),
         implementation: model.implementation.clone(),
         config_contract: model.config_contract.clone(),
-        info_link: Some(format!("https://wiki.servarr.com/sonarr/supported#{}", model.implementation.to_lowercase())),
+        info_link: Some(format!(
+            "https://wiki.servarr.com/sonarr/supported#{}",
+            model.implementation.to_lowercase()
+        )),
         message: None,
         tags,
         presets: vec![],
@@ -175,27 +178,68 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
 
     match implementation {
         "Newznab" | "Torznab" => {
-            fields.push(make_field(0, "baseUrl", "URL", "textbox",
+            fields.push(make_field(
+                0,
+                "baseUrl",
+                "URL",
+                "textbox",
                 settings.get("baseUrl").or(settings.get("url")).cloned(),
-                Some("The URL of the indexer")));
-            fields.push(make_field(1, "apiPath", "API Path", "textbox",
-                settings.get("apiPath").cloned().or(Some(serde_json::json!("/api"))),
-                Some("Path to the API, usually /api")));
-            fields.push(make_field(2, "apiKey", "API Key", "textbox",
+                Some("The URL of the indexer"),
+            ));
+            fields.push(make_field(
+                1,
+                "apiPath",
+                "API Path",
+                "textbox",
+                settings
+                    .get("apiPath")
+                    .cloned()
+                    .or(Some(serde_json::json!("/api"))),
+                Some("Path to the API, usually /api"),
+            ));
+            fields.push(make_field(
+                2,
+                "apiKey",
+                "API Key",
+                "textbox",
                 settings.get("apiKey").cloned(),
-                Some("API key from your indexer")));
-            fields.push(make_field(3, "categories", "Categories", "textbox",
-                settings.get("categories").cloned().or(Some(serde_json::json!("5000,5010,5020,5030,5040,5045"))),
-                Some("Comma-separated list of category IDs")));
-            fields.push(make_field(4, "animeCategories", "Anime Categories", "textbox",
-                settings.get("animeCategories").cloned().or(Some(serde_json::json!("5070"))),
-                Some("Comma-separated list of anime category IDs")));
+                Some("API key from your indexer"),
+            ));
+            fields.push(make_field(
+                3,
+                "categories",
+                "Categories",
+                "textbox",
+                settings
+                    .get("categories")
+                    .cloned()
+                    .or(Some(serde_json::json!("5000,5010,5020,5030,5040,5045"))),
+                Some("Comma-separated list of category IDs"),
+            ));
+            fields.push(make_field(
+                4,
+                "animeCategories",
+                "Anime Categories",
+                "textbox",
+                settings
+                    .get("animeCategories")
+                    .cloned()
+                    .or(Some(serde_json::json!("5070"))),
+                Some("Comma-separated list of anime category IDs"),
+            ));
         }
         _ => {
             // Generic: dump all settings as fields
             if let Some(obj) = settings.as_object() {
                 for (order, (key, value)) in obj.iter().enumerate() {
-                    fields.push(make_field(order as i32, key, key, "textbox", Some(value.clone()), None));
+                    fields.push(make_field(
+                        order as i32,
+                        key,
+                        key,
+                        "textbox",
+                        Some(value.clone()),
+                        None,
+                    ));
                 }
             }
         }
@@ -205,7 +249,14 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
 }
 
 /// Create a field resource
-fn make_field(order: i32, name: &str, label: &str, field_type: &str, value: Option<serde_json::Value>, help_text: Option<&str>) -> FieldResource {
+fn make_field(
+    order: i32,
+    name: &str,
+    label: &str,
+    field_type: &str,
+    value: Option<serde_json::Value>,
+    help_text: Option<&str>,
+) -> FieldResource {
     FieldResource {
         order,
         name: name.to_string(),
@@ -221,7 +272,11 @@ fn make_field(order: i32, name: &str, label: &str, field_type: &str, value: Opti
         select_options_provider_action: None,
         section: None,
         hidden: None,
-        privacy: if name == "apiKey" { Some("apiKey".to_string()) } else { None },
+        privacy: if name == "apiKey" {
+            Some("apiKey".to_string())
+        } else {
+            None
+        },
         placeholder: None,
         is_float: None,
     }
@@ -255,7 +310,10 @@ impl IntoResponse for IndexerError {
             IndexerError::TestFailed(msg) => (StatusCode::BAD_REQUEST, msg),
             IndexerError::Internal(msg) => {
                 tracing::error!("Indexer error: {}", msg);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
             }
         };
 
@@ -269,12 +327,12 @@ pub async fn get_indexers(
 ) -> Result<Json<Vec<IndexerResource>>, IndexerError> {
     let repo = IndexerRepository::new(state.db.clone());
 
-    let indexers = repo.get_all().await
+    let indexers = repo
+        .get_all()
+        .await
         .map_err(|e| IndexerError::Internal(format!("Failed to fetch indexers: {}", e)))?;
 
-    let resources: Vec<IndexerResource> = indexers.iter()
-        .map(db_to_resource)
-        .collect();
+    let resources: Vec<IndexerResource> = indexers.iter().map(db_to_resource).collect();
 
     Ok(Json(resources))
 }
@@ -286,7 +344,9 @@ pub async fn get_indexer(
 ) -> Result<Json<IndexerResource>, IndexerError> {
     let repo = IndexerRepository::new(state.db.clone());
 
-    let indexer = repo.get_by_id(id as i64).await
+    let indexer = repo
+        .get_by_id(id as i64)
+        .await
         .map_err(|e| IndexerError::Internal(format!("Failed to fetch indexer: {}", e)))?
         .ok_or(IndexerError::NotFound)?;
 
@@ -302,19 +362,30 @@ pub async fn create_indexer(
 
     let db_model = resource_to_db(&body, None);
 
-    let id = repo.insert(&db_model).await
+    let id = repo
+        .insert(&db_model)
+        .await
         .map_err(|e| IndexerError::Internal(format!("Failed to create indexer: {}", e)))?;
 
-    let created = repo.get_by_id(id).await
+    let created = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| IndexerError::Internal(format!("Failed to fetch created indexer: {}", e)))?
-        .ok_or(IndexerError::Internal("Created indexer not found".to_string()))?;
+        .ok_or(IndexerError::Internal(
+            "Created indexer not found".to_string(),
+        ))?;
 
-    tracing::info!("Created indexer: {} ({})", created.name, created.implementation);
+    tracing::info!(
+        "Created indexer: {} ({})",
+        created.name,
+        created.implementation
+    );
 
     crate::core::logging::log_info(
         "IndexerCreated",
-        &format!("Created indexer: {}", created.name)
-    ).await;
+        &format!("Created indexer: {}", created.name),
+    )
+    .await;
 
     Ok(Json(db_to_resource(&created)))
 }
@@ -328,18 +399,24 @@ pub async fn update_indexer(
     let repo = IndexerRepository::new(state.db.clone());
 
     // Verify it exists
-    repo.get_by_id(id as i64).await
+    repo.get_by_id(id as i64)
+        .await
         .map_err(|e| IndexerError::Internal(format!("Failed to fetch indexer: {}", e)))?
         .ok_or(IndexerError::NotFound)?;
 
     let db_model = resource_to_db(&body, Some(id as i64));
 
-    repo.update(&db_model).await
+    repo.update(&db_model)
+        .await
         .map_err(|e| IndexerError::Internal(format!("Failed to update indexer: {}", e)))?;
 
-    let updated = repo.get_by_id(id as i64).await
+    let updated = repo
+        .get_by_id(id as i64)
+        .await
         .map_err(|e| IndexerError::Internal(format!("Failed to fetch updated indexer: {}", e)))?
-        .ok_or(IndexerError::Internal("Updated indexer not found".to_string()))?;
+        .ok_or(IndexerError::Internal(
+            "Updated indexer not found".to_string(),
+        ))?;
 
     tracing::info!("Updated indexer: {} (id={})", updated.name, id);
 
@@ -353,19 +430,23 @@ pub async fn delete_indexer(
 ) -> Result<Json<serde_json::Value>, IndexerError> {
     let repo = IndexerRepository::new(state.db.clone());
 
-    let indexer = repo.get_by_id(id as i64).await
+    let indexer = repo
+        .get_by_id(id as i64)
+        .await
         .map_err(|e| IndexerError::Internal(format!("Failed to fetch indexer: {}", e)))?
         .ok_or(IndexerError::NotFound)?;
 
-    repo.delete(id as i64).await
+    repo.delete(id as i64)
+        .await
         .map_err(|e| IndexerError::Internal(format!("Failed to delete indexer: {}", e)))?;
 
     tracing::info!("Deleted indexer: {} (id={})", indexer.name, id);
 
     crate::core::logging::log_info(
         "IndexerDeleted",
-        &format!("Deleted indexer: {}", indexer.name)
-    ).await;
+        &format!("Deleted indexer: {}", indexer.name),
+    )
+    .await;
 
     Ok(Json(serde_json::json!({})))
 }
@@ -381,7 +462,9 @@ pub async fn test_indexer(
         .map_err(|e| IndexerError::TestFailed(format!("Failed to create client: {}", e)))?;
 
     // Test the connection by fetching capabilities
-    let caps = client.test().await
+    let caps = client
+        .test()
+        .await
         .map_err(|e| IndexerError::TestFailed(format!("Connection test failed: {}", e)))?;
 
     tracing::info!(
@@ -404,31 +487,31 @@ pub async fn test_all_indexers(
 ) -> Result<Json<Vec<serde_json::Value>>, IndexerError> {
     let repo = IndexerRepository::new(state.db.clone());
 
-    let indexers = repo.get_all().await
+    let indexers = repo
+        .get_all()
+        .await
         .map_err(|e| IndexerError::Internal(format!("Failed to fetch indexers: {}", e)))?;
 
     let mut results = Vec::new();
 
     for db_indexer in &indexers {
         let test_result = match create_client_from_model(db_indexer) {
-            Ok(client) => {
-                match client.test().await {
-                    Ok(_) => serde_json::json!({
-                        "id": db_indexer.id,
-                        "name": db_indexer.name,
-                        "isValid": true
-                    }),
-                    Err(e) => serde_json::json!({
-                        "id": db_indexer.id,
-                        "name": db_indexer.name,
-                        "isValid": false,
-                        "validationFailures": [{
-                            "propertyName": "",
-                            "errorMessage": e.to_string()
-                        }]
-                    }),
-                }
-            }
+            Ok(client) => match client.test().await {
+                Ok(_) => serde_json::json!({
+                    "id": db_indexer.id,
+                    "name": db_indexer.name,
+                    "isValid": true
+                }),
+                Err(e) => serde_json::json!({
+                    "id": db_indexer.id,
+                    "name": db_indexer.name,
+                    "isValid": false,
+                    "validationFailures": [{
+                        "propertyName": "",
+                        "errorMessage": e.to_string()
+                    }]
+                }),
+            },
             Err(e) => serde_json::json!({
                 "id": db_indexer.id,
                 "name": db_indexer.name,
@@ -449,10 +532,7 @@ pub async fn test_all_indexers(
 /// GET /api/v3/indexer/schema
 /// Get available indexer types (schemas)
 pub async fn get_indexer_schema() -> Json<Vec<IndexerResource>> {
-    let schemas = vec![
-        create_newznab_schema(),
-        create_torznab_schema(),
-    ];
+    let schemas = vec![create_newznab_schema(), create_torznab_schema()];
 
     Json(schemas)
 }
@@ -463,12 +543,54 @@ fn create_newznab_schema() -> IndexerResource {
         id: 0,
         name: "".to_string(),
         fields: vec![
-            make_field(0, "baseUrl", "URL", "textbox", None, Some("The URL of the Newznab indexer")),
-            make_field(1, "apiPath", "API Path", "textbox", Some(serde_json::json!("/api")), Some("Path to the API")),
-            make_field(2, "apiKey", "API Key", "textbox", None, Some("API key from your indexer")),
-            make_field(3, "categories", "Categories", "textbox", Some(serde_json::json!("5000,5010,5020,5030,5040,5045")), Some("Comma-separated category IDs")),
-            make_field(4, "animeCategories", "Anime Categories", "textbox", Some(serde_json::json!("5070")), Some("Comma-separated anime category IDs")),
-            make_field(5, "additionalParameters", "Additional Parameters", "textbox", None, Some("Extra parameters to add to search URL")),
+            make_field(
+                0,
+                "baseUrl",
+                "URL",
+                "textbox",
+                None,
+                Some("The URL of the Newznab indexer"),
+            ),
+            make_field(
+                1,
+                "apiPath",
+                "API Path",
+                "textbox",
+                Some(serde_json::json!("/api")),
+                Some("Path to the API"),
+            ),
+            make_field(
+                2,
+                "apiKey",
+                "API Key",
+                "textbox",
+                None,
+                Some("API key from your indexer"),
+            ),
+            make_field(
+                3,
+                "categories",
+                "Categories",
+                "textbox",
+                Some(serde_json::json!("5000,5010,5020,5030,5040,5045")),
+                Some("Comma-separated category IDs"),
+            ),
+            make_field(
+                4,
+                "animeCategories",
+                "Anime Categories",
+                "textbox",
+                Some(serde_json::json!("5070")),
+                Some("Comma-separated anime category IDs"),
+            ),
+            make_field(
+                5,
+                "additionalParameters",
+                "Additional Parameters",
+                "textbox",
+                None,
+                Some("Extra parameters to add to search URL"),
+            ),
         ],
         implementation_name: "Newznab".to_string(),
         implementation: "Newznab".to_string(),
@@ -495,13 +617,62 @@ fn create_torznab_schema() -> IndexerResource {
         id: 0,
         name: "".to_string(),
         fields: vec![
-            make_field(0, "baseUrl", "URL", "textbox", None, Some("The URL of the Torznab indexer")),
-            make_field(1, "apiPath", "API Path", "textbox", Some(serde_json::json!("/api")), Some("Path to the API")),
-            make_field(2, "apiKey", "API Key", "textbox", None, Some("API key from your indexer")),
-            make_field(3, "categories", "Categories", "textbox", Some(serde_json::json!("5000,5010,5020,5030,5040,5045")), Some("Comma-separated category IDs")),
-            make_field(4, "animeCategories", "Anime Categories", "textbox", Some(serde_json::json!("5070")), Some("Comma-separated anime category IDs")),
-            make_field(5, "minimumSeeders", "Minimum Seeders", "textbox", Some(serde_json::json!(1)), Some("Minimum number of seeders")),
-            make_field(6, "seedCriteria", "Seed Ratio", "textbox", None, Some("Seed ratio requirements")),
+            make_field(
+                0,
+                "baseUrl",
+                "URL",
+                "textbox",
+                None,
+                Some("The URL of the Torznab indexer"),
+            ),
+            make_field(
+                1,
+                "apiPath",
+                "API Path",
+                "textbox",
+                Some(serde_json::json!("/api")),
+                Some("Path to the API"),
+            ),
+            make_field(
+                2,
+                "apiKey",
+                "API Key",
+                "textbox",
+                None,
+                Some("API key from your indexer"),
+            ),
+            make_field(
+                3,
+                "categories",
+                "Categories",
+                "textbox",
+                Some(serde_json::json!("5000,5010,5020,5030,5040,5045")),
+                Some("Comma-separated category IDs"),
+            ),
+            make_field(
+                4,
+                "animeCategories",
+                "Anime Categories",
+                "textbox",
+                Some(serde_json::json!("5070")),
+                Some("Comma-separated anime category IDs"),
+            ),
+            make_field(
+                5,
+                "minimumSeeders",
+                "Minimum Seeders",
+                "textbox",
+                Some(serde_json::json!(1)),
+                Some("Minimum number of seeders"),
+            ),
+            make_field(
+                6,
+                "seedCriteria",
+                "Seed Ratio",
+                "textbox",
+                None,
+                Some("Seed ratio requirements"),
+            ),
         ],
         implementation_name: "Torznab".to_string(),
         implementation: "Torznab".to_string(),

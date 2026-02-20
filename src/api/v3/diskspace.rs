@@ -1,11 +1,6 @@
 //! Disk Space API endpoints
 
-use axum::{
-    extract::State,
-    response::Json,
-    routing::get,
-    Router,
-};
+use axum::{extract::State, response::Json, routing::get, Router};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -44,9 +39,7 @@ fn get_statvfs_info(path: &str) -> Option<FsStats> {
 }
 
 /// GET /api/v3/diskspace
-pub async fn get_disk_space(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<DiskSpaceResource>> {
+pub async fn get_disk_space(State(state): State<Arc<AppState>>) -> Json<Vec<DiskSpaceResource>> {
     let mut disk_spaces = Vec::new();
     let mut seen_devs = std::collections::HashSet::new();
 

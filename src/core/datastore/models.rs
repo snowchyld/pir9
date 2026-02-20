@@ -2,8 +2,8 @@
 //! Database models for SQLx
 //! Entity definitions for database tables
 
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, NaiveDate, Utc};
+use serde::{Deserialize, Serialize};
 
 /// Series database model
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -81,8 +81,8 @@ pub struct EpisodeFileDbModel {
     pub date_added: DateTime<Utc>,
     pub scene_name: Option<String>,
     pub release_group: Option<String>,
-    pub quality: String, // JSON serialized
-    pub languages: String, // JSON serialized
+    pub quality: String,            // JSON serialized
+    pub languages: String,          // JSON serialized
     pub media_info: Option<String>, // JSON serialized
     pub original_file_path: Option<String>,
 }
@@ -110,9 +110,9 @@ pub struct MovieDbModel {
     pub runtime: i32,
     pub studio: Option<String>,
     pub certification: Option<String>,
-    pub genres: String,        // JSON serialized
-    pub tags: String,          // JSON serialized
-    pub images: String,        // JSON serialized
+    pub genres: String, // JSON serialized
+    pub tags: String,   // JSON serialized
+    pub images: String, // JSON serialized
     pub has_file: bool,
     pub movie_file_id: Option<i64>,
     pub added: DateTime<Utc>,
@@ -132,8 +132,8 @@ pub struct MovieFileDbModel {
     pub date_added: DateTime<Utc>,
     pub scene_name: Option<String>,
     pub release_group: Option<String>,
-    pub quality: String,       // JSON serialized
-    pub languages: String,     // JSON serialized
+    pub quality: String,            // JSON serialized
+    pub languages: String,          // JSON serialized
     pub media_info: Option<String>, // JSON serialized
     pub original_file_path: Option<String>,
     pub edition: Option<String>,
@@ -169,7 +169,7 @@ pub struct IndexerDbModel {
     pub priority: i32,
     pub download_client_id: i64,
     pub settings: String, // JSON serialized
-    pub tags: String, // JSON serialized
+    pub tags: String,     // JSON serialized
 }
 
 /// Download client database model
@@ -183,7 +183,7 @@ pub struct DownloadClientDbModel {
     pub implementation: String,
     pub config_contract: String,
     pub settings: String, // JSON serialized
-    pub tags: String, // JSON serialized
+    pub tags: String,     // JSON serialized
 }
 
 /// Notification database model
@@ -206,7 +206,7 @@ pub struct NotificationDbModel {
     pub on_application_update: bool,
     pub include_health_warnings: bool,
     pub settings: String, // JSON serialized
-    pub tags: String, // JSON serialized
+    pub tags: String,     // JSON serialized
 }
 
 /// Quality profile database model
@@ -269,8 +269,8 @@ pub struct HistoryDbModel {
     pub series_id: i64,
     pub episode_id: i64,
     pub source_title: String,
-    pub quality: String, // JSON serialized
-    pub languages: String, // JSON serialized
+    pub quality: String,        // JSON serialized
+    pub languages: String,      // JSON serialized
     pub custom_formats: String, // JSON serialized
     pub custom_format_score: i32,
     pub quality_cutoff_not_met: bool,
@@ -287,8 +287,8 @@ pub struct BlocklistDbModel {
     pub series_id: i64,
     pub episode_ids: String, // JSON serialized
     pub source_title: String,
-    pub quality: String, // JSON serialized
-    pub languages: String, // JSON serialized
+    pub quality: String,        // JSON serialized
+    pub languages: String,      // JSON serialized
     pub custom_formats: String, // JSON serialized
     pub custom_format_score: i32,
     pub protocol: i32,
@@ -358,20 +358,20 @@ pub struct LogFileDbModel {
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct TrackedDownloadDbModel {
     pub id: i64,
-    pub download_id: String,          // ID from download client
-    pub download_client_id: i64,      // FK to download_clients
-    pub series_id: i64,               // FK to series
-    pub episode_ids: String,          // JSON array of episode IDs
-    pub title: String,                // Release title
-    pub indexer: Option<String>,      // Indexer name
-    pub size: i64,                    // Size in bytes
-    pub protocol: i32,                // 1=Usenet, 2=Torrent
-    pub quality: String,              // JSON QualityModel
-    pub languages: String,            // JSON array of languages
-    pub status: i32,                  // TrackedDownloadState enum
-    pub status_messages: String,      // JSON array of StatusMessage
-    pub error_message: Option<String>,// Error message if failed
-    pub output_path: Option<String>,  // Download output path
-    pub is_upgrade: bool,             // Whether this is an upgrade
+    pub download_id: String,           // ID from download client
+    pub download_client_id: i64,       // FK to download_clients
+    pub series_id: i64,                // FK to series
+    pub episode_ids: String,           // JSON array of episode IDs
+    pub title: String,                 // Release title
+    pub indexer: Option<String>,       // Indexer name
+    pub size: i64,                     // Size in bytes
+    pub protocol: i32,                 // 1=Usenet, 2=Torrent
+    pub quality: String,               // JSON QualityModel
+    pub languages: String,             // JSON array of languages
+    pub status: i32,                   // TrackedDownloadState enum
+    pub status_messages: String,       // JSON array of StatusMessage
+    pub error_message: Option<String>, // Error message if failed
+    pub output_path: Option<String>,   // Download output path
+    pub is_upgrade: bool,              // Whether this is an upgrade
     pub added: DateTime<Utc>,
 }

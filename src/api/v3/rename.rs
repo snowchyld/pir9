@@ -1,12 +1,19 @@
 //! Rename API endpoints
 //! Provides preview of episode file renames according to naming format
 
-use axum::{extract::{Query, State}, response::Json, routing::get, Router};
+use axum::{
+    extract::{Query, State},
+    response::Json,
+    routing::get,
+    Router,
+};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::path::Path;
+use std::sync::Arc;
 
-use crate::core::datastore::repositories::{EpisodeFileRepository, EpisodeRepository, SeriesRepository};
+use crate::core::datastore::repositories::{
+    EpisodeFileRepository, EpisodeRepository, SeriesRepository,
+};
 use crate::web::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -61,7 +68,10 @@ pub async fn get_rename(
 
     // Filter by season if specified
     let files: Vec<_> = if let Some(season) = query.season_number {
-        files.into_iter().filter(|f| f.season_number == season).collect()
+        files
+            .into_iter()
+            .filter(|f| f.season_number == season)
+            .collect()
     } else {
         files
     };
@@ -70,7 +80,8 @@ pub async fn get_rename(
 
     for file in files {
         // Find all episodes linked to this file
-        let file_episodes: Vec<_> = episodes.iter()
+        let file_episodes: Vec<_> = episodes
+            .iter()
             .filter(|e| e.episode_file_id == Some(file.id))
             .collect();
 
@@ -79,16 +90,17 @@ pub async fn get_rename(
         }
 
         // Get episode numbers
-        let episode_numbers: Vec<i32> = file_episodes.iter()
-            .map(|e| e.episode_number)
-            .collect();
+        let episode_numbers: Vec<i32> = file_episodes.iter().map(|e| e.episode_number).collect();
 
         // Generate new filename according to naming format
         let new_filename = generate_episode_filename(
             &series.title,
             file.season_number,
             &episode_numbers,
-            &file_episodes.first().map(|e| e.title.clone()).unwrap_or_default(),
+            &file_episodes
+                .first()
+                .map(|e| e.title.clone())
+                .unwrap_or_default(),
             file.release_group.as_deref(),
             &file.path,
         );
@@ -145,9 +157,7 @@ fn generate_episode_filename(
     let episode_part = if episodes.len() == 1 {
         format!("S{:02}E{:02}", season, episodes[0])
     } else {
-        let ep_str: Vec<String> = episodes.iter()
-            .map(|e| format!("E{:02}", e))
-            .collect();
+        let ep_str: Vec<String> = episodes.iter().map(|e| format!("E{:02}", e)).collect();
         format!("S{:02}{}", season, ep_str.join(""))
     };
 
@@ -160,17 +170,14 @@ fn generate_episode_filename(
 
     // Build filename
     let base_name = if let Some(group) = release_group {
-        format!("{} - {} - {} [{}]",
-            clean_series,
-            episode_part,
-            clean_episode_title,
-            group
+        format!(
+            "{} - {} - {} [{}]",
+            clean_series, episode_part, clean_episode_title, group
         )
     } else {
-        format!("{} - {} - {}",
-            clean_series,
-            episode_part,
-            clean_episode_title
+        format!(
+            "{} - {} - {}",
+            clean_series, episode_part, clean_episode_title
         )
     };
 

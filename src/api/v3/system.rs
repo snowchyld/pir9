@@ -1,9 +1,9 @@
 //! System API endpoints
 
 use axum::{response::Json, routing::get, Router};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use chrono::{DateTime, Utc};
 
 use crate::web::AppState;
 
@@ -118,8 +118,7 @@ pub async fn get_status(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Json<SystemResource> {
     let db_type = state.config.database.database_type.clone();
-    let is_docker = std::path::Path::new("/.dockerenv").exists()
-        || std::env::var("DOCKER").is_ok();
+    let is_docker = std::path::Path::new("/.dockerenv").exists() || std::env::var("DOCKER").is_ok();
     let (os_name, os_version) = get_os_info();
 
     let db_version = sqlx::query_scalar::<_, String>("SHOW server_version")

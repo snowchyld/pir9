@@ -25,9 +25,7 @@ pub struct BackupResource {
 }
 
 /// GET /api/v3/system/backup
-pub async fn get_backups(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<BackupResource>> {
+pub async fn get_backups(State(state): State<Arc<AppState>>) -> Json<Vec<BackupResource>> {
     let backup_dir = &state.config.paths.backup_dir;
     let mut backups = Vec::new();
 
@@ -38,7 +36,8 @@ pub async fn get_backups(
                 || path.extension().and_then(|e| e.to_str()) == Some("sql")
             {
                 if let Ok(meta) = entry.metadata() {
-                    let modified = meta.modified()
+                    let modified = meta
+                        .modified()
                         .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
                         .unwrap_or_default();
                     backups.push(BackupResource {
@@ -58,9 +57,7 @@ pub async fn get_backups(
 }
 
 /// POST /api/v3/system/backup
-pub async fn create_backup(
-    State(state): State<Arc<AppState>>,
-) -> Json<BackupResource> {
+pub async fn create_backup(State(state): State<Arc<AppState>>) -> Json<BackupResource> {
     let backup_dir = &state.config.paths.backup_dir;
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
     let filename = format!("pir9_backup_{}.sql", timestamp);
@@ -81,7 +78,9 @@ pub async fn create_backup(
     let size = match result {
         Ok(output) if output.status.success() => {
             tracing::info!("Backup created: {}", filepath.display());
-            std::fs::metadata(&filepath).map(|m| m.len() as i64).unwrap_or(0)
+            std::fs::metadata(&filepath)
+                .map(|m| m.len() as i64)
+                .unwrap_or(0)
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -105,10 +104,7 @@ pub async fn create_backup(
 }
 
 /// DELETE /api/v3/system/backup/:id
-pub async fn delete_backup(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i32>,
-) -> StatusCode {
+pub async fn delete_backup(State(state): State<Arc<AppState>>, Path(id): Path<i32>) -> StatusCode {
     let backup_dir = &state.config.paths.backup_dir;
 
     if let Ok(entries) = std::fs::read_dir(backup_dir) {

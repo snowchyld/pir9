@@ -2,8 +2,8 @@
 
 use axum::{
     extract::{Path, Query, State},
-    response::{IntoResponse, Json},
     http::StatusCode,
+    response::{IntoResponse, Json},
     routing::{get, put},
     Router,
 };
@@ -103,14 +103,14 @@ pub async fn get_episodes(
     let repo = EpisodeRepository::new(state.db.clone());
 
     let episodes = match (query.series_id, query.season_number) {
-        (Some(series_id), Some(season)) => {
-            repo.get_by_series_and_season(series_id as i64, season).await
-                .map_err(|e| EpisodeError::Internal(format!("Failed to fetch episodes: {}", e)))?
-        }
-        (Some(series_id), None) => {
-            repo.get_by_series_id(series_id as i64).await
-                .map_err(|e| EpisodeError::Internal(format!("Failed to fetch episodes: {}", e)))?
-        }
+        (Some(series_id), Some(season)) => repo
+            .get_by_series_and_season(series_id as i64, season)
+            .await
+            .map_err(|e| EpisodeError::Internal(format!("Failed to fetch episodes: {}", e)))?,
+        (Some(series_id), None) => repo
+            .get_by_series_id(series_id as i64)
+            .await
+            .map_err(|e| EpisodeError::Internal(format!("Failed to fetch episodes: {}", e)))?,
         _ => {
             // Parse comma-separated episode IDs if provided
             if let Some(ids_str) = query.episode_ids {
@@ -121,8 +121,9 @@ pub async fn get_episodes(
 
                 let mut episodes = Vec::new();
                 for id in ids {
-                    if let Some(ep) = repo.get_by_id(id).await
-                        .map_err(|e| EpisodeError::Internal(format!("Failed to fetch episode: {}", e)))? {
+                    if let Some(ep) = repo.get_by_id(id).await.map_err(|e| {
+                        EpisodeError::Internal(format!("Failed to fetch episode: {}", e))
+                    })? {
                         episodes.push(ep);
                     }
                 }
@@ -145,7 +146,9 @@ pub async fn get_episode(
 ) -> Result<Json<EpisodeResource>, EpisodeError> {
     let repo = EpisodeRepository::new(state.db.clone());
 
-    let episode = repo.get_by_id(id as i64).await
+    let episode = repo
+        .get_by_id(id as i64)
+        .await
         .map_err(|e| EpisodeError::Internal(format!("Failed to fetch episode: {}", e)))?
         .ok_or(EpisodeError::NotFound)?;
 
@@ -160,17 +163,24 @@ pub async fn update_episode(
 ) -> Result<Json<EpisodeResource>, EpisodeError> {
     let repo = EpisodeRepository::new(state.db.clone());
 
-    let mut episode = repo.get_by_id(id as i64).await
+    let mut episode = repo
+        .get_by_id(id as i64)
+        .await
         .map_err(|e| EpisodeError::Internal(format!("Failed to fetch episode: {}", e)))?
         .ok_or(EpisodeError::NotFound)?;
 
     // Apply updates from body
     episode.monitored = body.monitored;
 
-    repo.update(&episode).await
+    repo.update(&episode)
+        .await
         .map_err(|e| EpisodeError::Internal(format!("Failed to update episode: {}", e)))?;
 
-    tracing::info!("Updated episode: id={}, title={}", episode.id, episode.title);
+    tracing::info!(
+        "Updated episode: id={}, title={}",
+        episode.id,
+        episode.title
+    );
 
     Ok(Json(episode.into()))
 }
@@ -182,7 +192,9 @@ pub async fn update_episode_monitor(
 ) -> Result<Json<Vec<EpisodeResource>>, EpisodeError> {
     let repo = EpisodeRepository::new(state.db.clone());
 
-    let episodes = repo.update_monitored(&body.episode_ids, body.monitored).await
+    let episodes = repo
+        .update_monitored(&body.episode_ids, body.monitored)
+        .await
         .map_err(|e| EpisodeError::Internal(format!("Failed to update episodes: {}", e)))?;
 
     tracing::info!("Updated monitored status for {} episodes", episodes.len());
@@ -204,7 +216,10 @@ impl IntoResponse for EpisodeError {
             EpisodeError::NotFound => (StatusCode::NOT_FOUND, "Episode not found".to_string()),
             EpisodeError::Internal(msg) => {
                 tracing::error!("Episode error: {}", msg);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
             }
         };
 

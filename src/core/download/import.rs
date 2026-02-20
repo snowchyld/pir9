@@ -10,12 +10,12 @@ use crate::core::datastore::models::{
     EpisodeDbModel, EpisodeFileDbModel, HistoryDbModel, SeriesDbModel,
 };
 use crate::core::datastore::repositories::{
-    DownloadClientRepository, EpisodeFileRepository, EpisodeRepository,
-    HistoryRepository, SeriesRepository,
+    DownloadClientRepository, EpisodeFileRepository, EpisodeRepository, HistoryRepository,
+    SeriesRepository,
 };
 use crate::core::datastore::Database;
 use crate::core::download::clients::{create_client_from_model, DownloadState, DownloadStatus};
-use crate::core::parser::{parse_title, best_series_match, ParsedEpisodeInfo};
+use crate::core::parser::{best_series_match, parse_title, ParsedEpisodeInfo};
 
 /// Result of an import operation
 #[derive(Debug, Clone)]
@@ -76,41 +76,33 @@ impl ImportService {
             }
 
             match create_client_from_model(&client_model) {
-                Ok(client) => {
-                    match client.get_downloads().await {
-                        Ok(downloads) => {
-                            for download in downloads {
-                                if download.status == DownloadState::Completed {
-                                    if let Some(output_path) = &download.output_path {
-                                        let pending = self.create_pending_import(
+                Ok(client) => match client.get_downloads().await {
+                    Ok(downloads) => {
+                        for download in downloads {
+                            if download.status == DownloadState::Completed {
+                                if let Some(output_path) = &download.output_path {
+                                    let pending = self
+                                        .create_pending_import(
                                             &download,
                                             client_model.id,
                                             &client_model.name,
                                             output_path,
-                                        ).await;
+                                        )
+                                        .await;
 
-                                        if let Some(p) = pending {
-                                            pending_imports.push(p);
-                                        }
+                                    if let Some(p) = pending {
+                                        pending_imports.push(p);
                                     }
                                 }
                             }
                         }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to get downloads from {}: {}",
-                                client_model.name,
-                                e
-                            );
-                        }
                     }
-                }
+                    Err(e) => {
+                        tracing::warn!("Failed to get downloads from {}: {}", client_model.name, e);
+                    }
+                },
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to create client for {}: {}",
-                        client_model.name,
-                        e
-                    );
+                    tracing::warn!("Failed to create client for {}: {}", client_model.name, e);
                 }
             }
         }
@@ -163,7 +155,10 @@ impl ImportService {
         let series_repo = SeriesRepository::new(self.db.clone());
         let all_series = series_repo.get_all().await?;
 
-        Ok(best_series_match(info, &all_series).map(|idx| all_series.into_iter().nth(idx).unwrap()))
+        Ok(
+            best_series_match(info, &all_series)
+                .map(|idx| all_series.into_iter().nth(idx).unwrap()),
+        )
     }
 
     /// Match episodes for a series based on parsed info
@@ -285,7 +280,11 @@ impl ImportService {
             .unwrap();
 
         // Build destination path
-        let season_number = pending.episodes.first().map(|e| e.season_number).unwrap_or(1);
+        let season_number = pending
+            .episodes
+            .first()
+            .map(|e| e.season_number)
+            .unwrap_or(1);
         let dest_path = self.build_destination_path(series, season_number, source_file)?;
 
         // Create destination directory
@@ -356,11 +355,7 @@ impl ImportService {
         // Log the import
         crate::core::logging::log_info(
             "DownloadImported",
-            &format!(
-                "Imported '{}' -> '{}'",
-                pending.title,
-                dest_path.display()
-            ),
+            &format!("Imported '{}' -> '{}'", pending.title, dest_path.display()),
         )
         .await;
 
@@ -478,7 +473,11 @@ impl ImportService {
     }
 
     /// Clean up a download from the download client after successful import
-    pub async fn cleanup_download(&self, pending: &PendingImport, delete_files: bool) -> Result<()> {
+    pub async fn cleanup_download(
+        &self,
+        pending: &PendingImport,
+        delete_files: bool,
+    ) -> Result<()> {
         let client_repo = DownloadClientRepository::new(self.db.clone());
 
         if let Some(client_model) = client_repo.get_by_id(pending.download_client_id).await? {
@@ -496,7 +495,10 @@ impl ImportService {
     }
 
     /// Process all completed downloads (check, import, cleanup)
-    pub async fn process_completed_downloads(&self, remove_from_client: bool) -> Result<Vec<ImportResult>> {
+    pub async fn process_completed_downloads(
+        &self,
+        remove_from_client: bool,
+    ) -> Result<Vec<ImportResult>> {
         let pending = self.check_for_completed_downloads().await?;
         let mut results = Vec::new();
 
@@ -506,11 +508,7 @@ impl ImportService {
             if result.success && remove_from_client {
                 // Clean up from download client
                 if let Err(e) = self.cleanup_download(&item, false).await {
-                    tracing::warn!(
-                        "Failed to cleanup download '{}': {}",
-                        item.title,
-                        e
-                    );
+                    tracing::warn!("Failed to cleanup download '{}': {}", item.title, e);
                 }
             }
 

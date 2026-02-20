@@ -4,9 +4,9 @@
 use axum::Router;
 use std::sync::Arc;
 
+pub mod models;
 pub mod v3;
 pub mod v5;
-pub mod models;
 
 use crate::web::AppState;
 

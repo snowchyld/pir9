@@ -7,14 +7,16 @@ use axum::{
     Router,
 };
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::collections::HashMap;
-use tokio::sync::RwLock;
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
-use crate::core::datastore::repositories::{EpisodeRepository, IndexerRepository, SeriesRepository, HistoryRepository};
 use crate::core::datastore::models::HistoryDbModel;
+use crate::core::datastore::repositories::{
+    EpisodeRepository, HistoryRepository, IndexerRepository, SeriesRepository,
+};
 use crate::core::indexers::search::IndexerSearchService;
 use crate::core::indexers::{Protocol, ReleaseInfo, SearchCriteria};
 use crate::core::queue::TrackedDownloadService;
@@ -22,9 +24,7 @@ use crate::web::AppState;
 
 /// Cache for recent search results - releases are cached by guid+indexer_id
 /// Expires after 15 minutes
-static RELEASE_CACHE: Lazy<RwLock<ReleaseCache>> = Lazy::new(|| {
-    RwLock::new(ReleaseCache::new())
-});
+static RELEASE_CACHE: Lazy<RwLock<ReleaseCache>> = Lazy::new(|| RwLock::new(ReleaseCache::new()));
 
 struct ReleaseCache {
     releases: HashMap<String, CachedRelease>,
@@ -50,7 +50,11 @@ impl ReleaseCache {
         let key = Self::cache_key(guid, indexer_id);
         if let Some(cached) = self.releases.get(&key) {
             // Check if still valid (15 min expiry)
-            if Utc::now().signed_duration_since(cached.cached_at).num_minutes() < 15 {
+            if Utc::now()
+                .signed_duration_since(cached.cached_at)
+                .num_minutes()
+                < 15
+            {
                 return Some(cached.release.clone());
             }
         }
@@ -59,17 +63,19 @@ impl ReleaseCache {
 
     fn insert(&mut self, release: ReleaseInfo) {
         let key = Self::cache_key(&release.guid, release.indexer_id as i32);
-        self.releases.insert(key, CachedRelease {
-            release,
-            cached_at: Utc::now(),
-        });
+        self.releases.insert(
+            key,
+            CachedRelease {
+                release,
+                cached_at: Utc::now(),
+            },
+        );
 
         // Clean up expired entries if cache is getting large
         if self.releases.len() > 1000 {
             let now = Utc::now();
-            self.releases.retain(|_, v| {
-                now.signed_duration_since(v.cached_at).num_minutes() < 15
-            });
+            self.releases
+                .retain(|_, v| now.signed_duration_since(v.cached_at).num_minutes() < 15);
         }
     }
 
@@ -217,10 +223,14 @@ fn release_to_resource(release: &ReleaseInfo) -> ReleaseResource {
         full_season: release.season_number.is_some() && release.episode_numbers.is_empty(),
         scene_source: false,
         season_number: release.season_number.unwrap_or(0),
-        languages: release.languages.iter().map(|l| LanguageResource {
-            id: l.id,
-            name: l.name.clone(),
-        }).collect(),
+        languages: release
+            .languages
+            .iter()
+            .map(|l| LanguageResource {
+                id: l.id,
+                name: l.name.clone(),
+            })
+            .collect(),
         language_weight: 1,
         air_date: None,
         series_title: release.series_title.clone(),
@@ -293,7 +303,11 @@ pub async fn get_releases(
                 (query.season_number, vec![])
             }
             Err(e) => {
-                tracing::warn!("Failed to fetch episode {}: {}, using query params", episode_id, e);
+                tracing::warn!(
+                    "Failed to fetch episode {}: {}, using query params",
+                    episode_id,
+                    e
+                );
                 (query.season_number, vec![])
             }
         }
@@ -318,8 +332,8 @@ pub async fn get_releases(
 
     // Build search criteria with TVDB ID and series title
     let criteria = SearchCriteria {
-        series_id: series.tvdb_id,  // Use TVDB ID for indexer search
-        series_title: series.title.clone(),  // Text search for all indexers
+        series_id: series.tvdb_id,          // Use TVDB ID for indexer search
+        series_title: series.title.clone(), // Text search for all indexers
         episode_id: query.episode_id,
         season_number,
         episode_numbers,
@@ -346,9 +360,7 @@ pub async fn get_releases(
     }
 
     // Convert to resources
-    let resources: Vec<ReleaseResource> = releases.iter()
-        .map(release_to_resource)
-        .collect();
+    let resources: Vec<ReleaseResource> = releases.iter().map(release_to_resource).collect();
 
     Json(resources)
 }
@@ -369,7 +381,11 @@ pub async fn create_release(
     State(state): State<Arc<AppState>>,
     Json(body): Json<GrabReleaseRequest>,
 ) -> Json<serde_json::Value> {
-    tracing::info!("Grab request for release: {} from indexer {}", body.guid, body.indexer_id);
+    tracing::info!(
+        "Grab request for release: {} from indexer {}",
+        body.guid,
+        body.indexer_id
+    );
 
     // Look up the release from cache
     let release = {
@@ -413,7 +429,10 @@ pub async fn create_release(
 
         if let Some(season) = release.season_number {
             for &ep_num in &release.episode_numbers {
-                if let Ok(Some(ep)) = episode_repo.get_by_series_season_episode(series_id, season, ep_num).await {
+                if let Ok(Some(ep)) = episode_repo
+                    .get_by_series_season_episode(series_id, season, ep_num)
+                    .await
+                {
                     ids.push(ep.id);
                 }
             }
@@ -452,7 +471,8 @@ pub async fn create_release(
                         "releaseGroup": release.release_group,
                         "size": release.size,
                         "downloadClient": "auto",
-                    }).to_string(),
+                    })
+                    .to_string(),
                 };
 
                 if let Err(e) = history_repo.insert(&history).await {
@@ -462,18 +482,22 @@ pub async fn create_release(
 
             crate::core::logging::log_info(
                 "ReleaseGrabbed",
-                &format!("Grabbed release: {}", release.title)
-            ).await;
+                &format!("Grabbed release: {}", release.title),
+            )
+            .await;
 
             // Publish event for UI refresh
-            state.event_bus.publish(crate::core::messaging::Message::ReleaseGrabbed {
-                download_id: format!("{}", tracked_id),
-                series_id: release.series_id.unwrap_or(0),
-                episode_ids: episode_ids.clone(),
-                release_title: release.title.clone(),
-                indexer: release.indexer.clone(),
-                size: release.size,
-            }).await;
+            state
+                .event_bus
+                .publish(crate::core::messaging::Message::ReleaseGrabbed {
+                    download_id: format!("{}", tracked_id),
+                    series_id: release.series_id.unwrap_or(0),
+                    episode_ids: episode_ids.clone(),
+                    release_title: release.title.clone(),
+                    indexer: release.indexer.clone(),
+                    size: release.size,
+                })
+                .await;
 
             Json(serde_json::json!({
                 "success": true,
@@ -486,8 +510,9 @@ pub async fn create_release(
 
             crate::core::logging::log_error(
                 "ReleaseGrabFailed",
-                &format!("Failed to grab release {}: {}", release.title, e)
-            ).await;
+                &format!("Failed to grab release {}: {}", release.title, e),
+            )
+            .await;
 
             Json(serde_json::json!({
                 "success": false,

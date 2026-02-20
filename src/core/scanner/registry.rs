@@ -56,7 +56,12 @@ impl WorkerInfo {
     }
 
     /// Update from a heartbeat
-    pub fn update_heartbeat(&mut self, scans_completed: u64, files_found: u64, uptime_seconds: u64) {
+    pub fn update_heartbeat(
+        &mut self,
+        scans_completed: u64,
+        files_found: u64,
+        uptime_seconds: u64,
+    ) {
         self.last_heartbeat = Instant::now();
         self.scans_completed = scans_completed;
         self.files_found = files_found;
@@ -106,12 +111,22 @@ impl WorkerRegistry {
     }
 
     /// Update a worker's heartbeat
-    pub fn heartbeat(&mut self, worker_id: &str, paths: Vec<String>, scans_completed: u64, files_found: u64, uptime_seconds: u64) {
+    pub fn heartbeat(
+        &mut self,
+        worker_id: &str,
+        paths: Vec<String>,
+        scans_completed: u64,
+        files_found: u64,
+        uptime_seconds: u64,
+    ) {
         if let Some(worker) = self.workers.get_mut(worker_id) {
             worker.update_heartbeat(scans_completed, files_found, uptime_seconds);
             // Update paths in case they changed
             worker.paths = paths;
-            debug!("Heartbeat from worker {}: scans={}, files={}", worker_id, scans_completed, files_found);
+            debug!(
+                "Heartbeat from worker {}: scans={}, files={}",
+                worker_id, scans_completed, files_found
+            );
         } else {
             // Worker wasn't registered, register now
             debug!("Heartbeat from unknown worker {}, registering", worker_id);
@@ -127,8 +142,11 @@ impl WorkerRegistry {
 
         for (worker_id, worker) in self.workers.iter_mut() {
             if worker.is_timed_out() && worker.healthy {
-                warn!("Worker {} has timed out (last heartbeat: {:?} ago)",
-                      worker_id, worker.time_since_heartbeat());
+                warn!(
+                    "Worker {} has timed out (last heartbeat: {:?} ago)",
+                    worker_id,
+                    worker.time_since_heartbeat()
+                );
                 worker.healthy = false;
                 timed_out.push(worker_id.clone());
             }
@@ -149,8 +167,14 @@ impl WorkerRegistry {
 
     /// Get workers that can handle a specific path
     pub fn get_workers_for_path(&self, path: &str) -> Vec<&WorkerInfo> {
-        self.workers.values()
-            .filter(|w| w.healthy && w.paths.iter().any(|p| path.starts_with(p) || p.starts_with(path)))
+        self.workers
+            .values()
+            .filter(|w| {
+                w.healthy
+                    && w.paths
+                        .iter()
+                        .any(|p| path.starts_with(p) || p.starts_with(path))
+            })
             .collect()
     }
 
@@ -217,23 +241,33 @@ impl WorkerRegistryService {
         // Process worker events
         loop {
             match receiver.recv().await {
-                Ok(message) => {
-                    match message {
-                        Message::WorkerOnline { worker_id, paths } => {
-                            let mut reg = registry.write().await;
-                            reg.register(&worker_id, paths);
-                        }
-                        Message::WorkerOffline { worker_id } => {
-                            let mut reg = registry.write().await;
-                            reg.unregister(&worker_id);
-                        }
-                        Message::WorkerHeartbeat { worker_id, paths, scans_completed, files_found, uptime_seconds } => {
-                            let mut reg = registry.write().await;
-                            reg.heartbeat(&worker_id, paths, scans_completed, files_found, uptime_seconds);
-                        }
-                        _ => {}
+                Ok(message) => match message {
+                    Message::WorkerOnline { worker_id, paths } => {
+                        let mut reg = registry.write().await;
+                        reg.register(&worker_id, paths);
                     }
-                }
+                    Message::WorkerOffline { worker_id } => {
+                        let mut reg = registry.write().await;
+                        reg.unregister(&worker_id);
+                    }
+                    Message::WorkerHeartbeat {
+                        worker_id,
+                        paths,
+                        scans_completed,
+                        files_found,
+                        uptime_seconds,
+                    } => {
+                        let mut reg = registry.write().await;
+                        reg.heartbeat(
+                            &worker_id,
+                            paths,
+                            scans_completed,
+                            files_found,
+                            uptime_seconds,
+                        );
+                    }
+                    _ => {}
+                },
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     warn!("Worker registry lagged by {} messages", n);
                 }

@@ -2,8 +2,8 @@
 
 use axum::{
     extract::{Path, State},
-    response::{IntoResponse, Json},
     http::StatusCode,
+    response::{IntoResponse, Json},
     routing::get,
     Router,
 };
@@ -37,7 +37,8 @@ pub struct CommandResource {
 
 impl From<crate::core::datastore::repositories::CommandDbModel> for CommandResource {
     fn from(cmd: crate::core::datastore::repositories::CommandDbModel) -> Self {
-        let body: serde_json::Value = cmd.body
+        let body: serde_json::Value = cmd
+            .body
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or(serde_json::json!({}));
@@ -70,7 +71,9 @@ pub async fn get_commands(
 ) -> Result<Json<Vec<CommandResource>>, CommandError> {
     let repo = CommandRepository::new(state.db.clone());
 
-    let commands = repo.get_all().await
+    let commands = repo
+        .get_all()
+        .await
         .map_err(|e| CommandError::Internal(format!("Failed to fetch commands: {}", e)))?;
 
     let resources: Vec<CommandResource> = commands.into_iter().map(Into::into).collect();
@@ -84,7 +87,9 @@ pub async fn get_command(
 ) -> Result<Json<CommandResource>, CommandError> {
     let repo = CommandRepository::new(state.db.clone());
 
-    let command = repo.get_by_id(id as i64).await
+    let command = repo
+        .get_by_id(id as i64)
+        .await
         .map_err(|e| CommandError::Internal(format!("Failed to fetch command: {}", e)))?
         .ok_or(CommandError::NotFound)?;
 
@@ -96,20 +101,25 @@ pub async fn create_command(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<CommandResource>, CommandError> {
-    let name = body.get("name")
+    let name = body
+        .get("name")
         .and_then(|v| v.as_str())
         .ok_or_else(|| CommandError::Validation("Command name is required".to_string()))?;
 
     let repo = CommandRepository::new(state.db.clone());
 
     let body_str = serde_json::to_string(&body).ok();
-    let id = repo.insert(name, name, body_str.as_deref(), "manual").await
+    let id = repo
+        .insert(name, name, body_str.as_deref(), "manual")
+        .await
         .map_err(|e| CommandError::Internal(format!("Failed to create command: {}", e)))?;
 
     tracing::info!("Queued command: id={}, name={}", id, name);
 
     // Fetch the created command to return
-    let command = repo.get_by_id(id).await
+    let command = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| CommandError::Internal(format!("Failed to fetch command: {}", e)))?
         .ok_or(CommandError::NotFound)?;
 
@@ -140,11 +150,13 @@ pub async fn create_command(
             }
 
             // Publish command started event
-            event_bus.publish(Message::CommandStarted {
-                command_id: cmd_id,
-                name: cmd_name.clone(),
-                message: Some(format!("Starting {}", cmd_name)),
-            }).await;
+            event_bus
+                .publish(Message::CommandStarted {
+                    command_id: cmd_id,
+                    name: cmd_name.clone(),
+                    message: Some(format!("Starting {}", cmd_name)),
+                })
+                .await;
 
             // Execute command based on type (with distributed scanning support)
             let options = CommandExecutionOptions {
@@ -153,7 +165,8 @@ pub async fn create_command(
                 imdb_client: Some(imdb_client),
                 cancel_token: Some(token),
             };
-            let result = execute_command_with_options(&cmd_name, &cmd_body, &db, &event_bus, options).await;
+            let result =
+                execute_command_with_options(&cmd_name, &cmd_body, &db, &event_bus, options).await;
 
             // Clean up cancellation token
             command_tokens.remove(&cmd_id);
@@ -161,31 +174,46 @@ pub async fn create_command(
             // Mark as completed, cancelled, or failed
             match result {
                 Ok(msg) if msg.starts_with("Cancelled:") => {
-                    let _ = repo.update_status(cmd_id, "cancelled", Some("cancelled")).await;
+                    let _ = repo
+                        .update_status(cmd_id, "cancelled", Some("cancelled"))
+                        .await;
                     tracing::info!("Cancelled command: id={}, name={}", cmd_id, cmd_name);
-                    event_bus.publish(Message::CommandCompleted {
-                        command_id: cmd_id,
-                        name: cmd_name.clone(),
-                        message: Some(msg),
-                    }).await;
+                    event_bus
+                        .publish(Message::CommandCompleted {
+                            command_id: cmd_id,
+                            name: cmd_name.clone(),
+                            message: Some(msg),
+                        })
+                        .await;
                 }
                 Ok(msg) => {
-                    if let Err(e) = repo.update_status(cmd_id, "completed", Some("successful")).await {
+                    if let Err(e) = repo
+                        .update_status(cmd_id, "completed", Some("successful"))
+                        .await
+                    {
                         tracing::error!("Failed to complete command {}: {}", cmd_id, e);
                     } else {
-                        tracing::info!("Completed command: id={}, name={}, result={}", cmd_id, cmd_name, msg);
+                        tracing::info!(
+                            "Completed command: id={}, name={}, result={}",
+                            cmd_id,
+                            cmd_name,
+                            msg
+                        );
                         // Log to database for Events page
                         crate::core::logging::log_info(
                             "CommandExecutor",
-                            &format!("{} completed: {}", cmd_name, msg)
-                        ).await;
+                            &format!("{} completed: {}", cmd_name, msg),
+                        )
+                        .await;
                     }
                     // Publish command completed event
-                    event_bus.publish(Message::CommandCompleted {
-                        command_id: cmd_id,
-                        name: cmd_name.clone(),
-                        message: Some(msg),
-                    }).await;
+                    event_bus
+                        .publish(Message::CommandCompleted {
+                            command_id: cmd_id,
+                            name: cmd_name.clone(),
+                            message: Some(msg),
+                        })
+                        .await;
                 }
                 Err(e) => {
                     tracing::error!("Command {} failed: {}", cmd_id, e);
@@ -193,15 +221,18 @@ pub async fn create_command(
                     // Log error to database for Events page
                     crate::core::logging::log_error(
                         "CommandExecutor",
-                        &format!("{} failed: {}", cmd_name, e)
-                    ).await;
+                        &format!("{} failed: {}", cmd_name, e),
+                    )
+                    .await;
                     // Publish command failed event
-                    event_bus.publish(Message::CommandFailed {
-                        command_id: cmd_id,
-                        name: cmd_name.clone(),
-                        message: None,
-                        error: e,
-                    }).await;
+                    event_bus
+                        .publish(Message::CommandFailed {
+                            command_id: cmd_id,
+                            name: cmd_name.clone(),
+                            message: None,
+                            error: e,
+                        })
+                        .await;
                 }
             }
         }
@@ -223,7 +254,8 @@ pub async fn delete_command(
 
     let repo = CommandRepository::new(state.db.clone());
 
-    repo.delete(id as i64).await
+    repo.delete(id as i64)
+        .await
         .map_err(|e| CommandError::Internal(format!("Failed to delete command: {}", e)))?;
 
     tracing::info!("Cancelled/deleted command: id={}", id);
@@ -246,7 +278,10 @@ impl IntoResponse for CommandError {
             CommandError::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
             CommandError::Internal(msg) => {
                 tracing::error!("Command error: {}", msg);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
             }
         };
 
@@ -282,8 +317,19 @@ pub async fn execute_command_with_options(
     options: CommandExecutionOptions,
 ) -> Result<String, String> {
     match name {
-        "RefreshSeries" => execute_refresh_series(body, db, event_bus, options.metadata_service.as_ref(), options.hybrid_event_bus.as_ref()).await,
-        "RescanSeries" => execute_rescan_series(body, db, event_bus, options.hybrid_event_bus.as_ref()).await,
+        "RefreshSeries" => {
+            execute_refresh_series(
+                body,
+                db,
+                event_bus,
+                options.metadata_service.as_ref(),
+                options.hybrid_event_bus.as_ref(),
+            )
+            .await
+        }
+        "RescanSeries" => {
+            execute_rescan_series(body, db, event_bus, options.hybrid_event_bus.as_ref()).await
+        }
         "DownloadedEpisodesScan" | "ProcessMonitoredDownloads" => {
             execute_process_downloads(body, db, event_bus).await
         }
@@ -300,7 +346,15 @@ pub async fn execute_command_with_options(
             tracing::info!("MessagingCleanup: completed");
             Ok("Messaging cleanup completed".to_string())
         }
-        "RefreshMovies" => execute_refresh_movies(body, db, options.imdb_client.as_ref(), options.cancel_token.as_ref()).await,
+        "RefreshMovies" => {
+            execute_refresh_movies(
+                body,
+                db,
+                options.imdb_client.as_ref(),
+                options.cancel_token.as_ref(),
+            )
+            .await
+        }
         "EpisodeSearch" => execute_episode_search(body, db, event_bus).await,
         "SeasonSearch" => execute_season_search(body, db, event_bus).await,
         "SeriesSearch" => execute_series_search(body, db, event_bus).await,
@@ -358,14 +412,19 @@ async fn execute_refresh_series(
     // If no series IDs provided, refresh ALL series
     if series_ids.is_empty() {
         tracing::info!("RefreshSeries: no series IDs provided, refreshing all series");
-        let all_series = series_repo.get_all().await
+        let all_series = series_repo
+            .get_all()
+            .await
             .map_err(|e| format!("Failed to fetch series list: {}", e))?;
         series_ids = all_series.into_iter().map(|s| s.id).collect();
 
         if series_ids.is_empty() {
             return Ok("No series to refresh".to_string());
         }
-        tracing::info!("RefreshSeries: found {} series to refresh", series_ids.len());
+        tracing::info!(
+            "RefreshSeries: found {} series to refresh",
+            series_ids.len()
+        );
     }
 
     tracing::info!("RefreshSeries: refreshing {} series", series_ids.len());
@@ -388,14 +447,25 @@ async fn execute_refresh_series(
             }
         };
 
-        tracing::info!("RefreshSeries: refreshing {} (TVDB: {})", series.title, series.tvdb_id);
+        tracing::info!(
+            "RefreshSeries: refreshing {} (TVDB: {})",
+            series.title,
+            series.tvdb_id
+        );
 
         // Fetch metadata using MetadataService (IMDB-first) or fall back to direct Skyhook
         let metadata = if let Some(svc) = metadata_service {
-            match svc.fetch_series_metadata(series.tvdb_id, series.imdb_id.as_deref()).await {
+            match svc
+                .fetch_series_metadata(series.tvdb_id, series.imdb_id.as_deref())
+                .await
+            {
                 Ok(m) => m,
                 Err(e) => {
-                    tracing::error!("RefreshSeries: failed to fetch metadata for {}: {}", series.title, e);
+                    tracing::error!(
+                        "RefreshSeries: failed to fetch metadata for {}: {}",
+                        series.title,
+                        e
+                    );
                     errors += 1;
                     continue;
                 }
@@ -405,7 +475,11 @@ async fn execute_refresh_series(
             match crate::core::metadata::MetadataService::fetch_skyhook_only(series.tvdb_id).await {
                 Ok(m) => m,
                 Err(e) => {
-                    tracing::error!("RefreshSeries: failed to fetch from Skyhook for {}: {}", series.title, e);
+                    tracing::error!(
+                        "RefreshSeries: failed to fetch from Skyhook for {}: {}",
+                        series.title,
+                        e
+                    );
                     errors += 1;
                     continue;
                 }
@@ -415,7 +489,12 @@ async fn execute_refresh_series(
         // Update series metadata from merged result
         let mut series = series;
         series.overview = metadata.overview;
-        series.status = match metadata.status.as_deref().map(|s| s.to_lowercase()).as_deref() {
+        series.status = match metadata
+            .status
+            .as_deref()
+            .map(|s| s.to_lowercase())
+            .as_deref()
+        {
             Some("continuing") => 0,
             Some("ended") => 1,
             Some("upcoming") => 2,
@@ -437,7 +516,12 @@ async fn execute_refresh_series(
             }
         }
         if series.year != old_year {
-            tracing::info!("RefreshSeries: {} - year updated from {} to {}", series.title, old_year, series.year);
+            tracing::info!(
+                "RefreshSeries: {} - year updated from {} to {}",
+                series.title,
+                old_year,
+                series.year
+            );
         }
         if let Some(first_aired) = &metadata.first_aired {
             series.first_aired = NaiveDate::parse_from_str(first_aired, "%Y-%m-%d").ok();
@@ -447,7 +531,11 @@ async fn execute_refresh_series(
         // Capture IMDB data
         if let Some(ref imdb_id) = metadata.imdb_id {
             if series.imdb_id.is_none() {
-                tracing::info!("RefreshSeries: {} - captured imdb_id: {}", series.title, imdb_id);
+                tracing::info!(
+                    "RefreshSeries: {} - captured imdb_id: {}",
+                    series.title,
+                    imdb_id
+                );
             }
             series.imdb_id = Some(imdb_id.clone());
         }
@@ -456,7 +544,11 @@ async fn execute_refresh_series(
 
         // Update series in database
         if let Err(e) = series_repo.update(&series).await {
-            tracing::error!("RefreshSeries: failed to update series {}: {}", series.title, e);
+            tracing::error!(
+                "RefreshSeries: failed to update series {}: {}",
+                series.title,
+                e
+            );
             errors += 1;
             continue;
         }
@@ -466,9 +558,13 @@ async fn execute_refresh_series(
         let mut episodes_updated = 0;
 
         for ep in &metadata.episodes {
-            let air_date = ep.air_date.as_ref()
+            let air_date = ep
+                .air_date
+                .as_ref()
                 .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-            let air_date_utc = ep.air_date_utc.as_ref()
+            let air_date_utc = ep
+                .air_date_utc
+                .as_ref()
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|dt| dt.with_timezone(&Utc));
 
@@ -476,12 +572,19 @@ async fn execute_refresh_series(
             let existing = if ep.tvdb_id > 0 {
                 episode_repo.get_by_tvdb_id(ep.tvdb_id).await.ok().flatten()
             } else {
-                episode_repo.get_by_series_season_episode(*series_id, ep.season_number, ep.episode_number).await.ok().flatten()
+                episode_repo
+                    .get_by_series_season_episode(*series_id, ep.season_number, ep.episode_number)
+                    .await
+                    .ok()
+                    .flatten()
             };
 
             match existing {
                 Some(mut episode) => {
-                    episode.title = ep.title.clone().unwrap_or_else(|| format!("Episode {}", ep.episode_number));
+                    episode.title = ep
+                        .title
+                        .clone()
+                        .unwrap_or_else(|| format!("Episode {}", ep.episode_number));
                     episode.overview = ep.overview.clone();
                     episode.air_date = air_date;
                     episode.air_date_utc = air_date_utc;
@@ -507,7 +610,10 @@ async fn execute_refresh_series(
                         scene_absolute_episode_number: None,
                         scene_episode_number: None,
                         scene_season_number: None,
-                        title: ep.title.clone().unwrap_or_else(|| format!("Episode {}", ep.episode_number)),
+                        title: ep
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| format!("Episode {}", ep.episode_number)),
                         overview: ep.overview.clone(),
                         air_date,
                         air_date_utc,
@@ -531,17 +637,25 @@ async fn execute_refresh_series(
 
         // Enrich episodes with IMDB ratings
         if let (Some(svc), Some(ref imdb_id)) = (metadata_service, &series.imdb_id) {
-            let all_episodes = episode_repo.get_by_series_id(*series_id).await
+            let all_episodes = episode_repo
+                .get_by_series_id(*series_id)
+                .await
                 .unwrap_or_default();
-            let mut enrichments: Vec<EpisodeEnrichment> = all_episodes.iter().map(|e| EpisodeEnrichment {
-                season_number: e.season_number,
-                episode_number: e.episode_number,
-                imdb_id: None,
-                imdb_rating: None,
-                imdb_votes: None,
-            }).collect();
+            let mut enrichments: Vec<EpisodeEnrichment> = all_episodes
+                .iter()
+                .map(|e| EpisodeEnrichment {
+                    season_number: e.season_number,
+                    episode_number: e.episode_number,
+                    imdb_id: None,
+                    imdb_rating: None,
+                    imdb_votes: None,
+                })
+                .collect();
 
-            if let Ok(enriched) = svc.enrich_episodes_with_imdb(imdb_id, &mut enrichments).await {
+            if let Ok(enriched) = svc
+                .enrich_episodes_with_imdb(imdb_id, &mut enrichments)
+                .await
+            {
                 if enriched > 0 {
                     // Write enriched data back to DB
                     for (ep_model, enrichment) in all_episodes.iter().zip(enrichments.iter()) {
@@ -559,21 +673,28 @@ async fn execute_refresh_series(
 
         tracing::info!(
             "RefreshSeries: {} - {} episodes added, {} updated",
-            series.title, episodes_added, episodes_updated
+            series.title,
+            episodes_added,
+            episodes_updated
         );
 
         // Publish series refreshed event
-        event_bus.publish(crate::core::messaging::Message::SeriesRefreshed {
-            series_id: *series_id,
-            title: series.title.clone(),
-        }).await;
+        event_bus
+            .publish(crate::core::messaging::Message::SeriesRefreshed {
+                series_id: *series_id,
+                title: series.title.clone(),
+            })
+            .await;
 
         refreshed += 1;
     }
 
     // After refreshing metadata, also run a disk scan to update file status
     if !series_ids.is_empty() {
-        tracing::info!("RefreshSeries: triggering disk rescan for {} series", series_ids.len());
+        tracing::info!(
+            "RefreshSeries: triggering disk rescan for {} series",
+            series_ids.len()
+        );
         let rescan_body = serde_json::json!({
             "name": "RescanSeries",
             "seriesIds": series_ids,
@@ -583,7 +704,10 @@ async fn execute_refresh_series(
         }
     }
 
-    Ok(format!("Refreshed {} series ({} errors)", refreshed, errors))
+    Ok(format!(
+        "Refreshed {} series ({} errors)",
+        refreshed, errors
+    ))
 }
 
 /// Execute RefreshMovies command - backfills IMDB IDs, ratings, and Radarr images for movies
@@ -619,7 +743,9 @@ async fn execute_refresh_movies(
     // If no IDs provided, refresh ALL movies
     if movie_ids.is_empty() {
         tracing::info!("RefreshMovies: no movie IDs provided, refreshing all movies");
-        let all_movies = repo.get_all().await
+        let all_movies = repo
+            .get_all()
+            .await
             .map_err(|e| format!("Failed to fetch movie list: {}", e))?;
         movie_ids = all_movies.into_iter().map(|m| m.id).collect();
 
@@ -675,10 +801,15 @@ async fn execute_refresh_movies(
                         Ok(results) if !results.is_empty() => {
                             // Pick best match by year proximity, reject if >2 years off
                             let best = if movie.year > 0 {
-                                results.iter()
+                                results
+                                    .iter()
                                     .filter(|m| m.year.is_some())
-                                    .filter(|m| (m.year.unwrap_or(0) - movie.year).unsigned_abs() <= 2)
-                                    .min_by_key(|m| (m.year.unwrap_or(0) - movie.year).unsigned_abs())
+                                    .filter(|m| {
+                                        (m.year.unwrap_or(0) - movie.year).unsigned_abs() <= 2
+                                    })
+                                    .min_by_key(|m| {
+                                        (m.year.unwrap_or(0) - movie.year).unsigned_abs()
+                                    })
                             } else {
                                 results.first()
                             };
@@ -686,11 +817,16 @@ async fn execute_refresh_movies(
                             if let Some(m) = best {
                                 tracing::debug!(
                                     "RefreshMovies: IMDB match for '{}' ({}): {} [{}]",
-                                    movie.title, movie.year, m.title, m.imdb_id
+                                    movie.title,
+                                    movie.year,
+                                    m.title,
+                                    m.imdb_id
                                 );
                                 // Use the clean IMDB title (without year suffix)
                                 movie.title = m.title.clone();
-                                movie.clean_title = m.title.to_lowercase()
+                                movie.clean_title = m
+                                    .title
+                                    .to_lowercase()
                                     .replace(|c: char| !c.is_alphanumeric() && c != ' ', " ")
                                     .split_whitespace()
                                     .collect::<Vec<_>>()
@@ -709,10 +845,18 @@ async fn execute_refresh_movies(
                             }
                         }
                         Ok(_) => {
-                            tracing::debug!("RefreshMovies: no IMDB results for '{}' (searched: '{}')", movie.title, search_title);
+                            tracing::debug!(
+                                "RefreshMovies: no IMDB results for '{}' (searched: '{}')",
+                                movie.title,
+                                search_title
+                            );
                         }
                         Err(e) => {
-                            tracing::warn!("RefreshMovies: IMDB search failed for '{}': {}", movie.title, e);
+                            tracing::warn!(
+                                "RefreshMovies: IMDB search failed for '{}': {}",
+                                movie.title,
+                                e
+                            );
                         }
                     }
                 }
@@ -726,7 +870,8 @@ async fn execute_refresh_movies(
                     movie.tmdb_id = tmdb_id;
                 }
                 if !images.is_empty() {
-                    let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+                    let images_json =
+                        serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
                     movie.images = images_json;
                     images_found += 1;
                 }
@@ -740,10 +885,18 @@ async fn execute_refresh_movies(
             let err_str = e.to_string();
             if err_str.contains("duplicate key") {
                 if err_str.contains("tmdb_id") {
-                    tracing::warn!("RefreshMovies: tmdb_id {} conflict for '{}', retrying without it", movie.tmdb_id, movie.title);
+                    tracing::warn!(
+                        "RefreshMovies: tmdb_id {} conflict for '{}', retrying without it",
+                        movie.tmdb_id,
+                        movie.title
+                    );
                     movie.tmdb_id = 0;
                 } else if err_str.contains("imdb_id") {
-                    tracing::warn!("RefreshMovies: imdb_id {:?} conflict for '{}', skipping IMDB update", movie.imdb_id, movie.title);
+                    tracing::warn!(
+                        "RefreshMovies: imdb_id {:?} conflict for '{}', skipping IMDB update",
+                        movie.imdb_id,
+                        movie.title
+                    );
                     // Another movie already has this IMDB ID — don't overwrite
                     errors += 1;
                     continue;
@@ -752,15 +905,27 @@ async fn execute_refresh_movies(
                 if let Err(e2) = repo.update(&movie).await {
                     let err2 = e2.to_string();
                     if err2.contains("duplicate key") && err2.contains("imdb_id") {
-                        tracing::warn!("RefreshMovies: imdb_id {:?} also conflicts for '{}', skipping", movie.imdb_id, movie.title);
+                        tracing::warn!(
+                            "RefreshMovies: imdb_id {:?} also conflicts for '{}', skipping",
+                            movie.imdb_id,
+                            movie.title
+                        );
                     } else {
-                        tracing::error!("RefreshMovies: failed to update movie '{}': {}", movie.title, e2);
+                        tracing::error!(
+                            "RefreshMovies: failed to update movie '{}': {}",
+                            movie.title,
+                            e2
+                        );
                     }
                     errors += 1;
                     continue;
                 }
             } else {
-                tracing::error!("RefreshMovies: failed to update movie '{}': {}", movie.title, e);
+                tracing::error!(
+                    "RefreshMovies: failed to update movie '{}': {}",
+                    movie.title,
+                    e
+                );
                 errors += 1;
                 continue;
             }
@@ -770,7 +935,13 @@ async fn execute_refresh_movies(
 
         // Log progress every 50 movies
         if (idx + 1) % 50 == 0 {
-            tracing::info!("RefreshMovies: progress {}/{} (IMDB: {}, images: {})", idx + 1, total, imdb_found, images_found);
+            tracing::info!(
+                "RefreshMovies: progress {}/{} (IMDB: {}, images: {})",
+                idx + 1,
+                total,
+                imdb_found,
+                images_found
+            );
         }
     }
 
@@ -793,7 +964,9 @@ async fn execute_rescan_series(
     hybrid_event_bus: Option<&crate::core::messaging::HybridEventBus>,
 ) -> Result<String, String> {
     use crate::core::datastore::models::EpisodeFileDbModel;
-    use crate::core::datastore::repositories::{EpisodeFileRepository, EpisodeRepository, SeriesRepository};
+    use crate::core::datastore::repositories::{
+        EpisodeFileRepository, EpisodeRepository, SeriesRepository,
+    };
     use chrono::Utc;
     use std::path::Path;
 
@@ -820,7 +993,9 @@ async fn execute_rescan_series(
     if series_ids.is_empty() {
         tracing::info!("RescanSeries: no series IDs provided, rescanning all series");
         let series_repo = crate::core::datastore::repositories::SeriesRepository::new(db.clone());
-        let all_series = series_repo.get_all().await
+        let all_series = series_repo
+            .get_all()
+            .await
             .map_err(|e| format!("Failed to fetch series list: {}", e))?;
         series_ids = all_series.into_iter().map(|s| s.id).collect();
 
@@ -855,7 +1030,11 @@ async fn execute_rescan_series(
 
         let series_path = Path::new(&series.path);
         if !series_path.exists() {
-            tracing::info!("RescanSeries: path does not exist for {}: {}", series.title, series.path);
+            tracing::info!(
+                "RescanSeries: path does not exist for {}: {}",
+                series.title,
+                series.path
+            );
             continue;
         }
 
@@ -884,7 +1063,11 @@ async fn execute_rescan_series(
                 let first_season = parsed_episodes[0].0;
 
                 // Check if we already have an episode file for this path
-                let existing_file = episode_file_repo.get_by_path(&file_path_str).await.ok().flatten();
+                let existing_file = episode_file_repo
+                    .get_by_path(&file_path_str)
+                    .await
+                    .ok()
+                    .flatten();
 
                 let episode_file_id = if let Some(ef) = existing_file {
                     // File already exists in database
@@ -942,7 +1125,11 @@ async fn execute_rescan_series(
                     match episode_file_repo.insert(&episode_file).await {
                         Ok(id) => {
                             total_new_files += 1;
-                            tracing::debug!("Created episode file record: id={}, path={}", id, file_path_str);
+                            tracing::debug!(
+                                "Created episode file record: id={}, path={}",
+                                id,
+                                file_path_str
+                            );
                             id
                         }
                         Err(e) => {
@@ -954,7 +1141,8 @@ async fn execute_rescan_series(
 
                 // Link ALL matched episodes to this file (multi-episode support)
                 for (season, episode_num) in &parsed_episodes {
-                    if let Some(mut ep) = episodes.iter()
+                    if let Some(mut ep) = episodes
+                        .iter()
                         .find(|e| e.season_number == *season && e.episode_number == *episode_num)
                         .cloned()
                     {
@@ -966,7 +1154,10 @@ async fn execute_rescan_series(
                                 total_matched += 1;
                                 tracing::debug!(
                                     "Linked episode {} S{:02}E{:02} to file {}",
-                                    ep.title, ep.season_number, ep.episode_number, episode_file_id
+                                    ep.title,
+                                    ep.season_number,
+                                    ep.episode_number,
+                                    episode_file_id
                                 );
                             }
                         }
@@ -975,31 +1166,43 @@ async fn execute_rescan_series(
 
                 // Log multi-episode file detection
                 if parsed_episodes.len() > 1 {
-                    let ep_list: Vec<String> = parsed_episodes.iter()
+                    let ep_list: Vec<String> = parsed_episodes
+                        .iter()
                         .map(|(s, e)| format!("S{:02}E{:02}", s, e))
                         .collect();
-                    tracing::info!("Multi-episode file detected: {} -> {}", file_name, ep_list.join(", "));
+                    tracing::info!(
+                        "Multi-episode file detected: {} -> {}",
+                        file_name,
+                        ep_list.join(", ")
+                    );
                 }
             }
         }
 
         tracing::info!(
             "RescanSeries: {} - scanned {} files, {} new file records",
-            series.title, video_files.len(), total_new_files
+            series.title,
+            video_files.len(),
+            total_new_files
         );
 
         // Publish series scanned event
-        event_bus.publish(crate::core::messaging::Message::SeriesScanned {
-            series_id: *series_id,
-            title: series.title.clone(),
-            files_found: video_files.len(),
-            episodes_matched: total_matched,
-        }).await;
+        event_bus
+            .publish(crate::core::messaging::Message::SeriesScanned {
+                series_id: *series_id,
+                title: series.title.clone(),
+                files_found: video_files.len(),
+                episodes_matched: total_matched,
+            })
+            .await;
     }
 
     Ok(format!(
         "Scanned {} series: {} files found, {} episodes matched, {} new file records",
-        series_ids.len(), total_files, total_matched, total_new_files
+        series_ids.len(),
+        total_files,
+        total_matched,
+        total_new_files
     ))
 }
 
@@ -1012,7 +1215,10 @@ async fn execute_rescan_series_distributed(
     use crate::core::datastore::repositories::SeriesRepository;
     use crate::core::scanner::create_scan_request;
 
-    tracing::info!("RescanSeries: distributing scan for {} series to workers", series_ids.len());
+    tracing::info!(
+        "RescanSeries: distributing scan for {} series to workers",
+        series_ids.len()
+    );
 
     let series_repo = SeriesRepository::new(db.clone());
 
@@ -1039,7 +1245,9 @@ async fn execute_rescan_series_distributed(
 
     tracing::info!(
         "Publishing scan request: job_id={}, series={:?}, paths={}",
-        job_id, series_ids, paths.len()
+        job_id,
+        series_ids,
+        paths.len()
     );
 
     hybrid_event_bus.publish(message).await;
@@ -1063,7 +1271,9 @@ async fn execute_process_downloads(
     let import_service = ImportService::new(db.clone());
 
     // Check for completed downloads
-    let pending = import_service.check_for_completed_downloads().await
+    let pending = import_service
+        .check_for_completed_downloads()
+        .await
         .map_err(|e| format!("Failed to check downloads: {}", e))?;
 
     if pending.is_empty() {
@@ -1071,7 +1281,10 @@ async fn execute_process_downloads(
         return Ok("No completed downloads to process".to_string());
     }
 
-    tracing::info!("ProcessMonitoredDownloads: found {} completed downloads", pending.len());
+    tracing::info!(
+        "ProcessMonitoredDownloads: found {} completed downloads",
+        pending.len()
+    );
 
     let mut imported = 0;
     let mut failed = 0;
@@ -1088,25 +1301,38 @@ async fn execute_process_downloads(
 
                 // Cleanup from download client
                 if let Err(e) = import_service.cleanup_download(&item, false).await {
-                    tracing::warn!("ProcessMonitoredDownloads: cleanup failed for '{}': {}", item.title, e);
+                    tracing::warn!(
+                        "ProcessMonitoredDownloads: cleanup failed for '{}': {}",
+                        item.title,
+                        e
+                    );
                 }
             }
             Ok(result) => {
                 tracing::warn!(
                     "ProcessMonitoredDownloads: could not import '{}': {}",
                     item.title,
-                    result.error_message.unwrap_or_else(|| "Unknown error".to_string())
+                    result
+                        .error_message
+                        .unwrap_or_else(|| "Unknown error".to_string())
                 );
                 failed += 1;
             }
             Err(e) => {
-                tracing::error!("ProcessMonitoredDownloads: import error for '{}': {}", item.title, e);
+                tracing::error!(
+                    "ProcessMonitoredDownloads: import error for '{}': {}",
+                    item.title,
+                    e
+                );
                 failed += 1;
             }
         }
     }
 
-    Ok(format!("Processed downloads: {} imported, {} failed", imported, failed))
+    Ok(format!(
+        "Processed downloads: {} imported, {} failed",
+        imported, failed
+    ))
 }
 
 /// Execute RssSync command - fetch RSS from all indexers
@@ -1121,7 +1347,9 @@ async fn execute_rss_sync(
     tracing::info!("RssSync: fetching RSS from all indexers");
 
     let indexer_repo = IndexerRepository::new(db.clone());
-    let indexers = indexer_repo.get_all().await
+    let indexers = indexer_repo
+        .get_all()
+        .await
         .map_err(|e| format!("Failed to fetch indexers: {}", e))?;
 
     if indexers.is_empty() {
@@ -1129,7 +1357,9 @@ async fn execute_rss_sync(
     }
 
     let mut rss_service = RssSyncService::new(indexers);
-    let releases = rss_service.sync().await
+    let releases = rss_service
+        .sync()
+        .await
         .map_err(|e| format!("RSS sync failed: {}", e))?;
 
     tracing::info!("RssSync: fetched {} releases from RSS", releases.len());
@@ -1140,7 +1370,10 @@ async fn execute_rss_sync(
     // 3. Grab matching releases automatically
     // For now, just return the count
 
-    Ok(format!("RSS sync completed: {} releases fetched", releases.len()))
+    Ok(format!(
+        "RSS sync completed: {} releases fetched",
+        releases.len()
+    ))
 }
 
 /// Extract release group from filename (e.g., "Show.S01E01.720p.HDTV.x264-GROUP" -> "GROUP")
@@ -1159,10 +1392,7 @@ fn extract_release_group(filename: &str) -> Option<String> {
     if let Some(dash_pos) = name_without_ext.rfind('-') {
         let group = &name_without_ext[dash_pos + 1..];
         // Filter out common false positives
-        if !group.is_empty()
-            && !group.chars().all(|c| c.is_numeric())
-            && group.len() <= 20
-        {
+        if !group.is_empty() && !group.chars().all(|c| c.is_numeric()) && group.len() <= 20 {
             return Some(group.to_string());
         }
     }
@@ -1201,7 +1431,10 @@ fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
         .ok()
         .and_then(|re| re.captures(filename))
     {
-        if let Some(season) = season_match.get(1).and_then(|m| m.as_str().parse::<i32>().ok()) {
+        if let Some(season) = season_match
+            .get(1)
+            .and_then(|m| m.as_str().parse::<i32>().ok())
+        {
             // Find all episode numbers after the season marker
             // Match pattern like S01E01E02E03 or S01E01-E02-E03
             if let Ok(re) = regex::Regex::new(r"[Ss]\d{1,2}([Ee]\d{1,2})+") {
@@ -1210,7 +1443,9 @@ fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
                     // Extract all episode numbers from the match
                     if let Ok(ep_re) = regex::Regex::new(r"[Ee](\d{1,2})") {
                         for cap in ep_re.captures_iter(episode_part) {
-                            if let Some(ep_num) = cap.get(1).and_then(|m| m.as_str().parse::<i32>().ok()) {
+                            if let Some(ep_num) =
+                                cap.get(1).and_then(|m| m.as_str().parse::<i32>().ok())
+                            {
                                 episodes.push((season, ep_num));
                             }
                         }
@@ -1238,14 +1473,15 @@ fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
     episodes
 }
 
-
 /// Execute EpisodeSearch command - search indexers for specific episodes
 async fn execute_episode_search(
     body: &serde_json::Value,
     db: &crate::core::datastore::Database,
     event_bus: &crate::core::messaging::EventBus,
 ) -> Result<String, String> {
-    use crate::core::datastore::repositories::{EpisodeRepository, IndexerRepository, SeriesRepository};
+    use crate::core::datastore::repositories::{
+        EpisodeRepository, IndexerRepository, SeriesRepository,
+    };
     use crate::core::indexers::search::IndexerSearchService;
     use crate::core::indexers::SearchCriteria;
 
@@ -1261,7 +1497,10 @@ async fn execute_episode_search(
         return Ok("No episodes to search".to_string());
     }
 
-    tracing::info!("EpisodeSearch: searching for {} episodes", episode_ids.len());
+    tracing::info!(
+        "EpisodeSearch: searching for {} episodes",
+        episode_ids.len()
+    );
 
     // Get indexers from database
     let indexer_repo = IndexerRepository::new(db.clone());
@@ -1278,7 +1517,8 @@ async fn execute_episode_search(
         return Ok("No indexers configured".to_string());
     }
 
-    let enabled_indexers: Vec<_> = indexers.into_iter()
+    let enabled_indexers: Vec<_> = indexers
+        .into_iter()
         .filter(|i| i.enable_automatic_search)
         .collect();
 
@@ -1303,7 +1543,11 @@ async fn execute_episode_search(
                 continue;
             }
             Err(e) => {
-                tracing::error!("EpisodeSearch: failed to fetch episode {}: {}", episode_id, e);
+                tracing::error!(
+                    "EpisodeSearch: failed to fetch episode {}: {}",
+                    episode_id,
+                    e
+                );
                 continue;
             }
         };
@@ -1316,7 +1560,11 @@ async fn execute_episode_search(
                 continue;
             }
             Err(e) => {
-                tracing::error!("EpisodeSearch: failed to fetch series {}: {}", episode.series_id, e);
+                tracing::error!(
+                    "EpisodeSearch: failed to fetch series {}: {}",
+                    episode.series_id,
+                    e
+                );
                 continue;
             }
         };
@@ -1332,8 +1580,8 @@ async fn execute_episode_search(
 
         // Build search criteria using TVDB ID and series title
         let criteria = SearchCriteria {
-            series_id: series.tvdb_id,  // TVDB ID for indexers that support it
-            series_title: series.title.clone(),  // Text search for all indexers
+            series_id: series.tvdb_id,          // TVDB ID for indexers that support it
+            series_title: series.title.clone(), // Text search for all indexers
             episode_id: Some(*episode_id),
             season_number: Some(episode.season_number),
             episode_numbers: vec![episode.episode_number],
@@ -1377,12 +1625,14 @@ async fn execute_episode_search(
         }
 
         // Publish search event for notifications/history
-        event_bus.publish(crate::core::messaging::Message::EpisodeSearchRequested {
-            episode_id: *episode_id,
-            series_id: episode.series_id,
-            season_number: episode.season_number,
-            episode_number: episode.episode_number,
-        }).await;
+        event_bus
+            .publish(crate::core::messaging::Message::EpisodeSearchRequested {
+                episode_id: *episode_id,
+                series_id: episode.series_id,
+                season_number: episode.season_number,
+                episode_number: episode.episode_number,
+            })
+            .await;
     }
 
     Ok(format!(
@@ -1412,15 +1662,24 @@ async fn execute_season_search(
         .map(|n| n as i32)
         .ok_or_else(|| "Missing seasonNumber".to_string())?;
 
-    tracing::info!("SeasonSearch: searching for series {} season {}", series_id, season_number);
+    tracing::info!(
+        "SeasonSearch: searching for series {} season {}",
+        series_id,
+        season_number
+    );
 
     // Publish search event
-    event_bus.publish(crate::core::messaging::Message::SeasonSearchRequested {
-        series_id,
-        season_number,
-    }).await;
+    event_bus
+        .publish(crate::core::messaging::Message::SeasonSearchRequested {
+            series_id,
+            season_number,
+        })
+        .await;
 
-    Ok(format!("Season search started for series {} season {}", series_id, season_number))
+    Ok(format!(
+        "Season search started for series {} season {}",
+        series_id, season_number
+    ))
 }
 
 /// Execute SeriesSearch command - search indexers for all episodes in a series
@@ -1436,12 +1695,15 @@ async fn execute_series_search(
         .and_then(|v| v.as_i64())
         .ok_or_else(|| "Missing seriesId".to_string())?;
 
-    tracing::info!("SeriesSearch: searching for all episodes in series {}", series_id);
+    tracing::info!(
+        "SeriesSearch: searching for all episodes in series {}",
+        series_id
+    );
 
     // Publish search event
-    event_bus.publish(crate::core::messaging::Message::SeriesSearchRequested {
-        series_id,
-    }).await;
+    event_bus
+        .publish(crate::core::messaging::Message::SeriesSearchRequested { series_id })
+        .await;
 
     Ok(format!("Series search started for series {}", series_id))
 }

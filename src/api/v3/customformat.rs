@@ -110,7 +110,10 @@ pub async fn get_custom_formats(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<CustomFormatResource>>, StatusCode> {
     let repo = CustomFormatRepository::new(state.db.clone());
-    let items = repo.get_all().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let items = repo
+        .get_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(items.iter().map(db_to_resource).collect()))
 }
 
@@ -120,7 +123,9 @@ pub async fn get_custom_format(
     Path(id): Path<i64>,
 ) -> Result<Json<CustomFormatResource>, StatusCode> {
     let repo = CustomFormatRepository::new(state.db.clone());
-    let item = repo.get_by_id(id).await
+    let item = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(db_to_resource(&item)))
@@ -133,8 +138,13 @@ pub async fn create_custom_format(
 ) -> Result<impl IntoResponse, StatusCode> {
     let repo = CustomFormatRepository::new(state.db.clone());
     let model = resource_to_db(&body, None);
-    let id = repo.insert(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let created = repo.get_by_id(id).await
+    let id = repo
+        .insert(&model)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let created = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok((StatusCode::CREATED, Json(db_to_resource(&created))))
@@ -147,11 +157,15 @@ pub async fn update_custom_format(
     Json(body): Json<CustomFormatResource>,
 ) -> Result<Json<CustomFormatResource>, StatusCode> {
     let repo = CustomFormatRepository::new(state.db.clone());
-    let _existing = repo.get_by_id(id).await
+    let _existing = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     let model = resource_to_db(&body, Some(id));
-    repo.update(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    repo.update(&model)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(db_to_resource(&model)))
 }
 
@@ -182,7 +196,14 @@ pub async fn get_custom_format_schema() -> Json<Vec<CustomFormatSpecificationRes
     ])
 }
 
-fn make_field(order: i32, name: &str, label: &str, field_type: &str, value: Option<serde_json::Value>, help_text: Option<&str>) -> FieldResource {
+fn make_field(
+    order: i32,
+    name: &str,
+    label: &str,
+    field_type: &str,
+    value: Option<serde_json::Value>,
+    help_text: Option<&str>,
+) -> FieldResource {
     FieldResource {
         order,
         name: name.to_string(),
@@ -213,9 +234,14 @@ fn create_release_title_spec() -> CustomFormatSpecificationResource {
         info_link: None,
         negate: false,
         required: false,
-        fields: vec![
-            make_field(0, "value", "Regular Expression", "textbox", None, Some("Custom Format RegEx is Case Insensitive")),
-        ],
+        fields: vec![make_field(
+            0,
+            "value",
+            "Regular Expression",
+            "textbox",
+            None,
+            Some("Custom Format RegEx is Case Insensitive"),
+        )],
         presets: vec![],
     }
 }
@@ -229,9 +255,14 @@ fn create_release_group_spec() -> CustomFormatSpecificationResource {
         info_link: None,
         negate: false,
         required: false,
-        fields: vec![
-            make_field(0, "value", "Regular Expression", "textbox", None, Some("Custom Format RegEx is Case Insensitive")),
-        ],
+        fields: vec![make_field(
+            0,
+            "value",
+            "Regular Expression",
+            "textbox",
+            None,
+            Some("Custom Format RegEx is Case Insensitive"),
+        )],
         presets: vec![],
     }
 }
@@ -245,47 +276,214 @@ fn create_edition_spec() -> CustomFormatSpecificationResource {
         info_link: None,
         negate: false,
         required: false,
-        fields: vec![
-            make_field(0, "value", "Regular Expression", "textbox", None, Some("Custom Format RegEx is Case Insensitive")),
-        ],
+        fields: vec![make_field(
+            0,
+            "value",
+            "Regular Expression",
+            "textbox",
+            None,
+            Some("Custom Format RegEx is Case Insensitive"),
+        )],
         presets: vec![],
     }
 }
 
 fn create_language_spec() -> CustomFormatSpecificationResource {
-    let mut field = make_field(0, "value", "Language", "select", Some(serde_json::json!(1)), None);
+    let mut field = make_field(
+        0,
+        "value",
+        "Language",
+        "select",
+        Some(serde_json::json!(1)),
+        None,
+    );
     field.select_options = Some(vec![
-        SelectOption { value: serde_json::json!(1), name: "English".to_string(), order: 0, hint: None },
-        SelectOption { value: serde_json::json!(2), name: "French".to_string(), order: 1, hint: None },
-        SelectOption { value: serde_json::json!(3), name: "Spanish".to_string(), order: 2, hint: None },
-        SelectOption { value: serde_json::json!(4), name: "German".to_string(), order: 3, hint: None },
-        SelectOption { value: serde_json::json!(5), name: "Italian".to_string(), order: 4, hint: None },
-        SelectOption { value: serde_json::json!(6), name: "Danish".to_string(), order: 5, hint: None },
-        SelectOption { value: serde_json::json!(7), name: "Dutch".to_string(), order: 6, hint: None },
-        SelectOption { value: serde_json::json!(8), name: "Japanese".to_string(), order: 7, hint: None },
-        SelectOption { value: serde_json::json!(9), name: "Icelandic".to_string(), order: 8, hint: None },
-        SelectOption { value: serde_json::json!(10), name: "Chinese".to_string(), order: 9, hint: None },
-        SelectOption { value: serde_json::json!(11), name: "Russian".to_string(), order: 10, hint: None },
-        SelectOption { value: serde_json::json!(12), name: "Polish".to_string(), order: 11, hint: None },
-        SelectOption { value: serde_json::json!(13), name: "Vietnamese".to_string(), order: 12, hint: None },
-        SelectOption { value: serde_json::json!(14), name: "Swedish".to_string(), order: 13, hint: None },
-        SelectOption { value: serde_json::json!(15), name: "Norwegian".to_string(), order: 14, hint: None },
-        SelectOption { value: serde_json::json!(16), name: "Finnish".to_string(), order: 15, hint: None },
-        SelectOption { value: serde_json::json!(17), name: "Turkish".to_string(), order: 16, hint: None },
-        SelectOption { value: serde_json::json!(18), name: "Portuguese".to_string(), order: 17, hint: None },
-        SelectOption { value: serde_json::json!(19), name: "Flemish".to_string(), order: 18, hint: None },
-        SelectOption { value: serde_json::json!(20), name: "Greek".to_string(), order: 19, hint: None },
-        SelectOption { value: serde_json::json!(21), name: "Korean".to_string(), order: 20, hint: None },
-        SelectOption { value: serde_json::json!(22), name: "Hungarian".to_string(), order: 21, hint: None },
-        SelectOption { value: serde_json::json!(23), name: "Hebrew".to_string(), order: 22, hint: None },
-        SelectOption { value: serde_json::json!(24), name: "Lithuanian".to_string(), order: 23, hint: None },
-        SelectOption { value: serde_json::json!(25), name: "Czech".to_string(), order: 24, hint: None },
-        SelectOption { value: serde_json::json!(26), name: "Hindi".to_string(), order: 25, hint: None },
-        SelectOption { value: serde_json::json!(27), name: "Romanian".to_string(), order: 26, hint: None },
-        SelectOption { value: serde_json::json!(28), name: "Thai".to_string(), order: 27, hint: None },
-        SelectOption { value: serde_json::json!(29), name: "Bulgarian".to_string(), order: 28, hint: None },
-        SelectOption { value: serde_json::json!(0), name: "Original".to_string(), order: 29, hint: None },
-        SelectOption { value: serde_json::json!(-2), name: "Any".to_string(), order: 30, hint: None },
+        SelectOption {
+            value: serde_json::json!(1),
+            name: "English".to_string(),
+            order: 0,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(2),
+            name: "French".to_string(),
+            order: 1,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(3),
+            name: "Spanish".to_string(),
+            order: 2,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(4),
+            name: "German".to_string(),
+            order: 3,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(5),
+            name: "Italian".to_string(),
+            order: 4,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(6),
+            name: "Danish".to_string(),
+            order: 5,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(7),
+            name: "Dutch".to_string(),
+            order: 6,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(8),
+            name: "Japanese".to_string(),
+            order: 7,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(9),
+            name: "Icelandic".to_string(),
+            order: 8,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(10),
+            name: "Chinese".to_string(),
+            order: 9,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(11),
+            name: "Russian".to_string(),
+            order: 10,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(12),
+            name: "Polish".to_string(),
+            order: 11,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(13),
+            name: "Vietnamese".to_string(),
+            order: 12,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(14),
+            name: "Swedish".to_string(),
+            order: 13,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(15),
+            name: "Norwegian".to_string(),
+            order: 14,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(16),
+            name: "Finnish".to_string(),
+            order: 15,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(17),
+            name: "Turkish".to_string(),
+            order: 16,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(18),
+            name: "Portuguese".to_string(),
+            order: 17,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(19),
+            name: "Flemish".to_string(),
+            order: 18,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(20),
+            name: "Greek".to_string(),
+            order: 19,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(21),
+            name: "Korean".to_string(),
+            order: 20,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(22),
+            name: "Hungarian".to_string(),
+            order: 21,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(23),
+            name: "Hebrew".to_string(),
+            order: 22,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(24),
+            name: "Lithuanian".to_string(),
+            order: 23,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(25),
+            name: "Czech".to_string(),
+            order: 24,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(26),
+            name: "Hindi".to_string(),
+            order: 25,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(27),
+            name: "Romanian".to_string(),
+            order: 26,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(28),
+            name: "Thai".to_string(),
+            order: 27,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(29),
+            name: "Bulgarian".to_string(),
+            order: 28,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(0),
+            name: "Original".to_string(),
+            order: 29,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(-2),
+            name: "Any".to_string(),
+            order: 30,
+            hint: None,
+        },
     ]);
 
     CustomFormatSpecificationResource {
@@ -302,15 +500,57 @@ fn create_language_spec() -> CustomFormatSpecificationResource {
 }
 
 fn create_indexer_flag_spec() -> CustomFormatSpecificationResource {
-    let mut field = make_field(0, "value", "Flag", "select", Some(serde_json::json!(1)), None);
+    let mut field = make_field(
+        0,
+        "value",
+        "Flag",
+        "select",
+        Some(serde_json::json!(1)),
+        None,
+    );
     field.select_options = Some(vec![
-        SelectOption { value: serde_json::json!(1), name: "Freeleech".to_string(), order: 0, hint: None },
-        SelectOption { value: serde_json::json!(2), name: "Halfleech".to_string(), order: 1, hint: None },
-        SelectOption { value: serde_json::json!(4), name: "DoubleUpload".to_string(), order: 2, hint: None },
-        SelectOption { value: serde_json::json!(8), name: "Internal".to_string(), order: 3, hint: None },
-        SelectOption { value: serde_json::json!(16), name: "Scene".to_string(), order: 4, hint: None },
-        SelectOption { value: serde_json::json!(32), name: "PTP Golden Popcorn".to_string(), order: 5, hint: None },
-        SelectOption { value: serde_json::json!(64), name: "PTP Approved".to_string(), order: 6, hint: None },
+        SelectOption {
+            value: serde_json::json!(1),
+            name: "Freeleech".to_string(),
+            order: 0,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(2),
+            name: "Halfleech".to_string(),
+            order: 1,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(4),
+            name: "DoubleUpload".to_string(),
+            order: 2,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(8),
+            name: "Internal".to_string(),
+            order: 3,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(16),
+            name: "Scene".to_string(),
+            order: 4,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(32),
+            name: "PTP Golden Popcorn".to_string(),
+            order: 5,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(64),
+            name: "PTP Approved".to_string(),
+            order: 6,
+            hint: None,
+        },
     ]);
 
     CustomFormatSpecificationResource {
@@ -327,16 +567,63 @@ fn create_indexer_flag_spec() -> CustomFormatSpecificationResource {
 }
 
 fn create_source_spec() -> CustomFormatSpecificationResource {
-    let mut field = make_field(0, "value", "Source", "select", Some(serde_json::json!(1)), None);
+    let mut field = make_field(
+        0,
+        "value",
+        "Source",
+        "select",
+        Some(serde_json::json!(1)),
+        None,
+    );
     field.select_options = Some(vec![
-        SelectOption { value: serde_json::json!(0), name: "Unknown".to_string(), order: 0, hint: None },
-        SelectOption { value: serde_json::json!(1), name: "Television".to_string(), order: 1, hint: None },
-        SelectOption { value: serde_json::json!(2), name: "TelevisionRaw".to_string(), order: 2, hint: None },
-        SelectOption { value: serde_json::json!(3), name: "Web".to_string(), order: 3, hint: None },
-        SelectOption { value: serde_json::json!(4), name: "WebRip".to_string(), order: 4, hint: None },
-        SelectOption { value: serde_json::json!(5), name: "DVD".to_string(), order: 5, hint: None },
-        SelectOption { value: serde_json::json!(6), name: "Bluray".to_string(), order: 6, hint: None },
-        SelectOption { value: serde_json::json!(7), name: "BlurayRaw".to_string(), order: 7, hint: None },
+        SelectOption {
+            value: serde_json::json!(0),
+            name: "Unknown".to_string(),
+            order: 0,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(1),
+            name: "Television".to_string(),
+            order: 1,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(2),
+            name: "TelevisionRaw".to_string(),
+            order: 2,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(3),
+            name: "Web".to_string(),
+            order: 3,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(4),
+            name: "WebRip".to_string(),
+            order: 4,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(5),
+            name: "DVD".to_string(),
+            order: 5,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(6),
+            name: "Bluray".to_string(),
+            order: 6,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(7),
+            name: "BlurayRaw".to_string(),
+            order: 7,
+            hint: None,
+        },
     ]);
 
     CustomFormatSpecificationResource {
@@ -353,16 +640,63 @@ fn create_source_spec() -> CustomFormatSpecificationResource {
 }
 
 fn create_resolution_spec() -> CustomFormatSpecificationResource {
-    let mut field = make_field(0, "value", "Resolution", "select", Some(serde_json::json!(1080)), None);
+    let mut field = make_field(
+        0,
+        "value",
+        "Resolution",
+        "select",
+        Some(serde_json::json!(1080)),
+        None,
+    );
     field.select_options = Some(vec![
-        SelectOption { value: serde_json::json!(0), name: "Unknown".to_string(), order: 0, hint: None },
-        SelectOption { value: serde_json::json!(360), name: "360p".to_string(), order: 1, hint: None },
-        SelectOption { value: serde_json::json!(480), name: "480p".to_string(), order: 2, hint: None },
-        SelectOption { value: serde_json::json!(540), name: "540p".to_string(), order: 3, hint: None },
-        SelectOption { value: serde_json::json!(576), name: "576p".to_string(), order: 4, hint: None },
-        SelectOption { value: serde_json::json!(720), name: "720p".to_string(), order: 5, hint: None },
-        SelectOption { value: serde_json::json!(1080), name: "1080p".to_string(), order: 6, hint: None },
-        SelectOption { value: serde_json::json!(2160), name: "2160p".to_string(), order: 7, hint: None },
+        SelectOption {
+            value: serde_json::json!(0),
+            name: "Unknown".to_string(),
+            order: 0,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(360),
+            name: "360p".to_string(),
+            order: 1,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(480),
+            name: "480p".to_string(),
+            order: 2,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(540),
+            name: "540p".to_string(),
+            order: 3,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(576),
+            name: "576p".to_string(),
+            order: 4,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(720),
+            name: "720p".to_string(),
+            order: 5,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(1080),
+            name: "1080p".to_string(),
+            order: 6,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(2160),
+            name: "2160p".to_string(),
+            order: 7,
+            hint: None,
+        },
     ]);
 
     CustomFormatSpecificationResource {
@@ -379,14 +713,51 @@ fn create_resolution_spec() -> CustomFormatSpecificationResource {
 }
 
 fn create_quality_modifier_spec() -> CustomFormatSpecificationResource {
-    let mut field = make_field(0, "value", "Modifier", "select", Some(serde_json::json!(1)), None);
+    let mut field = make_field(
+        0,
+        "value",
+        "Modifier",
+        "select",
+        Some(serde_json::json!(1)),
+        None,
+    );
     field.select_options = Some(vec![
-        SelectOption { value: serde_json::json!(0), name: "None".to_string(), order: 0, hint: None },
-        SelectOption { value: serde_json::json!(1), name: "Regional".to_string(), order: 1, hint: None },
-        SelectOption { value: serde_json::json!(2), name: "Screener".to_string(), order: 2, hint: None },
-        SelectOption { value: serde_json::json!(3), name: "RAWHD".to_string(), order: 3, hint: None },
-        SelectOption { value: serde_json::json!(4), name: "BRDISK".to_string(), order: 4, hint: None },
-        SelectOption { value: serde_json::json!(5), name: "REMUX".to_string(), order: 5, hint: None },
+        SelectOption {
+            value: serde_json::json!(0),
+            name: "None".to_string(),
+            order: 0,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(1),
+            name: "Regional".to_string(),
+            order: 1,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(2),
+            name: "Screener".to_string(),
+            order: 2,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(3),
+            name: "RAWHD".to_string(),
+            order: 3,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(4),
+            name: "BRDISK".to_string(),
+            order: 4,
+            hint: None,
+        },
+        SelectOption {
+            value: serde_json::json!(5),
+            name: "REMUX".to_string(),
+            order: 5,
+            hint: None,
+        },
     ]);
 
     CustomFormatSpecificationResource {
@@ -412,8 +783,22 @@ fn create_size_spec() -> CustomFormatSpecificationResource {
         negate: false,
         required: false,
         fields: vec![
-            make_field(0, "min", "Minimum Size (GB)", "number", Some(serde_json::json!(0)), None),
-            make_field(1, "max", "Maximum Size (GB)", "number", Some(serde_json::json!(100)), None),
+            make_field(
+                0,
+                "min",
+                "Minimum Size (GB)",
+                "number",
+                Some(serde_json::json!(0)),
+                None,
+            ),
+            make_field(
+                1,
+                "max",
+                "Maximum Size (GB)",
+                "number",
+                Some(serde_json::json!(100)),
+                None,
+            ),
         ],
         presets: vec![],
     }

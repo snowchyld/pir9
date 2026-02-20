@@ -319,10 +319,15 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
 
         for db_client in clients.iter().filter(|c| c.enable) {
             // Parse the configured category from client settings
-            let client_category: Option<String> = serde_json::from_str::<serde_json::Value>(&db_client.settings)
-                .ok()
-                .and_then(|s| s.get("tvCategory").and_then(|v| v.as_str()).map(|s| s.to_string()))
-                .filter(|s| !s.is_empty());
+            let client_category: Option<String> =
+                serde_json::from_str::<serde_json::Value>(&db_client.settings)
+                    .ok()
+                    .and_then(|s| {
+                        s.get("tvCategory")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .filter(|s| !s.is_empty());
 
             match create_client_from_model(db_client) {
                 Ok(client) => match client.get_downloads().await {
@@ -518,11 +523,7 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                         }
                     }
                     Err(e) => {
-                        tracing::debug!(
-                            "Failed to get downloads from {}: {}",
-                            db_client.name,
-                            e
-                        );
+                        tracing::debug!("Failed to get downloads from {}: {}", db_client.name, e);
                     }
                 },
                 Err(e) => {
@@ -592,9 +593,7 @@ async fn list_queue(
     Json(QueueResponse {
         page,
         page_size,
-        sort_key: params
-            .sort_key
-            .unwrap_or_else(|| "timeleft".to_string()),
+        sort_key: params.sort_key.unwrap_or_else(|| "timeleft".to_string()),
         sort_direction: params
             .sort_direction
             .unwrap_or_else(|| "ascending".to_string()),
@@ -646,7 +645,10 @@ async fn remove_queue_item(
     let service = TrackedDownloadService::new(state.db.clone());
 
     if id < 10000 {
-        if let Err(e) = service.remove(id, query.remove_from_client, query.blocklist).await {
+        if let Err(e) = service
+            .remove(id, query.remove_from_client, query.blocklist)
+            .await
+        {
             tracing::warn!("Failed to remove tracked download {}: {}", id, e);
         } else {
             return Json(QueueActionResponse { success: true });

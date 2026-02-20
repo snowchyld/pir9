@@ -4,9 +4,9 @@
 
 pub mod redis_bus;
 
-use tokio::sync::broadcast;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use tokio::sync::broadcast;
 
 pub use redis_bus::HybridEventBus;
 

@@ -7,13 +7,9 @@ use chrono::Utc;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use crate::core::movies::{
-    models::*,
-    repositories::MovieRepository,
-    MovieStatusType,
-};
 use crate::core::datastore::Database;
 use crate::core::messaging::{EventBus, Message};
+use crate::core::movies::{models::*, repositories::MovieRepository, MovieStatusType};
 
 /// Service for managing movies
 pub struct MovieService {
@@ -33,7 +29,10 @@ impl MovieService {
 
     /// Add a new movie to the library
     pub async fn add_movie(&self, options: AddMovieOptions) -> Result<Movie> {
-        info!("Adding movie: {} (TMDB: {})", options.title, options.tmdb_id);
+        info!(
+            "Adding movie: {} (TMDB: {})",
+            options.title, options.tmdb_id
+        );
 
         // Check if movie already exists
         if let Some(existing) = self.movie_repo.find_by_tmdb_id(options.tmdb_id).await? {
@@ -51,23 +50,34 @@ impl MovieService {
         movie.path = sanitize_filename::sanitize(&options.title).to_string();
 
         // Save movie to database
-        let movie = self.movie_repo.insert(&movie).await
+        let movie = self
+            .movie_repo
+            .insert(&movie)
+            .await
             .context("Failed to insert movie into database")?;
 
         // Publish event
-        self.event_bus.publish(Message::MovieAdded {
-            movie_id: movie.id,
-            title: movie.title.clone(),
-        }).await;
+        self.event_bus
+            .publish(Message::MovieAdded {
+                movie_id: movie.id,
+                title: movie.title.clone(),
+            })
+            .await;
 
-        info!("Successfully added movie: {} (ID: {})", movie.title, movie.id);
+        info!(
+            "Successfully added movie: {} (ID: {})",
+            movie.title, movie.id
+        );
 
         Ok(movie)
     }
 
     /// Refresh movie information from metadata source
     pub async fn refresh_movie(&self, movie_id: i64, _force: bool) -> Result<()> {
-        let mut movie = self.movie_repo.find_by_id(movie_id).await?
+        let mut movie = self
+            .movie_repo
+            .find_by_id(movie_id)
+            .await?
             .context("Movie not found")?;
 
         info!("Refreshing movie: {}", movie.title);
@@ -77,10 +87,12 @@ impl MovieService {
 
         self.movie_repo.update(&movie).await?;
 
-        self.event_bus.publish(Message::MovieRefreshed {
-            movie_id,
-            title: movie.title,
-        }).await;
+        self.event_bus
+            .publish(Message::MovieRefreshed {
+                movie_id,
+                title: movie.title,
+            })
+            .await;
 
         Ok(())
     }
@@ -99,33 +111,41 @@ impl MovieService {
     pub async fn update_movie(&self, movie: &Movie) -> Result<Movie> {
         let updated = self.movie_repo.update(movie).await?;
 
-        self.event_bus.publish(Message::MovieUpdated {
-            movie_id: movie.id,
-            title: movie.title.clone(),
-        }).await;
+        self.event_bus
+            .publish(Message::MovieUpdated {
+                movie_id: movie.id,
+                title: movie.title.clone(),
+            })
+            .await;
 
         Ok(updated)
     }
 
     /// Delete movie
     pub async fn delete_movie(&self, id: i64, delete_files: bool) -> Result<()> {
-        let movie = self.movie_repo.find_by_id(id).await?
+        let movie = self
+            .movie_repo
+            .find_by_id(id)
+            .await?
             .context("Movie not found")?;
 
         if delete_files {
             let path = movie.full_path();
             if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-                tokio::fs::remove_dir_all(&path).await
+                tokio::fs::remove_dir_all(&path)
+                    .await
                     .context("Failed to delete movie files")?;
             }
         }
 
         self.movie_repo.delete(id).await?;
 
-        self.event_bus.publish(Message::MovieDeleted {
-            movie_id: id,
-            title: movie.title,
-        }).await;
+        self.event_bus
+            .publish(Message::MovieDeleted {
+                movie_id: id,
+                title: movie.title,
+            })
+            .await;
 
         Ok(())
     }

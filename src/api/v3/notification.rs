@@ -148,7 +148,14 @@ pub async fn get_notification_schema() -> Json<Vec<NotificationResource>> {
 }
 
 /// Helper to create a field
-fn make_field(order: i32, name: &str, label: &str, field_type: &str, value: Option<serde_json::Value>, help_text: Option<&str>) -> FieldResource {
+fn make_field(
+    order: i32,
+    name: &str,
+    label: &str,
+    field_type: &str,
+    value: Option<serde_json::Value>,
+    help_text: Option<&str>,
+) -> FieldResource {
     FieldResource {
         order,
         name: name.to_string(),
@@ -164,14 +171,22 @@ fn make_field(order: i32, name: &str, label: &str, field_type: &str, value: Opti
         select_options_provider_action: None,
         section: None,
         hidden: None,
-        privacy: if field_type == "password" { Some("password".to_string()) } else { None },
+        privacy: if field_type == "password" {
+            Some("password".to_string())
+        } else {
+            None
+        },
         placeholder: None,
         is_float: None,
     }
 }
 
 /// Create default notification resource
-fn default_notification(implementation: &str, implementation_name: &str, config_contract: &str) -> NotificationResource {
+fn default_notification(
+    implementation: &str,
+    implementation_name: &str,
+    config_contract: &str,
+) -> NotificationResource {
     NotificationResource {
         id: 0,
         name: String::new(),
@@ -218,11 +233,46 @@ fn default_notification(implementation: &str, implementation_name: &str, config_
 fn create_discord_schema() -> NotificationResource {
     let mut schema = default_notification("Discord", "Discord", "DiscordSettings");
     schema.fields = vec![
-        make_field(0, "webHookUrl", "Webhook URL", "textbox", None, Some("Discord channel webhook URL")),
-        make_field(1, "username", "Username", "textbox", None, Some("The username to post as")),
-        make_field(2, "avatar", "Avatar", "textbox", None, Some("Avatar URL for the webhook")),
-        make_field(3, "grabFields", "On Grab Fields", "number", Some(serde_json::json!(0)), Some("Fields to include on grab")),
-        make_field(4, "importFields", "On Import Fields", "number", Some(serde_json::json!(0)), Some("Fields to include on import")),
+        make_field(
+            0,
+            "webHookUrl",
+            "Webhook URL",
+            "textbox",
+            None,
+            Some("Discord channel webhook URL"),
+        ),
+        make_field(
+            1,
+            "username",
+            "Username",
+            "textbox",
+            None,
+            Some("The username to post as"),
+        ),
+        make_field(
+            2,
+            "avatar",
+            "Avatar",
+            "textbox",
+            None,
+            Some("Avatar URL for the webhook"),
+        ),
+        make_field(
+            3,
+            "grabFields",
+            "On Grab Fields",
+            "number",
+            Some(serde_json::json!(0)),
+            Some("Fields to include on grab"),
+        ),
+        make_field(
+            4,
+            "importFields",
+            "On Import Fields",
+            "number",
+            Some(serde_json::json!(0)),
+            Some("Fields to include on import"),
+        ),
     ];
     schema
 }
@@ -231,11 +281,46 @@ fn create_discord_schema() -> NotificationResource {
 fn create_telegram_schema() -> NotificationResource {
     let mut schema = default_notification("Telegram", "Telegram", "TelegramSettings");
     schema.fields = vec![
-        make_field(0, "botToken", "Bot Token", "textbox", None, Some("Telegram bot token from @BotFather")),
-        make_field(1, "chatId", "Chat ID", "textbox", None, Some("Chat ID to send messages to")),
-        make_field(2, "topicId", "Topic ID", "textbox", None, Some("Topic ID for forum chats (optional)")),
-        make_field(3, "sendSilently", "Send Silently", "checkbox", Some(serde_json::json!(false)), Some("Send notifications silently")),
-        make_field(4, "includeAppNameInTitle", "Include App Name", "checkbox", Some(serde_json::json!(true)), Some("Include pir9 in notification title")),
+        make_field(
+            0,
+            "botToken",
+            "Bot Token",
+            "textbox",
+            None,
+            Some("Telegram bot token from @BotFather"),
+        ),
+        make_field(
+            1,
+            "chatId",
+            "Chat ID",
+            "textbox",
+            None,
+            Some("Chat ID to send messages to"),
+        ),
+        make_field(
+            2,
+            "topicId",
+            "Topic ID",
+            "textbox",
+            None,
+            Some("Topic ID for forum chats (optional)"),
+        ),
+        make_field(
+            3,
+            "sendSilently",
+            "Send Silently",
+            "checkbox",
+            Some(serde_json::json!(false)),
+            Some("Send notifications silently"),
+        ),
+        make_field(
+            4,
+            "includeAppNameInTitle",
+            "Include App Name",
+            "checkbox",
+            Some(serde_json::json!(true)),
+            Some("Include pir9 in notification title"),
+        ),
     ];
     schema
 }
@@ -244,13 +329,62 @@ fn create_telegram_schema() -> NotificationResource {
 fn create_email_schema() -> NotificationResource {
     let mut schema = default_notification("Email", "Email", "EmailSettings");
     schema.fields = vec![
-        make_field(0, "server", "SMTP Server", "textbox", None, Some("SMTP server hostname")),
-        make_field(1, "port", "Port", "number", Some(serde_json::json!(587)), Some("SMTP server port")),
-        make_field(2, "ssl", "Use SSL", "checkbox", Some(serde_json::json!(true)), Some("Use SSL/TLS")),
-        make_field(3, "username", "Username", "textbox", None, Some("SMTP username")),
-        make_field(4, "password", "Password", "password", None, Some("SMTP password")),
-        make_field(5, "from", "From Address", "textbox", None, Some("Email address to send from")),
-        make_field(6, "to", "Recipient Address", "textbox", None, Some("Email address to send to")),
+        make_field(
+            0,
+            "server",
+            "SMTP Server",
+            "textbox",
+            None,
+            Some("SMTP server hostname"),
+        ),
+        make_field(
+            1,
+            "port",
+            "Port",
+            "number",
+            Some(serde_json::json!(587)),
+            Some("SMTP server port"),
+        ),
+        make_field(
+            2,
+            "ssl",
+            "Use SSL",
+            "checkbox",
+            Some(serde_json::json!(true)),
+            Some("Use SSL/TLS"),
+        ),
+        make_field(
+            3,
+            "username",
+            "Username",
+            "textbox",
+            None,
+            Some("SMTP username"),
+        ),
+        make_field(
+            4,
+            "password",
+            "Password",
+            "password",
+            None,
+            Some("SMTP password"),
+        ),
+        make_field(
+            5,
+            "from",
+            "From Address",
+            "textbox",
+            None,
+            Some("Email address to send from"),
+        ),
+        make_field(
+            6,
+            "to",
+            "Recipient Address",
+            "textbox",
+            None,
+            Some("Email address to send to"),
+        ),
     ];
     schema
 }
@@ -259,10 +393,38 @@ fn create_email_schema() -> NotificationResource {
 fn create_webhook_schema() -> NotificationResource {
     let mut schema = default_notification("Webhook", "Webhook", "WebhookSettings");
     schema.fields = vec![
-        make_field(0, "url", "URL", "textbox", None, Some("URL to POST webhook to")),
-        make_field(1, "method", "Method", "select", Some(serde_json::json!(1)), Some("HTTP method")),
-        make_field(2, "username", "Username", "textbox", None, Some("Basic auth username (optional)")),
-        make_field(3, "password", "Password", "password", None, Some("Basic auth password (optional)")),
+        make_field(
+            0,
+            "url",
+            "URL",
+            "textbox",
+            None,
+            Some("URL to POST webhook to"),
+        ),
+        make_field(
+            1,
+            "method",
+            "Method",
+            "select",
+            Some(serde_json::json!(1)),
+            Some("HTTP method"),
+        ),
+        make_field(
+            2,
+            "username",
+            "Username",
+            "textbox",
+            None,
+            Some("Basic auth username (optional)"),
+        ),
+        make_field(
+            3,
+            "password",
+            "Password",
+            "password",
+            None,
+            Some("Basic auth password (optional)"),
+        ),
     ];
     schema
 }
@@ -271,13 +433,62 @@ fn create_webhook_schema() -> NotificationResource {
 fn create_pushover_schema() -> NotificationResource {
     let mut schema = default_notification("Pushover", "Pushover", "PushoverSettings");
     schema.fields = vec![
-        make_field(0, "userKey", "User Key", "textbox", None, Some("Pushover user key")),
-        make_field(1, "apiKey", "API Key", "textbox", None, Some("Pushover application API key")),
-        make_field(2, "devices", "Devices", "textbox", None, Some("Comma-separated device names (optional)")),
-        make_field(3, "priority", "Priority", "select", Some(serde_json::json!(0)), Some("Message priority")),
-        make_field(4, "retry", "Retry", "number", Some(serde_json::json!(60)), Some("Retry interval for emergency priority")),
-        make_field(5, "expire", "Expire", "number", Some(serde_json::json!(3600)), Some("Expiration time for emergency priority")),
-        make_field(6, "sound", "Sound", "textbox", Some(serde_json::json!("pushover")), Some("Notification sound")),
+        make_field(
+            0,
+            "userKey",
+            "User Key",
+            "textbox",
+            None,
+            Some("Pushover user key"),
+        ),
+        make_field(
+            1,
+            "apiKey",
+            "API Key",
+            "textbox",
+            None,
+            Some("Pushover application API key"),
+        ),
+        make_field(
+            2,
+            "devices",
+            "Devices",
+            "textbox",
+            None,
+            Some("Comma-separated device names (optional)"),
+        ),
+        make_field(
+            3,
+            "priority",
+            "Priority",
+            "select",
+            Some(serde_json::json!(0)),
+            Some("Message priority"),
+        ),
+        make_field(
+            4,
+            "retry",
+            "Retry",
+            "number",
+            Some(serde_json::json!(60)),
+            Some("Retry interval for emergency priority"),
+        ),
+        make_field(
+            5,
+            "expire",
+            "Expire",
+            "number",
+            Some(serde_json::json!(3600)),
+            Some("Expiration time for emergency priority"),
+        ),
+        make_field(
+            6,
+            "sound",
+            "Sound",
+            "textbox",
+            Some(serde_json::json!("pushover")),
+            Some("Notification sound"),
+        ),
     ];
     schema
 }

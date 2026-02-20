@@ -93,10 +93,7 @@ pub async fn get_filesystem(query: Query<FileSystemQuery>) -> Json<FileSystemRes
                 last_modified: metadata
                     .as_ref()
                     .and_then(|m| m.modified().ok())
-                    .map(|t| {
-                        chrono::DateTime::<chrono::Utc>::from(t)
-                            .to_rfc3339()
-                    }),
+                    .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()),
                 size: metadata.as_ref().map(|m| m.len() as i64),
             };
 
@@ -124,7 +121,9 @@ pub async fn get_filesystem(query: Query<FileSystemQuery>) -> Json<FileSystemRes
 }
 
 /// GET /api/v3/filesystem/type
-pub async fn get_filesystem_type(_query: Query<FileSystemTypeQuery>) -> Json<FileSystemTypeResource> {
+pub async fn get_filesystem_type(
+    _query: Query<FileSystemTypeQuery>,
+) -> Json<FileSystemTypeResource> {
     Json(FileSystemTypeResource {
         fs_type: "folder".to_string(),
     })

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::{NotificationField, NotificationPayload, NotificationProvider, NotificationEventType};
+use super::{NotificationEventType, NotificationField, NotificationPayload, NotificationProvider};
 use crate::core::datastore::models::NotificationDbModel;
 
 // ============================================================================
@@ -42,15 +42,15 @@ impl DiscordProvider {
 
     fn event_to_color(event_type: &NotificationEventType) -> u32 {
         match event_type {
-            NotificationEventType::Grab => 0x3498db,  // Blue
-            NotificationEventType::Download => 0x2ecc71,  // Green
-            NotificationEventType::Upgrade => 0x9b59b6,  // Purple
-            NotificationEventType::HealthIssue => 0xe74c3c,  // Red
-            NotificationEventType::HealthRestored => 0x2ecc71,  // Green
-            NotificationEventType::SeriesDelete => 0xe67e22,  // Orange
-            NotificationEventType::EpisodeFileDelete => 0xe67e22,  // Orange
-            NotificationEventType::Test => 0x95a5a6,  // Gray
-            _ => 0x3498db,  // Blue default
+            NotificationEventType::Grab => 0x3498db,              // Blue
+            NotificationEventType::Download => 0x2ecc71,          // Green
+            NotificationEventType::Upgrade => 0x9b59b6,           // Purple
+            NotificationEventType::HealthIssue => 0xe74c3c,       // Red
+            NotificationEventType::HealthRestored => 0x2ecc71,    // Green
+            NotificationEventType::SeriesDelete => 0xe67e22,      // Orange
+            NotificationEventType::EpisodeFileDelete => 0xe67e22, // Orange
+            NotificationEventType::Test => 0x95a5a6,              // Gray
+            _ => 0x3498db,                                        // Blue default
         }
     }
 }
@@ -133,7 +133,10 @@ impl NotificationProvider for DiscordProvider {
         if let Some(episode) = &payload.episode_info {
             fields.push(DiscordEmbedField {
                 name: "Episode".to_string(),
-                value: format!("S{:02}E{:02}", episode.season_number, episode.episode_number),
+                value: format!(
+                    "S{:02}E{:02}",
+                    episode.season_number, episode.episode_number
+                ),
                 inline: true,
             });
             if let Some(title) = &episode.title {
@@ -213,7 +216,9 @@ impl NotificationProvider for DiscordProvider {
                 field_type: "textbox".to_string(),
                 advanced: false,
                 help_text: Some("Discord webhook URL".to_string()),
-                help_link: Some("https://support.discord.com/hc/en-us/articles/228383668".to_string()),
+                help_link: Some(
+                    "https://support.discord.com/hc/en-us/articles/228383668".to_string(),
+                ),
                 privacy: "apiKey".to_string(),
                 is_float: false,
             },
@@ -332,16 +337,15 @@ impl NotificationProvider for WebhookProvider {
 
         // For GET requests, we can't send a body
         let response = match self.method {
-            WebhookMethod::Get => {
-                request.send().await.context("Failed to send webhook GET request")?
-            }
-            _ => {
-                request
-                    .json(payload)
-                    .send()
-                    .await
-                    .context("Failed to send webhook notification")?
-            }
+            WebhookMethod::Get => request
+                .send()
+                .await
+                .context("Failed to send webhook GET request")?,
+            _ => request
+                .json(payload)
+                .send()
+                .await
+                .context("Failed to send webhook notification")?,
         };
 
         if !response.status().is_success() {
@@ -376,7 +380,8 @@ impl NotificationProvider for WebhookProvider {
                         WebhookMethod::Post => 1,
                         WebhookMethod::Put => 2,
                         WebhookMethod::Get => 3,
-                    }.into()
+                    }
+                    .into(),
                 )),
                 field_type: "select".to_string(),
                 advanced: false,
@@ -394,9 +399,11 @@ impl NotificationProvider for WebhookProvider {
 // ============================================================================
 
 /// Create a notification provider from a database model
-pub fn create_provider_from_model(model: &NotificationDbModel) -> Result<Arc<dyn NotificationProvider>> {
-    let settings: serde_json::Value = serde_json::from_str(&model.settings)
-        .unwrap_or_else(|_| serde_json::json!({}));
+pub fn create_provider_from_model(
+    model: &NotificationDbModel,
+) -> Result<Arc<dyn NotificationProvider>> {
+    let settings: serde_json::Value =
+        serde_json::from_str(&model.settings).unwrap_or_else(|_| serde_json::json!({}));
 
     match model.implementation.as_str() {
         "Discord" => {
@@ -411,7 +418,7 @@ pub fn create_provider_from_model(model: &NotificationDbModel) -> Result<Arc<dyn
             Ok(Arc::new(
                 DiscordProvider::new(webhook_url)
                     .with_username(username)
-                    .with_avatar(avatar_url)
+                    .with_avatar(avatar_url),
             ))
         }
         "Webhook" => {
@@ -426,11 +433,12 @@ pub fn create_provider_from_model(model: &NotificationDbModel) -> Result<Arc<dyn
                 _ => WebhookMethod::Post,
             };
 
-            Ok(Arc::new(
-                WebhookProvider::new(url).with_method(method)
-            ))
+            Ok(Arc::new(WebhookProvider::new(url).with_method(method)))
         }
-        _ => Err(anyhow!("Unknown notification implementation: {}", model.implementation)),
+        _ => Err(anyhow!(
+            "Unknown notification implementation: {}",
+            model.implementation
+        )),
     }
 }
 

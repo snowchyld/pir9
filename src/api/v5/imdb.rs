@@ -54,7 +54,11 @@ async fn search_series(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SearchQuery>,
 ) -> impl IntoResponse {
-    match state.imdb_client.search_series(&query.term, query.limit).await {
+    match state
+        .imdb_client
+        .search_series(&query.term, query.limit)
+        .await
+    {
         Ok(results) => (StatusCode::OK, Json(serde_json::json!(results))).into_response(),
         Err(e) => {
             tracing::error!("IMDB search error: {}", e);
@@ -74,7 +78,11 @@ async fn get_series(
 ) -> impl IntoResponse {
     match state.imdb_client.get_series(&imdb_id).await {
         Ok(Some(series)) => (StatusCode::OK, Json(serde_json::json!(series))).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Series not found" }))).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Series not found" })),
+        )
+            .into_response(),
         Err(e) => {
             tracing::error!("IMDB get series error: {}", e);
             (
@@ -110,7 +118,8 @@ async fn get_episodes(
 async fn start_sync(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.imdb_client.start_sync().await {
         Ok(resp) => {
-            let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let status =
+                StatusCode::from_u16(resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             (status, Json(resp.body)).into_response()
         }
         Err(e) => {
@@ -128,7 +137,8 @@ async fn start_sync(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 async fn get_sync_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.imdb_client.get_sync_status().await {
         Ok(resp) => {
-            let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let status =
+                StatusCode::from_u16(resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             (status, Json(resp.body)).into_response()
         }
         Err(e) => {
@@ -146,7 +156,8 @@ async fn get_sync_status(State(state): State<Arc<AppState>>) -> impl IntoRespons
 async fn cancel_stale_syncs(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.imdb_client.cancel_sync().await {
         Ok(resp) => {
-            let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let status =
+                StatusCode::from_u16(resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             (status, Json(resp.body)).into_response()
         }
         Err(e) => {
@@ -168,7 +179,8 @@ async fn backfill_air_dates(
     let limit = body.map(|b| b.limit).unwrap_or(100);
     match state.imdb_client.backfill_air_dates(limit).await {
         Ok(resp) => {
-            let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let status =
+                StatusCode::from_u16(resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             (status, Json(resp.body)).into_response()
         }
         Err(e) => {
@@ -207,16 +219,14 @@ async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             }))
             .into_response()
         }
-        Ok(None) => {
-            Json(serde_json::json!({
-                "seriesCount": 0,
-                "episodeCount": 0,
-                "lastBasicsSync": null,
-                "lastEpisodesSync": null,
-                "lastRatingsSync": null,
-            }))
-            .into_response()
-        }
+        Ok(None) => Json(serde_json::json!({
+            "seriesCount": 0,
+            "episodeCount": 0,
+            "lastBasicsSync": null,
+            "lastEpisodesSync": null,
+            "lastRatingsSync": null,
+        }))
+        .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -290,18 +300,16 @@ async fn lookup_local_series(
     .fetch_optional(pool)
     .await
     {
-        Ok(Some(row)) => {
-            Json(serde_json::json!({
-                "found": true,
-                "id": row.get::<i64, _>("id"),
-                "title": row.get::<String, _>("title"),
-                "tvdbId": row.get::<i64, _>("tvdb_id"),
-                "imdbId": row.get::<Option<String>, _>("imdb_id"),
-                "path": row.get::<String, _>("path"),
-                "monitored": row.get::<bool, _>("monitored"),
-            }))
-            .into_response()
-        }
+        Ok(Some(row)) => Json(serde_json::json!({
+            "found": true,
+            "id": row.get::<i64, _>("id"),
+            "title": row.get::<String, _>("title"),
+            "tvdbId": row.get::<i64, _>("tvdb_id"),
+            "imdbId": row.get::<Option<String>, _>("imdb_id"),
+            "path": row.get::<String, _>("path"),
+            "monitored": row.get::<bool, _>("monitored"),
+        }))
+        .into_response(),
         Ok(None) => Json(serde_json::json!({
             "found": false,
             "imdbId": imdb_id

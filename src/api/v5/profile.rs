@@ -2,8 +2,8 @@
 
 use axum::{
     extract::{Path, State},
-    response::{IntoResponse, Json},
     http::StatusCode,
+    response::{IntoResponse, Json},
     routing::get,
     Router,
 };
@@ -50,10 +50,10 @@ pub struct QualityResource {
 
 impl From<crate::core::datastore::models::QualityProfileDbModel> for QualityProfileResource {
     fn from(p: crate::core::datastore::models::QualityProfileDbModel) -> Self {
-        let items: Vec<QualityProfileItemResource> = serde_json::from_str(&p.items)
-            .unwrap_or_default();
-        let format_items: Vec<serde_json::Value> = serde_json::from_str(&p.format_items)
-            .unwrap_or_default();
+        let items: Vec<QualityProfileItemResource> =
+            serde_json::from_str(&p.items).unwrap_or_default();
+        let format_items: Vec<serde_json::Value> =
+            serde_json::from_str(&p.format_items).unwrap_or_default();
 
         Self {
             id: p.id as i32,
@@ -73,7 +73,9 @@ pub async fn get_quality_profiles(
 ) -> Result<Json<Vec<QualityProfileResource>>, ProfileError> {
     let repo = QualityProfileRepository::new(state.db.clone());
 
-    let profiles = repo.get_all().await
+    let profiles = repo
+        .get_all()
+        .await
         .map_err(|e| ProfileError::Internal(format!("Failed to fetch quality profiles: {}", e)))?;
 
     let resources: Vec<QualityProfileResource> = profiles.into_iter().map(Into::into).collect();
@@ -86,7 +88,9 @@ pub async fn get_quality_profile(
 ) -> Result<Json<QualityProfileResource>, ProfileError> {
     let repo = QualityProfileRepository::new(state.db.clone());
 
-    let profile = repo.get_by_id(id as i64).await
+    let profile = repo
+        .get_by_id(id as i64)
+        .await
         .map_err(|e| ProfileError::Internal(format!("Failed to fetch quality profile: {}", e)))?
         .ok_or(ProfileError::NotFound)?;
 
@@ -106,12 +110,16 @@ pub async fn create_quality_profile(
     let items_json = serde_json::to_string(&body.items)
         .map_err(|e| ProfileError::Internal(format!("Failed to serialize items: {}", e)))?;
 
-    let id = repo.insert(&body.name, body.upgrade_allowed, body.cutoff, &items_json).await
+    let id = repo
+        .insert(&body.name, body.upgrade_allowed, body.cutoff, &items_json)
+        .await
         .map_err(|e| ProfileError::Internal(format!("Failed to create quality profile: {}", e)))?;
 
     tracing::info!("Created quality profile: id={}, name={}", id, body.name);
 
-    let profile = repo.get_by_id(id).await
+    let profile = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| ProfileError::Internal(format!("Failed to fetch quality profile: {}", e)))?
         .ok_or(ProfileError::NotFound)?;
 
@@ -130,19 +138,29 @@ pub async fn update_quality_profile(
     let repo = QualityProfileRepository::new(state.db.clone());
 
     // Verify profile exists
-    repo.get_by_id(id as i64).await
+    repo.get_by_id(id as i64)
+        .await
         .map_err(|e| ProfileError::Internal(format!("Failed to fetch quality profile: {}", e)))?
         .ok_or(ProfileError::NotFound)?;
 
     let items_json = serde_json::to_string(&body.items)
         .map_err(|e| ProfileError::Internal(format!("Failed to serialize items: {}", e)))?;
 
-    repo.update(id as i64, &body.name, body.upgrade_allowed, body.cutoff, &items_json).await
-        .map_err(|e| ProfileError::Internal(format!("Failed to update quality profile: {}", e)))?;
+    repo.update(
+        id as i64,
+        &body.name,
+        body.upgrade_allowed,
+        body.cutoff,
+        &items_json,
+    )
+    .await
+    .map_err(|e| ProfileError::Internal(format!("Failed to update quality profile: {}", e)))?;
 
     tracing::info!("Updated quality profile: id={}, name={}", id, body.name);
 
-    let profile = repo.get_by_id(id as i64).await
+    let profile = repo
+        .get_by_id(id as i64)
+        .await
         .map_err(|e| ProfileError::Internal(format!("Failed to fetch quality profile: {}", e)))?
         .ok_or(ProfileError::NotFound)?;
 
@@ -155,7 +173,8 @@ pub async fn delete_quality_profile(
 ) -> Result<Json<serde_json::Value>, ProfileError> {
     let repo = QualityProfileRepository::new(state.db.clone());
 
-    repo.delete(id as i64).await
+    repo.delete(id as i64)
+        .await
         .map_err(|e| ProfileError::Internal(format!("Failed to delete quality profile: {}", e)))?;
 
     tracing::info!("Deleted quality profile: id={}", id);
@@ -212,11 +231,16 @@ pub async fn get_delay_profile(Path(id): Path<i32>) -> Json<Option<DelayProfileR
     }
 }
 
-pub async fn create_delay_profile(Json(body): Json<DelayProfileResource>) -> Json<DelayProfileResource> {
+pub async fn create_delay_profile(
+    Json(body): Json<DelayProfileResource>,
+) -> Json<DelayProfileResource> {
     Json(body)
 }
 
-pub async fn update_delay_profile(Path(id): Path<i32>, Json(mut body): Json<DelayProfileResource>) -> Json<DelayProfileResource> {
+pub async fn update_delay_profile(
+    Path(id): Path<i32>,
+    Json(mut body): Json<DelayProfileResource>,
+) -> Json<DelayProfileResource> {
     body.id = id;
     Json(body)
 }
@@ -249,11 +273,16 @@ pub async fn get_release_profile(Path(id): Path<i32>) -> Json<Option<ReleaseProf
     Json(None)
 }
 
-pub async fn create_release_profile(Json(body): Json<ReleaseProfileResource>) -> Json<ReleaseProfileResource> {
+pub async fn create_release_profile(
+    Json(body): Json<ReleaseProfileResource>,
+) -> Json<ReleaseProfileResource> {
     Json(body)
 }
 
-pub async fn update_release_profile(Path(id): Path<i32>, Json(mut body): Json<ReleaseProfileResource>) -> Json<ReleaseProfileResource> {
+pub async fn update_release_profile(
+    Path(id): Path<i32>,
+    Json(mut body): Json<ReleaseProfileResource>,
+) -> Json<ReleaseProfileResource> {
     body.id = id;
     Json(body)
 }
@@ -278,7 +307,10 @@ impl IntoResponse for ProfileError {
             ProfileError::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
             ProfileError::Internal(msg) => {
                 tracing::error!("Profile error: {}", msg);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
             }
         };
 
@@ -289,17 +321,32 @@ impl IntoResponse for ProfileError {
 pub fn quality_profile_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(get_quality_profiles).post(create_quality_profile))
-        .route("/{id}", get(get_quality_profile).put(update_quality_profile).delete(delete_quality_profile))
+        .route(
+            "/{id}",
+            get(get_quality_profile)
+                .put(update_quality_profile)
+                .delete(delete_quality_profile),
+        )
 }
 
 pub fn delay_profile_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(get_delay_profiles).post(create_delay_profile))
-        .route("/{id}", get(get_delay_profile).put(update_delay_profile).delete(delete_delay_profile))
+        .route(
+            "/{id}",
+            get(get_delay_profile)
+                .put(update_delay_profile)
+                .delete(delete_delay_profile),
+        )
 }
 
 pub fn release_profile_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(get_release_profiles).post(create_release_profile))
-        .route("/{id}", get(get_release_profile).put(update_release_profile).delete(delete_release_profile))
+        .route(
+            "/{id}",
+            get(get_release_profile)
+                .put(update_release_profile)
+                .delete(delete_release_profile),
+        )
 }

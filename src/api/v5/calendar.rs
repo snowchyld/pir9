@@ -85,29 +85,32 @@ pub async fn get_calendar(
     query: Query<CalendarQuery>,
 ) -> Json<Vec<EpisodeResource>> {
     let now = Utc::now();
-    let start = query.start.as_ref()
+    let start = query
+        .start
+        .as_ref()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|d| d.with_timezone(&Utc))
         .unwrap_or_else(|| now - Duration::days(7));
 
-    let end = query.end.as_ref()
+    let end = query
+        .end
+        .as_ref()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|d| d.with_timezone(&Utc))
         .unwrap_or_else(|| now + Duration::days(28));
 
-    let include_unmonitored = query.unmonitored.unwrap_or(false) || query.include_unmonitored.unwrap_or(false);
+    let include_unmonitored =
+        query.unmonitored.unwrap_or(false) || query.include_unmonitored.unwrap_or(false);
     let include_series = query.include_series.unwrap_or(true);
     let include_specials = true;
 
     let episode_repo = EpisodeRepository::new(state.db.clone());
     let series_repo = SeriesRepository::new(state.db.clone());
 
-    let episodes = match episode_repo.get_by_air_date_range(
-        start,
-        end,
-        include_unmonitored,
-        include_specials,
-    ).await {
+    let episodes = match episode_repo
+        .get_by_air_date_range(start, end, include_unmonitored, include_specials)
+        .await
+    {
         Ok(eps) => eps,
         Err(e) => {
             tracing::error!("Failed to fetch calendar episodes: {}", e);
@@ -117,10 +120,8 @@ pub async fn get_calendar(
 
     // Pre-fetch all series for efficiency
     let all_series = series_repo.get_all().await.unwrap_or_default();
-    let series_map: std::collections::HashMap<i64, _> = all_series
-        .into_iter()
-        .map(|s| (s.id, s))
-        .collect();
+    let series_map: std::collections::HashMap<i64, _> =
+        all_series.into_iter().map(|s| (s.id, s)).collect();
 
     let mut records = Vec::new();
     for episode in &episodes {
@@ -128,20 +129,26 @@ pub async fn get_calendar(
         let series_title = series.map(|s| s.title.clone());
 
         let series_json = if include_series {
-            series.map(|s| serde_json::json!({
-                "id": s.id,
-                "title": s.title,
-                "titleSlug": s.title_slug,
-                "path": s.path,
-                "tvdbId": s.tvdb_id,
-                "status": s.status,
-                "network": s.network,
-            }))
+            series.map(|s| {
+                serde_json::json!({
+                    "id": s.id,
+                    "title": s.title,
+                    "titleSlug": s.title_slug,
+                    "path": s.path,
+                    "tvdbId": s.tvdb_id,
+                    "status": s.status,
+                    "network": s.network,
+                })
+            })
         } else {
             None
         };
 
-        records.push(episode_to_calendar_resource(episode, series_title, series_json));
+        records.push(episode_to_calendar_resource(
+            episode,
+            series_title,
+            series_json,
+        ));
     }
 
     Json(records)

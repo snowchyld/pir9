@@ -3,10 +3,10 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-pub mod models;
-pub mod services;
-pub mod repositories;
 pub mod events;
+pub mod models;
+pub mod repositories;
+pub mod services;
 
 pub use models::*;
 

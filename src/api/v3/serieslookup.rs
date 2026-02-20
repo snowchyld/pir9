@@ -124,7 +124,8 @@ struct SkyhookRatings {
 }
 
 fn clean_title(title: &str) -> String {
-    title.to_lowercase()
+    title
+        .to_lowercase()
         .replace(|c: char| !c.is_alphanumeric() && c != ' ', " ")
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -132,7 +133,8 @@ fn clean_title(title: &str) -> String {
 }
 
 fn generate_slug(title: &str) -> String {
-    title.to_lowercase()
+    title
+        .to_lowercase()
         .replace(|c: char| !c.is_alphanumeric() && c != ' ', "-")
         .replace(' ', "-")
         .replace("--", "-")
@@ -141,7 +143,9 @@ fn generate_slug(title: &str) -> String {
 }
 
 /// GET /api/v3/series/lookup
-pub async fn lookup_series(Query(query): Query<SeriesLookupQuery>) -> Json<Vec<SeriesLookupResource>> {
+pub async fn lookup_series(
+    Query(query): Query<SeriesLookupQuery>,
+) -> Json<Vec<SeriesLookupResource>> {
     let term = match &query.term {
         Some(t) => t.clone(),
         None => return Json(vec![]),
@@ -186,7 +190,9 @@ pub async fn lookup_series(Query(query): Query<SeriesLookupQuery>) -> Json<Vec<S
         .map(|s| {
             let status = s.status.clone().unwrap_or_else(|| "unknown".to_string());
             let ended = status.to_lowercase() == "ended";
-            let poster_url = s.images.as_ref()
+            let poster_url = s
+                .images
+                .as_ref()
                 .and_then(|imgs| imgs.iter().find(|i| i.cover_type == "poster"))
                 .map(|i| i.url.clone());
 
@@ -198,16 +204,26 @@ pub async fn lookup_series(Query(query): Query<SeriesLookupQuery>) -> Json<Vec<S
                 overview: s.overview.unwrap_or_default(),
                 network: s.network,
                 air_time: None,
-                images: s.images.unwrap_or_default().into_iter().map(|img| ImageResource {
-                    cover_type: img.cover_type,
-                    url: img.url.clone(),
-                    remote_url: Some(img.url),
-                }).collect(),
+                images: s
+                    .images
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|img| ImageResource {
+                        cover_type: img.cover_type,
+                        url: img.url.clone(),
+                        remote_url: Some(img.url),
+                    })
+                    .collect(),
                 remote_poster: poster_url,
-                seasons: s.seasons.unwrap_or_default().into_iter().map(|season| SeasonResource {
-                    season_number: season.season_number,
-                    monitored: true,
-                }).collect(),
+                seasons: s
+                    .seasons
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|season| SeasonResource {
+                        season_number: season.season_number,
+                        monitored: true,
+                    })
+                    .collect(),
                 year: s.year.unwrap_or(0),
                 quality_profile_id: 1,
                 season_folder: true,

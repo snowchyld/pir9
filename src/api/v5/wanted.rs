@@ -55,7 +55,10 @@ pub struct WantedPagingResource {
 }
 
 /// Convert EpisodeDbModel to EpisodeResource
-fn episode_to_resource(episode: &EpisodeDbModel, series_json: Option<serde_json::Value>) -> EpisodeResource {
+fn episode_to_resource(
+    episode: &EpisodeDbModel,
+    series_json: Option<serde_json::Value>,
+) -> EpisodeResource {
     EpisodeResource {
         id: episode.id as i32,
         series_id: episode.series_id as i32,
@@ -82,20 +85,20 @@ pub async fn get_wanted_missing(
     let page = query.page.unwrap_or(1).max(1);
     let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
     let sort_key = query.sort_key.clone().unwrap_or("airDateUtc".to_string());
-    let sort_direction = query.sort_direction.clone().unwrap_or("descending".to_string());
+    let sort_direction = query
+        .sort_direction
+        .clone()
+        .unwrap_or("descending".to_string());
     let monitored_only = query.monitored.unwrap_or(true);
     let include_series = query.include_series.unwrap_or(false);
 
     let episode_repo = EpisodeRepository::new(state.db.clone());
     let series_repo = SeriesRepository::new(state.db.clone());
 
-    let (episodes, total) = match episode_repo.get_missing(
-        monitored_only,
-        page,
-        page_size,
-        &sort_key,
-        &sort_direction,
-    ).await {
+    let (episodes, total) = match episode_repo
+        .get_missing(monitored_only, page, page_size, &sort_key, &sort_direction)
+        .await
+    {
         Ok(result) => result,
         Err(e) => {
             tracing::error!("Failed to fetch missing episodes: {}", e);
@@ -147,18 +150,19 @@ pub async fn get_wanted_cutoff(
     let page = query.page.unwrap_or(1).max(1);
     let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
     let sort_key = query.sort_key.clone().unwrap_or("airDateUtc".to_string());
-    let sort_direction = query.sort_direction.clone().unwrap_or("descending".to_string());
+    let sort_direction = query
+        .sort_direction
+        .clone()
+        .unwrap_or("descending".to_string());
     let include_series = query.include_series.unwrap_or(false);
 
     let episode_repo = EpisodeRepository::new(state.db.clone());
     let series_repo = SeriesRepository::new(state.db.clone());
 
-    let (episodes, total) = match episode_repo.get_cutoff_unmet(
-        page,
-        page_size,
-        &sort_key,
-        &sort_direction,
-    ).await {
+    let (episodes, total) = match episode_repo
+        .get_cutoff_unmet(page, page_size, &sort_key, &sort_direction)
+        .await
+    {
         Ok(result) => result,
         Err(e) => {
             tracing::error!("Failed to fetch cutoff unmet: {}", e);

@@ -3,7 +3,7 @@
 //! qBittorrent, SABnzbd, and other download client integrations
 
 use anyhow::{Context, Result};
-use reqwest::{Client, multipart};
+use reqwest::{multipart, Client};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,7 +31,12 @@ pub trait DownloadClient: Send + Sync {
     async fn add_from_magnet(&self, magnet: &str, options: DownloadOptions) -> Result<String>;
 
     /// Add download by file (NZB/Torrent)
-    async fn add_from_file(&self, file_data: &[u8], filename: &str, options: DownloadOptions) -> Result<String>;
+    async fn add_from_file(
+        &self,
+        file_data: &[u8],
+        filename: &str,
+        options: DownloadOptions,
+    ) -> Result<String>;
 
     /// Get all downloads
     async fn get_downloads(&self) -> Result<Vec<DownloadStatus>>;
@@ -138,22 +143,28 @@ impl QBittorrentClient {
 
         tracing::debug!("Attempting qBittorrent login to: {}", url);
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&url)
-            .form(&[
-                ("username", &self.username),
-                ("password", &self.password),
-            ])
+            .form(&[("username", &self.username), ("password", &self.password)])
             .send()
             .await
             .map_err(|e| {
                 // Provide detailed error information
                 if e.is_connect() {
-                    anyhow::anyhow!("Cannot connect to qBittorrent at {}. Error: {}", self.base_url, e)
+                    anyhow::anyhow!(
+                        "Cannot connect to qBittorrent at {}. Error: {}",
+                        self.base_url,
+                        e
+                    )
                 } else if e.is_timeout() {
                     anyhow::anyhow!("Connection to qBittorrent timed out at {}", self.base_url)
                 } else {
-                    anyhow::anyhow!("Failed to connect to qBittorrent at {}: {}", self.base_url, e)
+                    anyhow::anyhow!(
+                        "Failed to connect to qBittorrent at {}: {}",
+                        self.base_url,
+                        e
+                    )
                 }
             })?;
 
@@ -166,9 +177,19 @@ impl QBittorrentClient {
         } else if body.contains("Fails") {
             anyhow::bail!("qBittorrent authentication failed: invalid username or password")
         } else if status == reqwest::StatusCode::FORBIDDEN {
-            anyhow::bail!("qBittorrent returned 403 Forbidden. Check if Web UI is enabled and accessible.")
+            anyhow::bail!(
+                "qBittorrent returned 403 Forbidden. Check if Web UI is enabled and accessible."
+            )
         } else {
-            anyhow::bail!("qBittorrent login failed (HTTP {}): {}", status.as_u16(), if body.is_empty() { "no response body" } else { &body })
+            anyhow::bail!(
+                "qBittorrent login failed (HTTP {}): {}",
+                status.as_u16(),
+                if body.is_empty() {
+                    "no response body"
+                } else {
+                    &body
+                }
+            )
         }
     }
 
@@ -192,7 +213,8 @@ impl QBittorrentClient {
         self.ensure_session().await?;
 
         let url = format!("{}{}", self.base_url, endpoint);
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .send()
             .await
@@ -201,7 +223,8 @@ impl QBittorrentClient {
         if response.status() == reqwest::StatusCode::FORBIDDEN {
             // Session expired, try re-login
             self.login().await?;
-            let response = self.http_client
+            let response = self
+                .http_client
                 .get(&url)
                 .send()
                 .await
@@ -219,7 +242,8 @@ impl QBittorrentClient {
         self.ensure_session().await?;
 
         let url = format!("{}{}", self.base_url, endpoint);
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&url)
             .form(params)
             .send()
@@ -228,7 +252,8 @@ impl QBittorrentClient {
 
         if response.status() == reqwest::StatusCode::FORBIDDEN {
             self.login().await?;
-            let response = self.http_client
+            let response = self
+                .http_client
                 .post(&url)
                 .form(params)
                 .send()
@@ -264,7 +289,9 @@ impl QBTorrentInfo {
     fn to_download_status(&self) -> DownloadStatus {
         let state = match self.state.as_str() {
             "pausedDL" | "pausedUP" => DownloadState::Paused,
-            "queuedDL" | "queuedUP" | "checkingDL" | "checkingUP" | "checkingResumeData" => DownloadState::Queued,
+            "queuedDL" | "queuedUP" | "checkingDL" | "checkingUP" | "checkingResumeData" => {
+                DownloadState::Queued
+            }
             "downloading" | "forcedDL" | "metaDL" | "allocating" => DownloadState::Downloading,
             "uploading" | "forcedUP" | "stalledUP" => DownloadState::Seeding,
             "stalledDL" => DownloadState::Downloading,
@@ -293,7 +320,11 @@ impl QBTorrentInfo {
             progress: self.progress * 100.0,
             download_speed: self.dlspeed,
             upload_speed: self.upspeed,
-            eta: if self.eta > 0 && self.eta < 8640000 { Some(self.eta) } else { None },
+            eta: if self.eta > 0 && self.eta < 8640000 {
+                Some(self.eta)
+            } else {
+                None
+            },
             error_message: None,
             output_path: self.save_path.clone(),
             category: self.category.clone(),
@@ -327,8 +358,7 @@ impl DownloadClient for QBittorrentClient {
 
         let api_url = format!("{}/api/v2/torrents/add", self.base_url);
 
-        let mut form = multipart::Form::new()
-            .text("urls", url.to_string());
+        let mut form = multipart::Form::new().text("urls", url.to_string());
 
         if let Some(category) = options.category {
             form = form.text("category", category);
@@ -337,7 +367,8 @@ impl DownloadClient for QBittorrentClient {
             form = form.text("savepath", dir);
         }
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&api_url)
             .multipart(form)
             .send()
@@ -358,7 +389,12 @@ impl DownloadClient for QBittorrentClient {
         self.add_from_url(magnet, options).await
     }
 
-    async fn add_from_file(&self, file_data: &[u8], filename: &str, options: DownloadOptions) -> Result<String> {
+    async fn add_from_file(
+        &self,
+        file_data: &[u8],
+        filename: &str,
+        options: DownloadOptions,
+    ) -> Result<String> {
         self.ensure_session().await?;
 
         let api_url = format!("{}/api/v2/torrents/add", self.base_url);
@@ -367,8 +403,7 @@ impl DownloadClient for QBittorrentClient {
             .file_name(filename.to_string())
             .mime_str("application/x-bittorrent")?;
 
-        let mut form = multipart::Form::new()
-            .part("torrents", file_part);
+        let mut form = multipart::Form::new().part("torrents", file_part);
 
         if let Some(category) = options.category {
             form = form.text("category", category);
@@ -377,7 +412,8 @@ impl DownloadClient for QBittorrentClient {
             form = form.text("savepath", dir);
         }
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&api_url)
             .multipart(form)
             .send()
@@ -393,36 +429,41 @@ impl DownloadClient for QBittorrentClient {
 
     async fn get_downloads(&self) -> Result<Vec<DownloadStatus>> {
         let body = self.get("/api/v2/torrents/info").await?;
-        let torrents: Vec<QBTorrentInfo> = serde_json::from_str(&body)
-            .context("Failed to parse qBittorrent response")?;
+        let torrents: Vec<QBTorrentInfo> =
+            serde_json::from_str(&body).context("Failed to parse qBittorrent response")?;
 
         Ok(torrents.iter().map(|t| t.to_download_status()).collect())
     }
 
     async fn get_download(&self, id: &str) -> Result<Option<DownloadStatus>> {
-        let body = self.get(&format!("/api/v2/torrents/info?hashes={}", id)).await?;
-        let torrents: Vec<QBTorrentInfo> = serde_json::from_str(&body)
-            .context("Failed to parse qBittorrent response")?;
+        let body = self
+            .get(&format!("/api/v2/torrents/info?hashes={}", id))
+            .await?;
+        let torrents: Vec<QBTorrentInfo> =
+            serde_json::from_str(&body).context("Failed to parse qBittorrent response")?;
 
         Ok(torrents.first().map(|t| t.to_download_status()))
     }
 
     async fn remove(&self, id: &str, delete_files: bool) -> Result<()> {
         let delete_files_str = if delete_files { "true" } else { "false" };
-        self.post_form("/api/v2/torrents/delete", &[
-            ("hashes", id),
-            ("deleteFiles", delete_files_str),
-        ]).await?;
+        self.post_form(
+            "/api/v2/torrents/delete",
+            &[("hashes", id), ("deleteFiles", delete_files_str)],
+        )
+        .await?;
         Ok(())
     }
 
     async fn pause(&self, id: &str) -> Result<()> {
-        self.post_form("/api/v2/torrents/pause", &[("hashes", id)]).await?;
+        self.post_form("/api/v2/torrents/pause", &[("hashes", id)])
+            .await?;
         Ok(())
     }
 
     async fn resume(&self, id: &str) -> Result<()> {
-        self.post_form("/api/v2/torrents/resume", &[("hashes", id)]).await?;
+        self.post_form("/api/v2/torrents/resume", &[("hashes", id)])
+            .await?;
         Ok(())
     }
 }
@@ -457,15 +498,22 @@ impl SabnzbdClient {
     }
 
     /// Make an API request
-    async fn api_call(&self, mode: &str, extra_params: &[(&str, &str)]) -> Result<serde_json::Value> {
-        let mut url = format!("{}/api?output=json&apikey={}&mode={}",
-            self.base_url, self.api_key, mode);
+    async fn api_call(
+        &self,
+        mode: &str,
+        extra_params: &[(&str, &str)],
+    ) -> Result<serde_json::Value> {
+        let mut url = format!(
+            "{}/api?output=json&apikey={}&mode={}",
+            self.base_url, self.api_key, mode
+        );
 
         for (key, value) in extra_params {
             url.push_str(&format!("&{}={}", key, urlencoding::encode(value)));
         }
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .send()
             .await
@@ -476,8 +524,8 @@ impl SabnzbdClient {
         }
 
         let body = response.text().await?;
-        let json: serde_json::Value = serde_json::from_str(&body)
-            .context("Failed to parse SABnzbd response")?;
+        let json: serde_json::Value =
+            serde_json::from_str(&body).context("Failed to parse SABnzbd response")?;
 
         // Check for API errors
         if let Some(error) = json.get("error").and_then(|e| e.as_str()) {
@@ -580,7 +628,8 @@ impl DownloadClient for SabnzbdClient {
 
     async fn get_version(&self) -> Result<String> {
         let json = self.api_call("version", &[]).await?;
-        let version = json.get("version")
+        let version = json
+            .get("version")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
         Ok(version.to_string())
@@ -605,7 +654,11 @@ impl DownloadClient for SabnzbdClient {
         }
 
         // Check for status
-        if json.get("status").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if json
+            .get("status")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             Ok("added".to_string())
         } else {
             anyhow::bail!("Failed to add NZB: {:?}", json)
@@ -616,22 +669,29 @@ impl DownloadClient for SabnzbdClient {
         anyhow::bail!("SABnzbd does not support magnet links")
     }
 
-    async fn add_from_file(&self, file_data: &[u8], filename: &str, options: DownloadOptions) -> Result<String> {
-        let url = format!("{}/api?output=json&apikey={}&mode=addfile",
-            self.base_url, self.api_key);
+    async fn add_from_file(
+        &self,
+        file_data: &[u8],
+        filename: &str,
+        options: DownloadOptions,
+    ) -> Result<String> {
+        let url = format!(
+            "{}/api?output=json&apikey={}&mode=addfile",
+            self.base_url, self.api_key
+        );
 
         let file_part = multipart::Part::bytes(file_data.to_vec())
             .file_name(filename.to_string())
             .mime_str("application/x-nzb")?;
 
-        let mut form = multipart::Form::new()
-            .part("nzbfile", file_part);
+        let mut form = multipart::Form::new().part("nzbfile", file_part);
 
         if let Some(cat) = options.category {
             form = form.text("cat", cat);
         }
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&url)
             .multipart(form)
             .send()
@@ -650,7 +710,11 @@ impl DownloadClient for SabnzbdClient {
             }
         }
 
-        if json.get("status").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if json
+            .get("status")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             Ok("added".to_string())
         } else {
             anyhow::bail!("Failed to add NZB: {:?}", json)
@@ -689,14 +753,21 @@ impl DownloadClient for SabnzbdClient {
                             downloads.push(DownloadStatus {
                                 id: nzo_id.to_string(),
                                 name: name.to_string(),
-                                status: if status == "Completed" { DownloadState::Completed } else { DownloadState::Failed },
+                                status: if status == "Completed" {
+                                    DownloadState::Completed
+                                } else {
+                                    DownloadState::Failed
+                                },
                                 size,
                                 size_left: 0,
                                 progress: 100.0,
                                 download_speed: 0,
                                 upload_speed: 0,
                                 eta: None,
-                                error_message: slot.get("fail_message").and_then(|s| s.as_str()).map(|s| s.to_string()),
+                                error_message: slot
+                                    .get("fail_message")
+                                    .and_then(|s| s.as_str())
+                                    .map(|s| s.to_string()),
                                 output_path: storage.map(|s| s.to_string()),
                                 category: cat.map(|s| s.to_string()),
                             });
@@ -716,21 +787,27 @@ impl DownloadClient for SabnzbdClient {
 
     async fn remove(&self, id: &str, _delete_files: bool) -> Result<()> {
         // Try removing from queue first
-        let _ = self.api_call("queue", &[("name", "delete"), ("value", id)]).await;
+        let _ = self
+            .api_call("queue", &[("name", "delete"), ("value", id)])
+            .await;
 
         // Also try removing from history
-        let _ = self.api_call("history", &[("name", "delete"), ("value", id)]).await;
+        let _ = self
+            .api_call("history", &[("name", "delete"), ("value", id)])
+            .await;
 
         Ok(())
     }
 
     async fn pause(&self, id: &str) -> Result<()> {
-        self.api_call("queue", &[("name", "pause"), ("value", id)]).await?;
+        self.api_call("queue", &[("name", "pause"), ("value", id)])
+            .await?;
         Ok(())
     }
 
     async fn resume(&self, id: &str) -> Result<()> {
-        self.api_call("queue", &[("name", "resume"), ("value", id)]).await?;
+        self.api_call("queue", &[("name", "resume"), ("value", id)])
+            .await?;
         Ok(())
     }
 }
@@ -749,22 +826,40 @@ fn parse_port(value: Option<&serde_json::Value>) -> i64 {
 }
 
 /// Create a download client from database model
-pub fn create_client_from_model(model: &crate::core::datastore::models::DownloadClientDbModel) -> Result<Box<dyn DownloadClient>> {
+pub fn create_client_from_model(
+    model: &crate::core::datastore::models::DownloadClientDbModel,
+) -> Result<Box<dyn DownloadClient>> {
     let settings: serde_json::Value = serde_json::from_str(&model.settings)
         .context("Failed to parse download client settings")?;
 
     match model.implementation.as_str() {
         "QBittorrent" => {
-            let host = settings.get("host").and_then(|v| v.as_str()).unwrap_or("localhost");
+            let host = settings
+                .get("host")
+                .and_then(|v| v.as_str())
+                .unwrap_or("localhost");
             let port = parse_port(settings.get("port"));
-            let use_ssl = settings.get("useSsl").and_then(|v| v.as_bool()).unwrap_or(false);
-            let username = settings.get("username").and_then(|v| v.as_str()).unwrap_or("");
-            let password = settings.get("password").and_then(|v| v.as_str()).unwrap_or("");
+            let use_ssl = settings
+                .get("useSsl")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let username = settings
+                .get("username")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let password = settings
+                .get("password")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
 
             let protocol = if use_ssl { "https" } else { "http" };
             let url = format!("{}://{}:{}", protocol, host, port);
 
-            tracing::debug!("Creating qBittorrent client: url={}, username={}", url, username);
+            tracing::debug!(
+                "Creating qBittorrent client: url={}, username={}",
+                url,
+                username
+            );
 
             Ok(Box::new(QBittorrentClient::new(
                 url,
@@ -773,10 +868,19 @@ pub fn create_client_from_model(model: &crate::core::datastore::models::Download
             )))
         }
         "Sabnzbd" | "SABnzbd" => {
-            let host = settings.get("host").and_then(|v| v.as_str()).unwrap_or("localhost");
+            let host = settings
+                .get("host")
+                .and_then(|v| v.as_str())
+                .unwrap_or("localhost");
             let port = parse_port(settings.get("port"));
-            let use_ssl = settings.get("useSsl").and_then(|v| v.as_bool()).unwrap_or(false);
-            let api_key = settings.get("apiKey").and_then(|v| v.as_str()).unwrap_or("");
+            let use_ssl = settings
+                .get("useSsl")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let api_key = settings
+                .get("apiKey")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
 
             let protocol = if use_ssl { "https" } else { "http" };
             let url = format!("{}://{}:{}", protocol, host, port);
@@ -786,7 +890,10 @@ pub fn create_client_from_model(model: &crate::core::datastore::models::Download
             Ok(Box::new(SabnzbdClient::new(url, api_key.to_string())))
         }
         _ => {
-            anyhow::bail!("Unsupported download client implementation: {}", model.implementation)
+            anyhow::bail!(
+                "Unsupported download client implementation: {}",
+                model.implementation
+            )
         }
     }
 }

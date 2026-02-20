@@ -8,13 +8,18 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::collections::HashSet;
+use std::sync::Arc;
 
-use crate::core::datastore::repositories::{DownloadClientRepository, SeriesRepository, EpisodeRepository, TrackedDownloadRepository};
+use crate::core::datastore::repositories::{
+    DownloadClientRepository, EpisodeRepository, SeriesRepository, TrackedDownloadRepository,
+};
 use crate::core::download::clients::{create_client_from_model, DownloadState};
 use crate::core::parser::{parse_title, title_matches_series};
-use crate::core::queue::{TrackedDownloadService, Protocol as QueueProtocol, QueueStatus, TrackedDownloadState, TrackedDownloadStatus};
+use crate::core::queue::{
+    Protocol as QueueProtocol, QueueStatus, TrackedDownloadService, TrackedDownloadState,
+    TrackedDownloadStatus,
+};
 use crate::web::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -166,20 +171,33 @@ fn queue_item_to_resource(
         },
     };
 
-    let status_messages: Vec<StatusMessage> = item.status_messages.iter().map(|sm| {
-        StatusMessage {
+    let status_messages: Vec<StatusMessage> = item
+        .status_messages
+        .iter()
+        .map(|sm| StatusMessage {
             title: sm.title.clone(),
             messages: sm.messages.clone(),
-        }
-    }).collect();
+        })
+        .collect();
 
     QueueResource {
         id: item.id as i32,
-        series_id: if item.series_id > 0 { Some(item.series_id as i32) } else { None },
-        episode_id: if item.episode_id > 0 { Some(item.episode_id as i32) } else { None },
-        series: None, // TODO: Include full series data if requested
+        series_id: if item.series_id > 0 {
+            Some(item.series_id as i32)
+        } else {
+            None
+        },
+        episode_id: if item.episode_id > 0 {
+            Some(item.episode_id as i32)
+        } else {
+            None
+        },
+        series: None,  // TODO: Include full series data if requested
         episode: None, // TODO: Include full episode data if requested
-        languages: vec![LanguageResource { id: 1, name: "English".to_string() }], // TODO: Parse from item
+        languages: vec![LanguageResource {
+            id: 1,
+            name: "English".to_string(),
+        }], // TODO: Parse from item
         quality: quality_model,
         custom_formats: vec![],
         custom_format_score: 0,
@@ -227,7 +245,8 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
     }
 
     // Collect download IDs that are already tracked
-    let tracked_ids: HashSet<String> = all_downloads.iter()
+    let tracked_ids: HashSet<String> = all_downloads
+        .iter()
         .filter_map(|d| d.download_id.clone())
         .collect();
 
@@ -249,7 +268,11 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                 Ok(client) => {
                     match client.get_downloads().await {
                         Ok(downloads) => {
-                            let protocol = if db_client.protocol == 1 { "usenet" } else { "torrent" };
+                            let protocol = if db_client.protocol == 1 {
+                                "usenet"
+                            } else {
+                                "torrent"
+                            };
 
                             for dl in downloads {
                                 // Skip if already tracked
@@ -319,15 +342,19 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                     };
 
                                     for series in &all_series {
-                                        if title_matches_series(info, &series.title) ||
-                                           title_matches_series(info, &series.clean_title) {
+                                        if title_matches_series(info, &series.title)
+                                            || title_matches_series(info, &series.clean_title)
+                                        {
                                             matched_series_id = Some(series.id as i32);
 
                                             if let Some(season) = info.season_number {
                                                 if !info.episode_numbers.is_empty() {
                                                     let ep_num = info.episode_numbers[0];
                                                     if let Ok(Some(ep)) = episode_repo
-                                                        .get_by_series_season_episode(series.id, season, ep_num).await
+                                                        .get_by_series_season_episode(
+                                                            series.id, season, ep_num,
+                                                        )
+                                                        .await
                                                     {
                                                         matched_episode_id = Some(ep.id as i32);
                                                     }
@@ -344,7 +371,10 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                     episode_id: matched_episode_id,
                                     series: None,
                                     episode: None,
-                                    languages: vec![LanguageResource { id: 1, name: "English".to_string() }],
+                                    languages: vec![LanguageResource {
+                                        id: 1,
+                                        name: "English".to_string(),
+                                    }],
                                     quality: quality_model,
                                     custom_formats: vec![],
                                     custom_format_score: 0,
@@ -360,7 +390,10 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                     status_messages: if dl.error_message.is_some() {
                                         vec![StatusMessage {
                                             title: "Error".to_string(),
-                                            messages: vec![dl.error_message.clone().unwrap_or_default()],
+                                            messages: vec![dl
+                                                .error_message
+                                                .clone()
+                                                .unwrap_or_default()],
                                         }]
                                     } else {
                                         vec![]
@@ -379,7 +412,11 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                             }
                         }
                         Err(e) => {
-                            tracing::debug!("Failed to get downloads from {}: {}", db_client.name, e);
+                            tracing::debug!(
+                                "Failed to get downloads from {}: {}",
+                                db_client.name,
+                                e
+                            );
                         }
                     }
                 }
@@ -420,24 +457,23 @@ pub async fn get_queue(
         page,
         page_size,
         sort_key: query.sort_key.clone().unwrap_or("timeleft".to_string()),
-        sort_direction: query.sort_direction.clone().unwrap_or("ascending".to_string()),
+        sort_direction: query
+            .sort_direction
+            .clone()
+            .unwrap_or("ascending".to_string()),
         total_records,
         records,
     })
 }
 
 /// GET /api/v3/queue/details
-pub async fn get_queue_details(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<QueueResource>> {
+pub async fn get_queue_details(State(state): State<Arc<AppState>>) -> Json<Vec<QueueResource>> {
     let downloads = fetch_all_downloads(&state, true).await;
     Json(downloads)
 }
 
 /// GET /api/v3/queue/status
-pub async fn get_queue_status(
-    State(state): State<Arc<AppState>>,
-) -> Json<QueueStatusResource> {
+pub async fn get_queue_status(State(state): State<Arc<AppState>>) -> Json<QueueStatusResource> {
     let downloads = fetch_all_downloads(&state, true).await;
 
     let total_count = downloads.len() as i32;
@@ -494,7 +530,10 @@ pub async fn delete_queue_item(
     // Check if this is a tracked download (ID < 10000)
     if id < 10000 {
         // Try to remove via service (handles both DB and client removal)
-        if let Err(e) = service.remove(id as i64, query.remove_from_client, query.blocklist).await {
+        if let Err(e) = service
+            .remove(id as i64, query.remove_from_client, query.blocklist)
+            .await
+        {
             tracing::warn!("Failed to remove tracked download {}: {}", id, e);
         } else {
             tracing::info!("Removed tracked download {}", id);
@@ -506,7 +545,9 @@ pub async fn delete_queue_item(
     let downloads = fetch_all_downloads(&state, true).await;
 
     if let Some(download) = downloads.iter().find(|d| d.id == id) {
-        if let (Some(client_name), Some(download_id)) = (&download.download_client, &download.download_id) {
+        if let (Some(client_name), Some(download_id)) =
+            (&download.download_client, &download.download_id)
+        {
             let repo = DownloadClientRepository::new(state.db.clone());
 
             if let Ok(clients) = repo.get_all().await {
@@ -551,7 +592,10 @@ pub async fn delete_queue_bulk(
     for id in &body.ids {
         // Check if this is a tracked download (ID < 10000)
         if *id < 10000 {
-            if let Err(e) = service.remove(*id as i64, body.remove_from_client, body.blocklist).await {
+            if let Err(e) = service
+                .remove(*id as i64, body.remove_from_client, body.blocklist)
+                .await
+            {
                 tracing::warn!("Failed to remove tracked download {}: {}", id, e);
             }
             continue;
@@ -561,7 +605,9 @@ pub async fn delete_queue_bulk(
         let downloads = fetch_all_downloads(&state, true).await;
 
         if let Some(download) = downloads.iter().find(|d| d.id == *id) {
-            if let (Some(client_name), Some(download_id)) = (&download.download_client, &download.download_id) {
+            if let (Some(client_name), Some(download_id)) =
+                (&download.download_client, &download.download_id)
+            {
                 let repo = DownloadClientRepository::new(state.db.clone());
 
                 if let Ok(clients) = repo.get_all().await {

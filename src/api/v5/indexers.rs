@@ -18,7 +18,10 @@ use crate::web::AppState;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_indexers).post(create_indexer))
-        .route("/{id}", get(get_indexer).put(update_indexer).delete(delete_indexer))
+        .route(
+            "/{id}",
+            get(get_indexer).put(update_indexer).delete(delete_indexer),
+        )
         .route("/{id}/test", post(test_indexer))
 }
 
@@ -26,7 +29,10 @@ async fn list_indexers(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<IndexerResponse>>, StatusCode> {
     let repo = IndexerRepository::new(state.db.clone());
-    let indexers = repo.get_all().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let indexers = repo
+        .get_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(indexers.iter().map(db_to_response).collect()))
 }
 
@@ -35,7 +41,9 @@ async fn get_indexer(
     Path(id): Path<i64>,
 ) -> Result<Json<IndexerResponse>, StatusCode> {
     let repo = IndexerRepository::new(state.db.clone());
-    let indexer = repo.get_by_id(id).await
+    let indexer = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(db_to_response(&indexer)))
@@ -47,7 +55,8 @@ async fn create_indexer(
 ) -> Result<impl IntoResponse, StatusCode> {
     let repo = IndexerRepository::new(state.db.clone());
     let settings = fields_to_settings(&body.fields);
-    let tags = serde_json::to_string(&body.tags.unwrap_or_default()).unwrap_or_else(|_| "[]".to_string());
+    let tags =
+        serde_json::to_string(&body.tags.unwrap_or_default()).unwrap_or_else(|_| "[]".to_string());
 
     let model = IndexerDbModel {
         id: 0,
@@ -64,8 +73,13 @@ async fn create_indexer(
         tags,
     };
 
-    let id = repo.insert(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let created = repo.get_by_id(id).await
+    let id = repo
+        .insert(&model)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let created = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok((StatusCode::CREATED, Json(db_to_response(&created))))
@@ -77,27 +91,38 @@ async fn update_indexer(
     Json(body): Json<UpdateIndexerRequest>,
 ) -> Result<Json<IndexerResponse>, StatusCode> {
     let repo = IndexerRepository::new(state.db.clone());
-    let mut model = repo.get_by_id(id).await
+    let mut model = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if let Some(name) = body.name { model.name = name; }
-    if let Some(v) = body.enable_rss { model.enable_rss = v; }
-    if let Some(v) = body.enable_automatic_search { model.enable_automatic_search = v; }
-    if let Some(v) = body.enable_interactive_search { model.enable_interactive_search = v; }
-    if let Some(fields) = body.fields { model.settings = fields_to_settings(&fields); }
+    if let Some(name) = body.name {
+        model.name = name;
+    }
+    if let Some(v) = body.enable_rss {
+        model.enable_rss = v;
+    }
+    if let Some(v) = body.enable_automatic_search {
+        model.enable_automatic_search = v;
+    }
+    if let Some(v) = body.enable_interactive_search {
+        model.enable_interactive_search = v;
+    }
+    if let Some(fields) = body.fields {
+        model.settings = fields_to_settings(&fields);
+    }
     if let Some(tags) = body.tags {
         model.tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
     }
 
-    repo.update(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    repo.update(&model)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(db_to_response(&model)))
 }
 
-async fn delete_indexer(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-) -> StatusCode {
+async fn delete_indexer(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> StatusCode {
     let repo = IndexerRepository::new(state.db.clone());
     match repo.delete(id).await {
         Ok(()) => StatusCode::OK,
@@ -105,28 +130,39 @@ async fn delete_indexer(
     }
 }
 
-async fn test_indexer(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-) -> Json<TestResult> {
+async fn test_indexer(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Json<TestResult> {
     let repo = IndexerRepository::new(state.db.clone());
     let model = match repo.get_by_id(id).await {
         Ok(Some(m)) => m,
-        _ => return Json(TestResult { success: false, message: Some("Indexer not found".into()) }),
+        _ => {
+            return Json(TestResult {
+                success: false,
+                message: Some("Indexer not found".into()),
+            })
+        }
     };
 
     match create_client_from_model(&model) {
         Ok(client) => match client.fetch_rss(Some(1)).await {
-            Ok(_) => Json(TestResult { success: true, message: None }),
-            Err(e) => Json(TestResult { success: false, message: Some(e.to_string()) }),
+            Ok(_) => Json(TestResult {
+                success: true,
+                message: None,
+            }),
+            Err(e) => Json(TestResult {
+                success: false,
+                message: Some(e.to_string()),
+            }),
         },
-        Err(e) => Json(TestResult { success: false, message: Some(e.to_string()) }),
+        Err(e) => Json(TestResult {
+            success: false,
+            message: Some(e.to_string()),
+        }),
     }
 }
 
 fn db_to_response(model: &IndexerDbModel) -> IndexerResponse {
-    let settings: serde_json::Value = serde_json::from_str(&model.settings)
-        .unwrap_or(serde_json::json!({}));
+    let settings: serde_json::Value =
+        serde_json::from_str(&model.settings).unwrap_or(serde_json::json!({}));
     let tags: Vec<i32> = serde_json::from_str(&model.tags).unwrap_or_default();
     let fields = settings_to_fields(&settings);
 
@@ -147,9 +183,13 @@ fn db_to_response(model: &IndexerDbModel) -> IndexerResponse {
 
 fn settings_to_fields(settings: &serde_json::Value) -> Vec<IndexerField> {
     match settings.as_object() {
-        Some(obj) => obj.iter().map(|(k, v)| {
-            IndexerField { name: k.clone(), value: v.clone() }
-        }).collect(),
+        Some(obj) => obj
+            .iter()
+            .map(|(k, v)| IndexerField {
+                name: k.clone(),
+                value: v.clone(),
+            })
+            .collect(),
         None => vec![],
     }
 }

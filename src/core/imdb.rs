@@ -166,9 +166,10 @@ impl ImdbClient {
         match self.client.post(&url).send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let body: serde_json::Value = response.json().await.unwrap_or_else(|_| {
-                    serde_json::json!({ "error": "Failed to parse response" })
-                });
+                let body: serde_json::Value = response
+                    .json()
+                    .await
+                    .unwrap_or_else(|_| serde_json::json!({ "error": "Failed to parse response" }));
                 Ok(ImdbProxyResponse { status, body })
             }
             Err(e) => Ok(ImdbProxyResponse {
@@ -189,9 +190,10 @@ impl ImdbClient {
         match self.client.get(&url).send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let body: serde_json::Value = response.json().await.unwrap_or_else(|_| {
-                    serde_json::json!({ "error": "Failed to parse response" })
-                });
+                let body: serde_json::Value = response
+                    .json()
+                    .await
+                    .unwrap_or_else(|_| serde_json::json!({ "error": "Failed to parse response" }));
                 Ok(ImdbProxyResponse { status, body })
             }
             Err(e) => Ok(ImdbProxyResponse {
@@ -218,9 +220,10 @@ impl ImdbClient {
         {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let body: serde_json::Value = response.json().await.unwrap_or_else(|_| {
-                    serde_json::json!({ "error": "Failed to parse response" })
-                });
+                let body: serde_json::Value = response
+                    .json()
+                    .await
+                    .unwrap_or_else(|_| serde_json::json!({ "error": "Failed to parse response" }));
                 Ok(ImdbProxyResponse { status, body })
             }
             Err(e) => Ok(ImdbProxyResponse {
@@ -241,9 +244,10 @@ impl ImdbClient {
         match self.client.post(&url).send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let body: serde_json::Value = response.json().await.unwrap_or_else(|_| {
-                    serde_json::json!({ "error": "Failed to parse response" })
-                });
+                let body: serde_json::Value = response
+                    .json()
+                    .await
+                    .unwrap_or_else(|_| serde_json::json!({ "error": "Failed to parse response" }));
                 Ok(ImdbProxyResponse { status, body })
             }
             Err(e) => Ok(ImdbProxyResponse {

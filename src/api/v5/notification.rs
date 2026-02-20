@@ -111,12 +111,11 @@ pub struct FieldResource {
 /// Convert database model to API resource
 fn model_to_resource(model: &NotificationDbModel) -> NotificationResource {
     // Parse settings JSON to get field values
-    let settings: serde_json::Value = serde_json::from_str(&model.settings)
-        .unwrap_or_else(|_| serde_json::json!({}));
+    let settings: serde_json::Value =
+        serde_json::from_str(&model.settings).unwrap_or_else(|_| serde_json::json!({}));
 
     // Parse tags JSON
-    let tags: Vec<i64> = serde_json::from_str(&model.tags)
-        .unwrap_or_default();
+    let tags: Vec<i64> = serde_json::from_str(&model.tags).unwrap_or_default();
 
     // Build fields from settings
     let fields = settings_to_fields(&model.implementation, &settings);
@@ -203,7 +202,9 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
                 field_type: "textbox".to_string(),
                 advanced: false,
                 help_text: Some("Discord webhook URL".to_string()),
-                help_link: Some("https://support.discord.com/hc/en-us/articles/228383668".to_string()),
+                help_link: Some(
+                    "https://support.discord.com/hc/en-us/articles/228383668".to_string(),
+                ),
                 privacy: "apiKey".to_string(),
                 is_float: false,
             },
@@ -249,7 +250,10 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
                 order: 1,
                 name: "method".to_string(),
                 label: "Method".to_string(),
-                value: settings.get("method").cloned().or(Some(serde_json::json!(1))),
+                value: settings
+                    .get("method")
+                    .cloned()
+                    .or(Some(serde_json::json!(1))),
                 field_type: "select".to_string(),
                 advanced: false,
                 help_text: Some("HTTP method to use".to_string()),
@@ -275,7 +279,10 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
                 order: 1,
                 name: "port".to_string(),
                 label: "Port".to_string(),
-                value: settings.get("port").cloned().or(Some(serde_json::json!(587))),
+                value: settings
+                    .get("port")
+                    .cloned()
+                    .or(Some(serde_json::json!(587))),
                 field_type: "number".to_string(),
                 advanced: false,
                 help_text: Some("SMTP port".to_string()),
@@ -344,8 +351,7 @@ fn fields_to_settings(fields: &[FieldResource]) -> String {
             settings.insert(field.name.clone(), value.clone());
         }
     }
-    serde_json::to_string(&serde_json::Value::Object(settings))
-        .unwrap_or_else(|_| "{}".to_string())
+    serde_json::to_string(&serde_json::Value::Object(settings)).unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Whether this implementation supports notification events
@@ -360,10 +366,8 @@ pub async fn get_notifications(
 
     match repo.get_all().await {
         Ok(notifications) => {
-            let resources: Vec<NotificationResource> = notifications
-                .iter()
-                .map(model_to_resource)
-                .collect();
+            let resources: Vec<NotificationResource> =
+                notifications.iter().map(model_to_resource).collect();
             Json(resources)
         }
         Err(e) => {
@@ -519,18 +523,22 @@ pub async fn get_notification_schema() -> Json<Vec<NotificationResource>> {
     let resources: Vec<NotificationResource> = schemas
         .into_iter()
         .map(|schema| {
-            let fields: Vec<FieldResource> = schema.fields.into_iter().map(|f| FieldResource {
-                order: f.order,
-                name: f.name,
-                label: f.label,
-                value: f.value,
-                field_type: f.field_type,
-                advanced: f.advanced,
-                help_text: f.help_text,
-                help_link: f.help_link,
-                privacy: f.privacy,
-                is_float: f.is_float,
-            }).collect();
+            let fields: Vec<FieldResource> = schema
+                .fields
+                .into_iter()
+                .map(|f| FieldResource {
+                    order: f.order,
+                    name: f.name,
+                    label: f.label,
+                    value: f.value,
+                    field_type: f.field_type,
+                    advanced: f.advanced,
+                    help_text: f.help_text,
+                    help_link: f.help_link,
+                    privacy: f.privacy,
+                    is_float: f.is_float,
+                })
+                .collect();
 
             NotificationResource {
                 id: 0,
@@ -578,7 +586,12 @@ pub async fn get_notification_schema() -> Json<Vec<NotificationResource>> {
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(get_notifications).post(create_notification))
-        .route("/{id}", get(get_notification).put(update_notification).delete(delete_notification))
+        .route(
+            "/{id}",
+            get(get_notification)
+                .put(update_notification)
+                .delete(delete_notification),
+        )
         .route("/test", post(test_notification))
         .route("/testall", post(test_all_notifications))
         .route("/schema", get(get_notification_schema))

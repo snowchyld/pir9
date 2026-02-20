@@ -86,7 +86,10 @@ pub async fn get_delay_profiles(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<DelayProfileResource>>, StatusCode> {
     let repo = DelayProfileRepository::new(state.db.clone());
-    let items = repo.get_all().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let items = repo
+        .get_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(items.iter().map(db_to_resource).collect()))
 }
 
@@ -95,7 +98,9 @@ pub async fn get_delay_profile(
     Path(id): Path<i64>,
 ) -> Result<Json<DelayProfileResource>, StatusCode> {
     let repo = DelayProfileRepository::new(state.db.clone());
-    let item = repo.get_by_id(id).await
+    let item = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(db_to_resource(&item)))
@@ -107,8 +112,13 @@ pub async fn create_delay_profile(
 ) -> Result<impl IntoResponse, StatusCode> {
     let repo = DelayProfileRepository::new(state.db.clone());
     let model = resource_to_db(&body, None);
-    let id = repo.insert(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let created = repo.get_by_id(id).await
+    let id = repo
+        .insert(&model)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let created = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok((StatusCode::CREATED, Json(db_to_resource(&created))))
@@ -120,11 +130,15 @@ pub async fn update_delay_profile(
     Json(body): Json<DelayProfileResource>,
 ) -> Result<Json<DelayProfileResource>, StatusCode> {
     let repo = DelayProfileRepository::new(state.db.clone());
-    let _existing = repo.get_by_id(id).await
+    let _existing = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     let model = resource_to_db(&body, Some(id));
-    repo.update(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    repo.update(&model)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(db_to_resource(&model)))
 }
 
@@ -144,13 +158,21 @@ pub async fn reorder_delay_profile(
     Path(_id): Path<i64>,
 ) -> Result<Json<Vec<DelayProfileResource>>, StatusCode> {
     let repo = DelayProfileRepository::new(state.db.clone());
-    let items = repo.get_all().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let items = repo
+        .get_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(items.iter().map(db_to_resource).collect()))
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(get_delay_profiles).post(create_delay_profile))
-        .route("/{id}", get(get_delay_profile).put(update_delay_profile).delete(delete_delay_profile))
+        .route(
+            "/{id}",
+            get(get_delay_profile)
+                .put(update_delay_profile)
+                .delete(delete_delay_profile),
+        )
         .route("/reorder/{id}", put(reorder_delay_profile))
 }

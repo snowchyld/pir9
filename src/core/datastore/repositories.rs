@@ -119,7 +119,7 @@ impl EpisodeFileRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::EpisodeFileDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::EpisodeFileDbModel>(
-            "SELECT * FROM episode_files ORDER BY date_added DESC"
+            "SELECT * FROM episode_files ORDER BY date_added DESC",
         )
         .fetch_all(pool)
         .await?;
@@ -129,7 +129,7 @@ impl EpisodeFileRepository {
     pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::EpisodeFileDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::EpisodeFileDbModel>(
-            "SELECT * FROM episode_files WHERE id = $1"
+            "SELECT * FROM episode_files WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -137,7 +137,10 @@ impl EpisodeFileRepository {
         Ok(row)
     }
 
-    pub async fn get_by_series_id(&self, series_id: i64) -> Result<Vec<super::models::EpisodeFileDbModel>> {
+    pub async fn get_by_series_id(
+        &self,
+        series_id: i64,
+    ) -> Result<Vec<super::models::EpisodeFileDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::EpisodeFileDbModel>(
             "SELECT * FROM episode_files WHERE series_id = $1 ORDER BY season_number, relative_path"
@@ -148,10 +151,13 @@ impl EpisodeFileRepository {
         Ok(rows)
     }
 
-    pub async fn get_by_path(&self, path: &str) -> Result<Option<super::models::EpisodeFileDbModel>> {
+    pub async fn get_by_path(
+        &self,
+        path: &str,
+    ) -> Result<Option<super::models::EpisodeFileDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::EpisodeFileDbModel>(
-            "SELECT * FROM episode_files WHERE path = $1"
+            "SELECT * FROM episode_files WHERE path = $1",
         )
         .bind(path)
         .fetch_optional(pool)
@@ -169,7 +175,7 @@ impl EpisodeFileRepository {
                 media_info, original_file_path
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING id
-            "#
+            "#,
         )
         .bind(episode_file.series_id)
         .bind(episode_file.season_number)
@@ -197,7 +203,7 @@ impl EpisodeFileRepository {
                 date_added = $6, scene_name = $7, release_group = $8, quality = $9, languages = $10,
                 media_info = $11, original_file_path = $12
             WHERE id = $13
-            "#
+            "#,
         )
         .bind(episode_file.series_id)
         .bind(episode_file.season_number)
@@ -255,7 +261,11 @@ impl HistoryRepository {
         event_type: Option<i32>,
     ) -> Result<(Vec<super::models::HistoryDbModel>, i64)> {
         let offset = (page - 1) * page_size;
-        let order = if sort_direction.to_lowercase() == "ascending" { "ASC" } else { "DESC" };
+        let order = if sort_direction.to_lowercase() == "ascending" {
+            "ASC"
+        } else {
+            "DESC"
+        };
         let sort_column = match sort_key {
             "date" => "date",
             "series.sortTitle" | "seriesTitle" => "series_id",
@@ -277,10 +287,11 @@ impl HistoryRepository {
                 .bind(offset)
                 .fetch_all(pool)
                 .await?;
-            let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM history WHERE event_type = $1")
-                .bind(evt)
-                .fetch_one(pool)
-                .await?;
+            let count: (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM history WHERE event_type = $1")
+                    .bind(evt)
+                    .fetch_one(pool)
+                    .await?;
             Ok((rows, count.0))
         } else {
             let query = format!(
@@ -299,10 +310,13 @@ impl HistoryRepository {
         }
     }
 
-    pub async fn get_since(&self, date: chrono::DateTime<chrono::Utc>) -> Result<Vec<super::models::HistoryDbModel>> {
+    pub async fn get_since(
+        &self,
+        date: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<super::models::HistoryDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::HistoryDbModel>(
-            "SELECT * FROM history WHERE date >= $1 ORDER BY date DESC"
+            "SELECT * FROM history WHERE date >= $1 ORDER BY date DESC",
         )
         .bind(date)
         .fetch_all(pool)
@@ -310,10 +324,13 @@ impl HistoryRepository {
         Ok(rows)
     }
 
-    pub async fn get_by_series_id(&self, series_id: i64) -> Result<Vec<super::models::HistoryDbModel>> {
+    pub async fn get_by_series_id(
+        &self,
+        series_id: i64,
+    ) -> Result<Vec<super::models::HistoryDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::HistoryDbModel>(
-            "SELECT * FROM history WHERE series_id = $1 ORDER BY date DESC"
+            "SELECT * FROM history WHERE series_id = $1 ORDER BY date DESC",
         )
         .bind(series_id)
         .fetch_all(pool)
@@ -321,10 +338,13 @@ impl HistoryRepository {
         Ok(rows)
     }
 
-    pub async fn get_by_episode_id(&self, episode_id: i64) -> Result<Vec<super::models::HistoryDbModel>> {
+    pub async fn get_by_episode_id(
+        &self,
+        episode_id: i64,
+    ) -> Result<Vec<super::models::HistoryDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::HistoryDbModel>(
-            "SELECT * FROM history WHERE episode_id = $1 ORDER BY date DESC"
+            "SELECT * FROM history WHERE episode_id = $1 ORDER BY date DESC",
         )
         .bind(episode_id)
         .fetch_all(pool)
@@ -332,10 +352,14 @@ impl HistoryRepository {
         Ok(rows)
     }
 
-    pub async fn get_for_series(&self, series_id: i64, limit: i32) -> Result<Vec<super::models::HistoryDbModel>> {
+    pub async fn get_for_series(
+        &self,
+        series_id: i64,
+        limit: i32,
+    ) -> Result<Vec<super::models::HistoryDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::HistoryDbModel>(
-            "SELECT * FROM history WHERE series_id = $1 ORDER BY date DESC LIMIT $2"
+            "SELECT * FROM history WHERE series_id = $1 ORDER BY date DESC LIMIT $2",
         )
         .bind(series_id)
         .bind(limit)
@@ -354,7 +378,7 @@ impl HistoryRepository {
                 date, download_id, event_type, data
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING id
-            "#
+            "#,
         )
         .bind(history.series_id)
         .bind(history.episode_id)
@@ -386,18 +410,17 @@ impl RootFolderRepository {
 
     pub async fn get_all(&self) -> Result<Vec<super::models::RootFolderDbModel>> {
         let pool = self.db.pool();
-        let rows = sqlx::query_as::<_, super::models::RootFolderDbModel>(
-            "SELECT * FROM root_folders"
-        )
-        .fetch_all(pool)
-        .await?;
+        let rows =
+            sqlx::query_as::<_, super::models::RootFolderDbModel>("SELECT * FROM root_folders")
+                .fetch_all(pool)
+                .await?;
         Ok(rows)
     }
 
     pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::RootFolderDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::RootFolderDbModel>(
-            "SELECT * FROM root_folders WHERE id = $1"
+            "SELECT * FROM root_folders WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -407,11 +430,13 @@ impl RootFolderRepository {
 
     pub async fn insert(&self, path: &str) -> Result<i64> {
         let pool = self.db.pool();
-        let row: (i64,) = sqlx::query_as("INSERT INTO root_folders (path, accessible) VALUES ($1, $2) RETURNING id")
-            .bind(path)
-            .bind(true)
-            .fetch_one(pool)
-            .await?;
+        let row: (i64,) = sqlx::query_as(
+            "INSERT INTO root_folders (path, accessible) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(path)
+        .bind(true)
+        .fetch_one(pool)
+        .await?;
         Ok(row.0)
     }
 
@@ -438,7 +463,7 @@ impl SeriesRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::SeriesDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::SeriesDbModel>(
-            "SELECT * FROM series ORDER BY sort_title"
+            "SELECT * FROM series ORDER BY sort_title",
         )
         .fetch_all(pool)
         .await?;
@@ -447,19 +472,21 @@ impl SeriesRepository {
 
     pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::SeriesDbModel>> {
         let pool = self.db.pool();
-        let row = sqlx::query_as::<_, super::models::SeriesDbModel>(
-            "SELECT * FROM series WHERE id = $1"
-        )
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+        let row =
+            sqlx::query_as::<_, super::models::SeriesDbModel>("SELECT * FROM series WHERE id = $1")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
         Ok(row)
     }
 
-    pub async fn get_by_tvdb_id(&self, tvdb_id: i64) -> Result<Option<super::models::SeriesDbModel>> {
+    pub async fn get_by_tvdb_id(
+        &self,
+        tvdb_id: i64,
+    ) -> Result<Option<super::models::SeriesDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::SeriesDbModel>(
-            "SELECT * FROM series WHERE tvdb_id = $1"
+            "SELECT * FROM series WHERE tvdb_id = $1",
         )
         .bind(tvdb_id)
         .fetch_optional(pool)
@@ -467,10 +494,13 @@ impl SeriesRepository {
         Ok(row)
     }
 
-    pub async fn get_by_imdb_id(&self, imdb_id: &str) -> Result<Option<super::models::SeriesDbModel>> {
+    pub async fn get_by_imdb_id(
+        &self,
+        imdb_id: &str,
+    ) -> Result<Option<super::models::SeriesDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::SeriesDbModel>(
-            "SELECT * FROM series WHERE imdb_id = $1"
+            "SELECT * FROM series WHERE imdb_id = $1",
         )
         .bind(imdb_id)
         .fetch_optional(pool)
@@ -499,7 +529,7 @@ impl SeriesRepository {
                 $26, $27, $28,
                 $29, $30
             ) RETURNING id
-            "#
+            "#,
         )
         .bind(series.tvdb_id)
         .bind(series.tv_rage_id)
@@ -609,7 +639,7 @@ impl MovieRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::MovieDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::MovieDbModel>(
-            "SELECT * FROM movies ORDER BY sort_title"
+            "SELECT * FROM movies ORDER BY sort_title",
         )
         .fetch_all(pool)
         .await?;
@@ -618,19 +648,21 @@ impl MovieRepository {
 
     pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::MovieDbModel>> {
         let pool = self.db.pool();
-        let row = sqlx::query_as::<_, super::models::MovieDbModel>(
-            "SELECT * FROM movies WHERE id = $1"
-        )
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+        let row =
+            sqlx::query_as::<_, super::models::MovieDbModel>("SELECT * FROM movies WHERE id = $1")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
         Ok(row)
     }
 
-    pub async fn get_by_tmdb_id(&self, tmdb_id: i64) -> Result<Option<super::models::MovieDbModel>> {
+    pub async fn get_by_tmdb_id(
+        &self,
+        tmdb_id: i64,
+    ) -> Result<Option<super::models::MovieDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::MovieDbModel>(
-            "SELECT * FROM movies WHERE tmdb_id = $1"
+            "SELECT * FROM movies WHERE tmdb_id = $1",
         )
         .bind(tmdb_id)
         .fetch_optional(pool)
@@ -638,10 +670,13 @@ impl MovieRepository {
         Ok(row)
     }
 
-    pub async fn get_by_imdb_id(&self, imdb_id: &str) -> Result<Option<super::models::MovieDbModel>> {
+    pub async fn get_by_imdb_id(
+        &self,
+        imdb_id: &str,
+    ) -> Result<Option<super::models::MovieDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::MovieDbModel>(
-            "SELECT * FROM movies WHERE imdb_id = $1"
+            "SELECT * FROM movies WHERE imdb_id = $1",
         )
         .bind(imdb_id)
         .fetch_optional(pool)
@@ -666,7 +701,7 @@ impl MovieRepository {
                 $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
                 $21, $22, $23, $24, $25, $26, $27, $28
             ) RETURNING id
-            "#
+            "#,
         )
         .bind(movie.tmdb_id)
         .bind(&movie.imdb_id)
@@ -715,7 +750,7 @@ impl MovieRepository {
                 has_file = $23, movie_file_id = $24, last_info_sync = $25,
                 imdb_rating = $26, imdb_votes = $27
             WHERE id = $28
-            "#
+            "#,
         )
         .bind(movie.tmdb_id)
         .bind(&movie.imdb_id)
@@ -773,7 +808,7 @@ impl MovieFileRepository {
     pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::MovieFileDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::MovieFileDbModel>(
-            "SELECT * FROM movie_files WHERE id = $1"
+            "SELECT * FROM movie_files WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -781,10 +816,13 @@ impl MovieFileRepository {
         Ok(row)
     }
 
-    pub async fn get_by_movie_id(&self, movie_id: i64) -> Result<Option<super::models::MovieFileDbModel>> {
+    pub async fn get_by_movie_id(
+        &self,
+        movie_id: i64,
+    ) -> Result<Option<super::models::MovieFileDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::MovieFileDbModel>(
-            "SELECT * FROM movie_files WHERE movie_id = $1"
+            "SELECT * FROM movie_files WHERE movie_id = $1",
         )
         .bind(movie_id)
         .fetch_optional(pool)
@@ -803,7 +841,7 @@ impl MovieFileRepository {
             ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
             ) RETURNING id
-            "#
+            "#,
         )
         .bind(file.movie_id)
         .bind(&file.relative_path)
@@ -845,7 +883,7 @@ impl EpisodeRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::EpisodeDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::EpisodeDbModel>(
-            "SELECT * FROM episodes ORDER BY series_id, season_number, episode_number"
+            "SELECT * FROM episodes ORDER BY series_id, season_number, episode_number",
         )
         .fetch_all(pool)
         .await?;
@@ -855,7 +893,7 @@ impl EpisodeRepository {
     pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::EpisodeDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::EpisodeDbModel>(
-            "SELECT * FROM episodes WHERE id = $1"
+            "SELECT * FROM episodes WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -863,10 +901,13 @@ impl EpisodeRepository {
         Ok(row)
     }
 
-    pub async fn get_by_series_id(&self, series_id: i64) -> Result<Vec<super::models::EpisodeDbModel>> {
+    pub async fn get_by_series_id(
+        &self,
+        series_id: i64,
+    ) -> Result<Vec<super::models::EpisodeDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::EpisodeDbModel>(
-            "SELECT * FROM episodes WHERE series_id = $1 ORDER BY season_number, episode_number"
+            "SELECT * FROM episodes WHERE series_id = $1 ORDER BY season_number, episode_number",
         )
         .bind(series_id)
         .fetch_all(pool)
@@ -874,10 +915,13 @@ impl EpisodeRepository {
         Ok(rows)
     }
 
-    pub async fn get_by_imdb_id(&self, imdb_id: &str) -> Result<Option<super::models::EpisodeDbModel>> {
+    pub async fn get_by_imdb_id(
+        &self,
+        imdb_id: &str,
+    ) -> Result<Option<super::models::EpisodeDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::EpisodeDbModel>(
-            "SELECT * FROM episodes WHERE imdb_id = $1"
+            "SELECT * FROM episodes WHERE imdb_id = $1",
         )
         .bind(imdb_id)
         .fetch_optional(pool)
@@ -902,7 +946,7 @@ impl EpisodeRepository {
                 $15, $16, $17, $18, $19,
                 $20, $21, $22
             ) RETURNING id
-            "#
+            "#,
         )
         .bind(episode.series_id)
         .bind(episode.tvdb_id)
@@ -989,7 +1033,11 @@ impl EpisodeRepository {
         Ok(())
     }
 
-    pub async fn get_by_series_and_season(&self, series_id: i64, season_number: i32) -> Result<Vec<super::models::EpisodeDbModel>> {
+    pub async fn get_by_series_and_season(
+        &self,
+        series_id: i64,
+        season_number: i32,
+    ) -> Result<Vec<super::models::EpisodeDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::EpisodeDbModel>(
             "SELECT * FROM episodes WHERE series_id = $1 AND season_number = $2 ORDER BY episode_number"
@@ -1001,7 +1049,12 @@ impl EpisodeRepository {
         Ok(rows)
     }
 
-    pub async fn get_by_series_season_episode(&self, series_id: i64, season_number: i32, episode_number: i32) -> Result<Option<super::models::EpisodeDbModel>> {
+    pub async fn get_by_series_season_episode(
+        &self,
+        series_id: i64,
+        season_number: i32,
+        episode_number: i32,
+    ) -> Result<Option<super::models::EpisodeDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::EpisodeDbModel>(
             "SELECT * FROM episodes WHERE series_id = $1 AND season_number = $2 AND episode_number = $3"
@@ -1014,10 +1067,13 @@ impl EpisodeRepository {
         Ok(row)
     }
 
-    pub async fn get_by_tvdb_id(&self, tvdb_id: i64) -> Result<Option<super::models::EpisodeDbModel>> {
+    pub async fn get_by_tvdb_id(
+        &self,
+        tvdb_id: i64,
+    ) -> Result<Option<super::models::EpisodeDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::EpisodeDbModel>(
-            "SELECT * FROM episodes WHERE tvdb_id = $1"
+            "SELECT * FROM episodes WHERE tvdb_id = $1",
         )
         .bind(tvdb_id)
         .fetch_optional(pool)
@@ -1025,7 +1081,11 @@ impl EpisodeRepository {
         Ok(row)
     }
 
-    pub async fn update_monitored(&self, episode_ids: &[i64], monitored: bool) -> Result<Vec<super::models::EpisodeDbModel>> {
+    pub async fn update_monitored(
+        &self,
+        episode_ids: &[i64],
+        monitored: bool,
+    ) -> Result<Vec<super::models::EpisodeDbModel>> {
         let pool = self.db.pool();
         for id in episode_ids {
             sqlx::query("UPDATE episodes SET monitored = $1 WHERE id = $2")
@@ -1055,7 +1115,11 @@ impl EpisodeRepository {
         sort_key: &str,
         sort_direction: &str,
     ) -> Result<(Vec<super::models::EpisodeDbModel>, i64)> {
-        let order = if sort_direction.to_lowercase() == "descending" { "DESC" } else { "ASC" };
+        let order = if sort_direction.to_lowercase() == "descending" {
+            "DESC"
+        } else {
+            "ASC"
+        };
         let order_by = match sort_key {
             "airDateUtc" | "airDate" => "air_date_utc",
             "seriesTitle" => "series_id",
@@ -1065,15 +1129,14 @@ impl EpisodeRepository {
         let offset = (page - 1) * page_size;
 
         let pool = self.db.pool();
-        let mut where_clause = "has_file = false AND air_date_utc IS NOT NULL AND air_date_utc < NOW()".to_string();
+        let mut where_clause =
+            "has_file = false AND air_date_utc IS NOT NULL AND air_date_utc < NOW()".to_string();
         if monitored_only {
             where_clause.push_str(" AND monitored = true");
         }
 
         let count_query = format!("SELECT COUNT(*) FROM episodes WHERE {}", where_clause);
-        let total: (i64,) = sqlx::query_as(&count_query)
-            .fetch_one(pool)
-            .await?;
+        let total: (i64,) = sqlx::query_as(&count_query).fetch_one(pool).await?;
 
         let query = format!(
             "SELECT * FROM episodes WHERE {} ORDER BY {} {} LIMIT $1 OFFSET $2",
@@ -1135,9 +1198,7 @@ impl EpisodeRepository {
         // This would require joining with episode_files and quality_profiles
         let where_clause = "has_file = true AND monitored = true";
         let count_query = format!("SELECT COUNT(*) FROM episodes WHERE {}", where_clause);
-        let _total: (i64,) = sqlx::query_as(&count_query)
-            .fetch_one(pool)
-            .await?;
+        let _total: (i64,) = sqlx::query_as(&count_query).fetch_one(pool).await?;
 
         // For now, return empty - full implementation requires quality profile comparison
         Ok((vec![], 0))
@@ -1157,7 +1218,7 @@ impl QualityProfileRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::QualityProfileDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::QualityProfileDbModel>(
-            "SELECT * FROM quality_profiles ORDER BY name"
+            "SELECT * FROM quality_profiles ORDER BY name",
         )
         .fetch_all(pool)
         .await?;
@@ -1167,7 +1228,7 @@ impl QualityProfileRepository {
     pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::QualityProfileDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::QualityProfileDbModel>(
-            "SELECT * FROM quality_profiles WHERE id = $1"
+            "SELECT * FROM quality_profiles WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -1175,7 +1236,13 @@ impl QualityProfileRepository {
         Ok(row)
     }
 
-    pub async fn insert(&self, name: &str, upgrade_allowed: bool, cutoff: i32, items: &str) -> Result<i64> {
+    pub async fn insert(
+        &self,
+        name: &str,
+        upgrade_allowed: bool,
+        cutoff: i32,
+        items: &str,
+    ) -> Result<i64> {
         let pool = self.db.pool();
         let row: (i64,) = sqlx::query_as(
             r#"
@@ -1193,7 +1260,14 @@ impl QualityProfileRepository {
         Ok(row.0)
     }
 
-    pub async fn update(&self, id: i64, name: &str, upgrade_allowed: bool, cutoff: i32, items: &str) -> Result<()> {
+    pub async fn update(
+        &self,
+        id: i64,
+        name: &str,
+        upgrade_allowed: bool,
+        cutoff: i32,
+        items: &str,
+    ) -> Result<()> {
         let pool = self.db.pool();
         sqlx::query(
             "UPDATE quality_profiles SET name = $1, upgrade_allowed = $2, cutoff = $3, items = $4 WHERE id = $5"
@@ -1254,7 +1328,7 @@ impl CommandRepository {
     pub async fn get_all(&self) -> Result<Vec<CommandDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, CommandDbModel>(
-            "SELECT * FROM commands ORDER BY queued DESC LIMIT 100"
+            "SELECT * FROM commands ORDER BY queued DESC LIMIT 100",
         )
         .fetch_all(pool)
         .await?;
@@ -1263,16 +1337,20 @@ impl CommandRepository {
 
     pub async fn get_by_id(&self, id: i64) -> Result<Option<CommandDbModel>> {
         let pool = self.db.pool();
-        let row = sqlx::query_as::<_, CommandDbModel>(
-            "SELECT * FROM commands WHERE id = $1"
-        )
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+        let row = sqlx::query_as::<_, CommandDbModel>("SELECT * FROM commands WHERE id = $1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
         Ok(row)
     }
 
-    pub async fn insert(&self, name: &str, command_name: &str, body: Option<&str>, trigger: &str) -> Result<i64> {
+    pub async fn insert(
+        &self,
+        name: &str,
+        command_name: &str,
+        body: Option<&str>,
+        trigger: &str,
+    ) -> Result<i64> {
         let now = chrono::Utc::now();
         // Set send_updates_to_client=true for manual commands to enable UI updates
         let send_updates = trigger == "manual";
@@ -1299,7 +1377,11 @@ impl CommandRepository {
 
     pub async fn update_status(&self, id: i64, status: &str, result: Option<&str>) -> Result<()> {
         let now = chrono::Utc::now();
-        let ended = if status == "completed" || status == "failed" { Some(now) } else { None };
+        let ended = if status == "completed" || status == "failed" {
+            Some(now)
+        } else {
+            None
+        };
 
         let pool = self.db.pool();
         sqlx::query(
@@ -1354,7 +1436,7 @@ impl CommandRepository {
                 ended = $1,
                 state_change_time = $2
             WHERE status IN ('queued', 'started')
-            "#
+            "#,
         )
         .bind(now)
         .bind(now)
@@ -1384,7 +1466,11 @@ impl LogRepository {
         sort_direction: &str,
     ) -> Result<(Vec<super::models::LogDbModel>, i64)> {
         let offset = (page - 1) * page_size;
-        let order = if sort_direction.to_lowercase() == "ascending" { "ASC" } else { "DESC" };
+        let order = if sort_direction.to_lowercase() == "ascending" {
+            "ASC"
+        } else {
+            "DESC"
+        };
 
         // Map sort key to column name
         let sort_column = match sort_key {
@@ -1435,7 +1521,14 @@ impl LogRepository {
     }
 
     /// Insert a new log entry
-    pub async fn insert(&self, level: &str, logger: &str, message: &str, exception: Option<&str>, exception_type: Option<&str>) -> Result<i64> {
+    pub async fn insert(
+        &self,
+        level: &str,
+        logger: &str,
+        message: &str,
+        exception: Option<&str>,
+        exception_type: Option<&str>,
+    ) -> Result<i64> {
         let now = chrono::Utc::now();
 
         let pool = self.db.pool();
@@ -1444,7 +1537,7 @@ impl LogRepository {
             INSERT INTO logs (time, level, logger, message, exception, exception_type)
             VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id
-            "#
+            "#,
         )
         .bind(now)
         .bind(level)
@@ -1470,9 +1563,7 @@ impl LogRepository {
     /// Clear all logs
     pub async fn clear_all(&self) -> Result<u64> {
         let pool = self.db.pool();
-        let result = sqlx::query("DELETE FROM logs")
-            .execute(pool)
-            .await?;
+        let result = sqlx::query("DELETE FROM logs").execute(pool).await?;
         Ok(result.rows_affected())
     }
 }
@@ -1490,7 +1581,7 @@ impl DownloadClientRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::DownloadClientDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::DownloadClientDbModel>(
-            "SELECT * FROM download_clients ORDER BY priority, name"
+            "SELECT * FROM download_clients ORDER BY priority, name",
         )
         .fetch_all(pool)
         .await?;
@@ -1500,7 +1591,7 @@ impl DownloadClientRepository {
     pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::DownloadClientDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::DownloadClientDbModel>(
-            "SELECT * FROM download_clients WHERE id = $1"
+            "SELECT * FROM download_clients WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -1538,7 +1629,7 @@ impl DownloadClientRepository {
                 enable = $1, protocol = $2, priority = $3, name = $4,
                 implementation = $5, config_contract = $6, settings = $7, tags = $8
             WHERE id = $9
-            "#
+            "#,
         )
         .bind(client.enable)
         .bind(client.protocol)
@@ -1577,7 +1668,7 @@ impl NotificationRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::NotificationDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::NotificationDbModel>(
-            "SELECT * FROM notifications ORDER BY name"
+            "SELECT * FROM notifications ORDER BY name",
         )
         .fetch_all(pool)
         .await?;
@@ -1587,7 +1678,7 @@ impl NotificationRepository {
     pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::NotificationDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::NotificationDbModel>(
-            "SELECT * FROM notifications WHERE id = $1"
+            "SELECT * FROM notifications WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -1596,7 +1687,10 @@ impl NotificationRepository {
     }
 
     /// Get notifications enabled for a specific event type
-    pub async fn get_enabled_for_event(&self, event_type: &str) -> Result<Vec<super::models::NotificationDbModel>> {
+    pub async fn get_enabled_for_event(
+        &self,
+        event_type: &str,
+    ) -> Result<Vec<super::models::NotificationDbModel>> {
         // Map event type to column name
         let column = match event_type {
             "grab" => "on_grab",
@@ -1634,7 +1728,7 @@ impl NotificationRepository {
                 on_application_update, include_health_warnings, settings, tags
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             RETURNING id
-            "#
+            "#,
         )
         .bind(&notification.name)
         .bind(&notification.implementation)
@@ -1671,7 +1765,7 @@ impl NotificationRepository {
                 on_application_update = $14, include_health_warnings = $15,
                 settings = $16, tags = $17
             WHERE id = $18
-            "#
+            "#,
         )
         .bind(&notification.name)
         .bind(&notification.implementation)
@@ -1722,7 +1816,7 @@ impl TrackedDownloadRepository {
         // Completed states: 4=Imported, 5=FailedPending, 6=Failed, 7=Ignored
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::TrackedDownloadDbModel>(
-            "SELECT * FROM tracked_downloads WHERE status < 4 ORDER BY added DESC"
+            "SELECT * FROM tracked_downloads WHERE status < 4 ORDER BY added DESC",
         )
         .fetch_all(pool)
         .await?;
@@ -1733,7 +1827,7 @@ impl TrackedDownloadRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::TrackedDownloadDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::TrackedDownloadDbModel>(
-            "SELECT * FROM tracked_downloads ORDER BY added DESC"
+            "SELECT * FROM tracked_downloads ORDER BY added DESC",
         )
         .fetch_all(pool)
         .await?;
@@ -1741,10 +1835,13 @@ impl TrackedDownloadRepository {
     }
 
     /// Get tracked download by ID
-    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::TrackedDownloadDbModel>> {
+    pub async fn get_by_id(
+        &self,
+        id: i64,
+    ) -> Result<Option<super::models::TrackedDownloadDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::TrackedDownloadDbModel>(
-            "SELECT * FROM tracked_downloads WHERE id = $1"
+            "SELECT * FROM tracked_downloads WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -1753,10 +1850,14 @@ impl TrackedDownloadRepository {
     }
 
     /// Get tracked download by download client ID and download ID
-    pub async fn get_by_download_id(&self, client_id: i64, download_id: &str) -> Result<Option<super::models::TrackedDownloadDbModel>> {
+    pub async fn get_by_download_id(
+        &self,
+        client_id: i64,
+        download_id: &str,
+    ) -> Result<Option<super::models::TrackedDownloadDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::TrackedDownloadDbModel>(
-            "SELECT * FROM tracked_downloads WHERE download_client_id = $1 AND download_id = $2"
+            "SELECT * FROM tracked_downloads WHERE download_client_id = $1 AND download_id = $2",
         )
         .bind(client_id)
         .bind(download_id)
@@ -1766,10 +1867,13 @@ impl TrackedDownloadRepository {
     }
 
     /// Get tracked downloads by series ID
-    pub async fn get_by_series_id(&self, series_id: i64) -> Result<Vec<super::models::TrackedDownloadDbModel>> {
+    pub async fn get_by_series_id(
+        &self,
+        series_id: i64,
+    ) -> Result<Vec<super::models::TrackedDownloadDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::TrackedDownloadDbModel>(
-            "SELECT * FROM tracked_downloads WHERE series_id = $1 ORDER BY added DESC"
+            "SELECT * FROM tracked_downloads WHERE series_id = $1 ORDER BY added DESC",
         )
         .bind(series_id)
         .fetch_all(pool)
@@ -1788,7 +1892,7 @@ impl TrackedDownloadRepository {
                 status_messages, error_message, output_path, is_upgrade, added
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             RETURNING id
-            "#
+            "#,
         )
         .bind(&download.download_id)
         .bind(download.download_client_id)
@@ -1812,7 +1916,13 @@ impl TrackedDownloadRepository {
     }
 
     /// Update tracked download status
-    pub async fn update_status(&self, id: i64, status: i32, status_messages: &str, error_message: Option<&str>) -> Result<()> {
+    pub async fn update_status(
+        &self,
+        id: i64,
+        status: i32,
+        status_messages: &str,
+        error_message: Option<&str>,
+    ) -> Result<()> {
         let pool = self.db.pool();
         sqlx::query(
             "UPDATE tracked_downloads SET status = $1, status_messages = $2, error_message = $3 WHERE id = $4"
@@ -1850,11 +1960,13 @@ impl TrackedDownloadRepository {
     /// Delete by download client ID and download ID
     pub async fn delete_by_download_id(&self, client_id: i64, download_id: &str) -> Result<()> {
         let pool = self.db.pool();
-        sqlx::query("DELETE FROM tracked_downloads WHERE download_client_id = $1 AND download_id = $2")
-            .bind(client_id)
-            .bind(download_id)
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "DELETE FROM tracked_downloads WHERE download_client_id = $1 AND download_id = $2",
+        )
+        .bind(client_id)
+        .bind(download_id)
+        .execute(pool)
+        .await?;
         Ok(())
     }
 }
@@ -1872,7 +1984,7 @@ impl IndexerRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::IndexerDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::IndexerDbModel>(
-            "SELECT * FROM indexers ORDER BY priority, name"
+            "SELECT * FROM indexers ORDER BY priority, name",
         )
         .fetch_all(pool)
         .await?;
@@ -1882,7 +1994,7 @@ impl IndexerRepository {
     pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::IndexerDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::IndexerDbModel>(
-            "SELECT * FROM indexers WHERE id = $1"
+            "SELECT * FROM indexers WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -1925,7 +2037,7 @@ impl IndexerRepository {
                 enable_automatic_search = $5, enable_interactive_search = $6, protocol = $7,
                 priority = $8, download_client_id = $9, settings = $10, tags = $11
             WHERE id = $12
-            "#
+            "#,
         )
         .bind(&indexer.name)
         .bind(&indexer.implementation)
@@ -1967,7 +2079,7 @@ impl BlocklistRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::BlocklistDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::BlocklistDbModel>(
-            "SELECT * FROM blocklist ORDER BY date DESC"
+            "SELECT * FROM blocklist ORDER BY date DESC",
         )
         .fetch_all(pool)
         .await?;
@@ -1982,7 +2094,11 @@ impl BlocklistRepository {
         sort_direction: &str,
     ) -> Result<(Vec<super::models::BlocklistDbModel>, i64)> {
         let offset = (page - 1) * page_size;
-        let order = if sort_direction.to_lowercase() == "ascending" { "ASC" } else { "DESC" };
+        let order = if sort_direction.to_lowercase() == "ascending" {
+            "ASC"
+        } else {
+            "DESC"
+        };
         let sort_column = match sort_key {
             "date" => "date",
             "sourceTitle" => "source_title",
@@ -2011,7 +2127,7 @@ impl BlocklistRepository {
     pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::BlocklistDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::BlocklistDbModel>(
-            "SELECT * FROM blocklist WHERE id = $1"
+            "SELECT * FROM blocklist WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -2036,7 +2152,7 @@ impl BlocklistRepository {
                 custom_formats, custom_format_score, protocol, indexer, message, date
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id
-            "#
+            "#,
         )
         .bind(item.series_id)
         .bind(&item.episode_ids)
@@ -2090,7 +2206,7 @@ impl CustomFormatRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::CustomFormatDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::CustomFormatDbModel>(
-            "SELECT * FROM custom_formats ORDER BY name"
+            "SELECT * FROM custom_formats ORDER BY name",
         )
         .fetch_all(pool)
         .await?;
@@ -2100,7 +2216,7 @@ impl CustomFormatRepository {
     pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::CustomFormatDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::CustomFormatDbModel>(
-            "SELECT * FROM custom_formats WHERE id = $1"
+            "SELECT * FROM custom_formats WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -2115,7 +2231,7 @@ impl CustomFormatRepository {
             INSERT INTO custom_formats (name, include_custom_format_when_renaming, specifications)
             VALUES ($1, $2, $3)
             RETURNING id
-            "#
+            "#,
         )
         .bind(&item.name)
         .bind(item.include_custom_format_when_renaming)
@@ -2132,7 +2248,7 @@ impl CustomFormatRepository {
             UPDATE custom_formats SET
                 name = $1, include_custom_format_when_renaming = $2, specifications = $3
             WHERE id = $4
-            "#
+            "#,
         )
         .bind(&item.name)
         .bind(item.include_custom_format_when_renaming)
@@ -2166,7 +2282,7 @@ impl CustomFilterRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::CustomFilterDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::CustomFilterDbModel>(
-            "SELECT * FROM custom_filters ORDER BY label"
+            "SELECT * FROM custom_filters ORDER BY label",
         )
         .fetch_all(pool)
         .await?;
@@ -2176,7 +2292,7 @@ impl CustomFilterRepository {
     pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::CustomFilterDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::CustomFilterDbModel>(
-            "SELECT * FROM custom_filters WHERE id = $1"
+            "SELECT * FROM custom_filters WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -2191,7 +2307,7 @@ impl CustomFilterRepository {
             INSERT INTO custom_filters (filter_type, label, filters)
             VALUES ($1, $2, $3)
             RETURNING id
-            "#
+            "#,
         )
         .bind(&item.filter_type)
         .bind(&item.label)
@@ -2208,7 +2324,7 @@ impl CustomFilterRepository {
             UPDATE custom_filters SET
                 filter_type = $1, label = $2, filters = $3
             WHERE id = $4
-            "#
+            "#,
         )
         .bind(&item.filter_type)
         .bind(&item.label)
@@ -2242,17 +2358,20 @@ impl RemotePathMappingRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::RemotePathMappingDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::RemotePathMappingDbModel>(
-            "SELECT * FROM remote_path_mappings ORDER BY host"
+            "SELECT * FROM remote_path_mappings ORDER BY host",
         )
         .fetch_all(pool)
         .await?;
         Ok(rows)
     }
 
-    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::RemotePathMappingDbModel>> {
+    pub async fn get_by_id(
+        &self,
+        id: i64,
+    ) -> Result<Option<super::models::RemotePathMappingDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::RemotePathMappingDbModel>(
-            "SELECT * FROM remote_path_mappings WHERE id = $1"
+            "SELECT * FROM remote_path_mappings WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -2267,7 +2386,7 @@ impl RemotePathMappingRepository {
             INSERT INTO remote_path_mappings (host, remote_path, local_path)
             VALUES ($1, $2, $3)
             RETURNING id
-            "#
+            "#,
         )
         .bind(&item.host)
         .bind(&item.remote_path)
@@ -2284,7 +2403,7 @@ impl RemotePathMappingRepository {
             UPDATE remote_path_mappings SET
                 host = $1, remote_path = $2, local_path = $3
             WHERE id = $4
-            "#
+            "#,
         )
         .bind(&item.host)
         .bind(&item.remote_path)
@@ -2318,7 +2437,7 @@ impl DelayProfileRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::DelayProfileDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::DelayProfileDbModel>(
-            "SELECT * FROM delay_profiles ORDER BY id"
+            "SELECT * FROM delay_profiles ORDER BY id",
         )
         .fetch_all(pool)
         .await?;
@@ -2328,7 +2447,7 @@ impl DelayProfileRepository {
     pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::DelayProfileDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::DelayProfileDbModel>(
-            "SELECT * FROM delay_profiles WHERE id = $1"
+            "SELECT * FROM delay_profiles WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -2346,7 +2465,7 @@ impl DelayProfileRepository {
                 bypass_if_above_custom_format_score, tags
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING id
-            "#
+            "#,
         )
         .bind(item.enable_usenet)
         .bind(item.enable_torrent)
@@ -2370,7 +2489,7 @@ impl DelayProfileRepository {
                 usenet_delay = $4, torrent_delay = $5, bypass_if_highest_quality = $6,
                 bypass_if_above_custom_format_score = $7, tags = $8
             WHERE id = $9
-            "#
+            "#,
         )
         .bind(item.enable_usenet)
         .bind(item.enable_torrent)
@@ -2409,17 +2528,20 @@ impl LanguageProfileRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::LanguageProfileDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::LanguageProfileDbModel>(
-            "SELECT * FROM language_profiles ORDER BY name"
+            "SELECT * FROM language_profiles ORDER BY name",
         )
         .fetch_all(pool)
         .await?;
         Ok(rows)
     }
 
-    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::LanguageProfileDbModel>> {
+    pub async fn get_by_id(
+        &self,
+        id: i64,
+    ) -> Result<Option<super::models::LanguageProfileDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::LanguageProfileDbModel>(
-            "SELECT * FROM language_profiles WHERE id = $1"
+            "SELECT * FROM language_profiles WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -2434,7 +2556,7 @@ impl LanguageProfileRepository {
             INSERT INTO language_profiles (name, upgrade_allowed, cutoff, languages)
             VALUES ($1, $2, $3, $4)
             RETURNING id
-            "#
+            "#,
         )
         .bind(&item.name)
         .bind(item.upgrade_allowed)
@@ -2452,7 +2574,7 @@ impl LanguageProfileRepository {
             UPDATE language_profiles SET
                 name = $1, upgrade_allowed = $2, cutoff = $3, languages = $4
             WHERE id = $5
-            "#
+            "#,
         )
         .bind(&item.name)
         .bind(item.upgrade_allowed)

@@ -72,8 +72,8 @@ pub struct RevisionResource {
 impl EpisodeFileResource {
     fn from_db_model(ef: &crate::core::datastore::models::EpisodeFileDbModel) -> Self {
         // Parse quality JSON
-        let quality: QualityModel = serde_json::from_str(&ef.quality).unwrap_or_else(|_| {
-            QualityModel {
+        let quality: QualityModel =
+            serde_json::from_str(&ef.quality).unwrap_or_else(|_| QualityModel {
                 quality: QualityResource {
                     id: 0,
                     name: "Unknown".to_string(),
@@ -85,16 +85,16 @@ impl EpisodeFileResource {
                     real: 0,
                     is_repack: false,
                 },
-            }
-        });
+            });
 
         // Parse languages JSON
-        let languages: Vec<LanguageResource> = serde_json::from_str(&ef.languages).unwrap_or_else(|_| {
-            vec![LanguageResource {
-                id: 1,
-                name: "English".to_string(),
-            }]
-        });
+        let languages: Vec<LanguageResource> =
+            serde_json::from_str(&ef.languages).unwrap_or_else(|_| {
+                vec![LanguageResource {
+                    id: 1,
+                    name: "English".to_string(),
+                }]
+            });
 
         // Parse media info JSON
         let media_info: Option<serde_json::Value> = ef
@@ -128,8 +128,9 @@ pub async fn get_episode_files(
     let repo = EpisodeFileRepository::new(state.db.clone());
 
     let files = if let Some(series_id) = query.series_id {
-        repo.get_by_series_id(series_id).await
-            .map_err(|e| EpisodeFileError::Internal(format!("Failed to fetch episode files: {}", e)))?
+        repo.get_by_series_id(series_id).await.map_err(|e| {
+            EpisodeFileError::Internal(format!("Failed to fetch episode files: {}", e))
+        })?
     } else if let Some(ids_str) = query.episode_file_ids {
         let ids: Vec<i64> = ids_str
             .split(',')
@@ -138,15 +139,17 @@ pub async fn get_episode_files(
 
         let mut files = Vec::new();
         for id in ids {
-            if let Some(ef) = repo.get_by_id(id).await
-                .map_err(|e| EpisodeFileError::Internal(format!("Failed to fetch episode file: {}", e)))? {
+            if let Some(ef) = repo.get_by_id(id).await.map_err(|e| {
+                EpisodeFileError::Internal(format!("Failed to fetch episode file: {}", e))
+            })? {
                 files.push(ef);
             }
         }
         files
     } else {
-        repo.get_all().await
-            .map_err(|e| EpisodeFileError::Internal(format!("Failed to fetch episode files: {}", e)))?
+        repo.get_all().await.map_err(|e| {
+            EpisodeFileError::Internal(format!("Failed to fetch episode files: {}", e))
+        })?
     };
 
     let resources: Vec<EpisodeFileResource> = files
@@ -164,7 +167,9 @@ pub async fn get_episode_file(
 ) -> Result<Json<EpisodeFileResource>, EpisodeFileError> {
     let repo = EpisodeFileRepository::new(state.db.clone());
 
-    let file = repo.get_by_id(id).await
+    let file = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| EpisodeFileError::Internal(format!("Failed to fetch episode file: {}", e)))?
         .ok_or(EpisodeFileError::NotFound)?;
 
@@ -182,7 +187,9 @@ pub async fn delete_episode_file(
     let episode_repo = EpisodeRepository::new(state.db.clone());
 
     // Get the file info before deleting
-    let file = file_repo.get_by_id(id).await
+    let file = file_repo
+        .get_by_id(id)
+        .await
         .map_err(|e| EpisodeFileError::Internal(format!("Failed to fetch episode file: {}", e)))?
         .ok_or(EpisodeFileError::NotFound)?;
 
@@ -195,8 +202,9 @@ pub async fn delete_episode_file(
                 tracing::info!("Deleted file from disk: {}", file.path);
                 crate::core::logging::log_info(
                     "EpisodeFileDeleted",
-                    &format!("Deleted episode file: {}", file.relative_path)
-                ).await;
+                    &format!("Deleted episode file: {}", file.relative_path),
+                )
+                .await;
             }
             Err(e) => {
                 tracing::error!("Failed to delete file from disk: {} - {}", file.path, e);
@@ -205,8 +213,12 @@ pub async fn delete_episode_file(
                 // even if the file is locked or inaccessible
                 crate::core::logging::log_warn(
                     "EpisodeFileDeleted",
-                    &format!("Removed episode file record, but failed to delete from disk: {} ({})", file.relative_path, e)
-                ).await;
+                    &format!(
+                        "Removed episode file record, but failed to delete from disk: {} ({})",
+                        file.relative_path, e
+                    ),
+                )
+                .await;
             }
         }
     } else {
@@ -214,7 +226,9 @@ pub async fn delete_episode_file(
     }
 
     // Update any episodes that reference this file to clear the reference
-    let episodes = episode_repo.get_by_series_id(file.series_id).await
+    let episodes = episode_repo
+        .get_by_series_id(file.series_id)
+        .await
         .unwrap_or_default();
 
     for mut ep in episodes {
@@ -222,14 +236,19 @@ pub async fn delete_episode_file(
             ep.episode_file_id = None;
             ep.has_file = false;
             if let Err(e) = episode_repo.update(&ep).await {
-                tracing::warn!("Failed to update episode {} after file deletion: {}", ep.id, e);
+                tracing::warn!(
+                    "Failed to update episode {} after file deletion: {}",
+                    ep.id,
+                    e
+                );
             }
         }
     }
 
     // Delete the database record
-    file_repo.delete(id).await
-        .map_err(|e| EpisodeFileError::Internal(format!("Failed to delete episode file record: {}", e)))?;
+    file_repo.delete(id).await.map_err(|e| {
+        EpisodeFileError::Internal(format!("Failed to delete episode file record: {}", e))
+    })?;
 
     tracing::info!("Deleted episode file: id={}, path={}", id, file.path);
 
@@ -244,7 +263,9 @@ pub async fn update_episode_file(
 ) -> Result<Json<EpisodeFileResource>, EpisodeFileError> {
     let repo = EpisodeFileRepository::new(state.db.clone());
 
-    let mut file = repo.get_by_id(id).await
+    let mut file = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| EpisodeFileError::Internal(format!("Failed to fetch episode file: {}", e)))?
         .ok_or(EpisodeFileError::NotFound)?;
 
@@ -254,7 +275,8 @@ pub async fn update_episode_file(
     file.quality = serde_json::to_string(&body.quality).unwrap_or_default();
     file.languages = serde_json::to_string(&body.languages).unwrap_or_default();
 
-    repo.update(&file).await
+    repo.update(&file)
+        .await
         .map_err(|e| EpisodeFileError::Internal(format!("Failed to update episode file: {}", e)))?;
 
     tracing::info!("Updated episode file: id={}", id);
@@ -326,14 +348,16 @@ pub async fn delete_episode_files_bulk(
 
     tracing::info!(
         "Bulk deleted {} episode files ({} disk errors)",
-        deleted_count, disk_errors
+        deleted_count,
+        disk_errors
     );
 
     if deleted_count > 0 {
         crate::core::logging::log_info(
             "EpisodeFilesDeleted",
-            &format!("Bulk deleted {} episode files", deleted_count)
-        ).await;
+            &format!("Bulk deleted {} episode files", deleted_count),
+        )
+        .await;
     }
 
     Ok(Json(serde_json::json!({})))
@@ -349,10 +373,15 @@ pub enum EpisodeFileError {
 impl IntoResponse for EpisodeFileError {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = match self {
-            EpisodeFileError::NotFound => (StatusCode::NOT_FOUND, "Episode file not found".to_string()),
+            EpisodeFileError::NotFound => {
+                (StatusCode::NOT_FOUND, "Episode file not found".to_string())
+            }
             EpisodeFileError::Internal(msg) => {
                 tracing::error!("Episode file error: {}", msg);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
             }
         };
 
@@ -363,6 +392,11 @@ impl IntoResponse for EpisodeFileError {
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(get_episode_files))
-        .route("/{id}", get(get_episode_file).delete(delete_episode_file).put(update_episode_file))
+        .route(
+            "/{id}",
+            get(get_episode_file)
+                .delete(delete_episode_file)
+                .put(update_episode_file),
+        )
         .route("/bulk", delete(delete_episode_files_bulk))
 }

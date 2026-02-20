@@ -424,7 +424,10 @@ where
             Ok(None)
         }
 
-        fn visit_some<D2: serde::Deserializer<'de>>(self, deserializer: D2) -> Result<Self::Value, D2::Error> {
+        fn visit_some<D2: serde::Deserializer<'de>>(
+            self,
+            deserializer: D2,
+        ) -> Result<Self::Value, D2::Error> {
             deserializer.deserialize_any(Self)
         }
     }

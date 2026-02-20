@@ -4,10 +4,10 @@
 
 pub mod clients;
 pub mod definitions;
-pub mod search;
 pub mod rss;
+pub mod search;
 
-pub use clients::{IndexerClient, create_client_from_model};
+pub use clients::{create_client_from_model, IndexerClient};
 
 use serde::{Deserialize, Serialize};
 

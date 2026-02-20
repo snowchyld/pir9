@@ -28,12 +28,10 @@ pub async fn get_localization() -> Json<LocalizationResource> {
 
 /// GET /api/v5/localization/language
 pub async fn get_localization_language() -> Json<Vec<LanguageResource>> {
-    Json(vec![
-        LanguageResource {
-            identifier: "en".to_string(),
-            name: "English".to_string(),
-        },
-    ])
+    Json(vec![LanguageResource {
+        identifier: "en".to_string(),
+        name: "English".to_string(),
+    }])
 }
 
 #[derive(Debug, Serialize)]

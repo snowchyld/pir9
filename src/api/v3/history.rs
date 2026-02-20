@@ -88,14 +88,14 @@ fn event_type_to_string(event_type: i32) -> String {
 }
 
 fn db_to_resource(model: &HistoryDbModel) -> HistoryResource {
-    let quality: serde_json::Value = serde_json::from_str(&model.quality)
-        .unwrap_or(serde_json::json!({}));
-    let languages: serde_json::Value = serde_json::from_str(&model.languages)
-        .unwrap_or(serde_json::json!([]));
-    let custom_formats: Vec<serde_json::Value> = serde_json::from_str(&model.custom_formats)
-        .unwrap_or_default();
-    let data: serde_json::Value = serde_json::from_str(&model.data)
-        .unwrap_or(serde_json::json!({}));
+    let quality: serde_json::Value =
+        serde_json::from_str(&model.quality).unwrap_or(serde_json::json!({}));
+    let languages: serde_json::Value =
+        serde_json::from_str(&model.languages).unwrap_or(serde_json::json!([]));
+    let custom_formats: Vec<serde_json::Value> =
+        serde_json::from_str(&model.custom_formats).unwrap_or_default();
+    let data: serde_json::Value =
+        serde_json::from_str(&model.data).unwrap_or(serde_json::json!({}));
 
     HistoryResource {
         id: model.id as i32,
@@ -124,10 +124,20 @@ pub async fn get_history(
     let page = query.page.unwrap_or(1);
     let page_size = query.page_size.unwrap_or(20);
     let sort_key = query.sort_key.unwrap_or_else(|| "date".to_string());
-    let sort_direction = query.sort_direction.unwrap_or_else(|| "descending".to_string());
+    let sort_direction = query
+        .sort_direction
+        .unwrap_or_else(|| "descending".to_string());
 
     let repo = HistoryRepository::new(state.db.clone());
-    let (items, total) = repo.get_paged(page, page_size, &sort_key, &sort_direction, query.event_type).await
+    let (items, total) = repo
+        .get_paged(
+            page,
+            page_size,
+            &sort_key,
+            &sort_direction,
+            query.event_type,
+        )
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(HistoryResourcePagingResource {
@@ -147,12 +157,15 @@ pub async fn get_history_since(
 ) -> Result<Json<Vec<HistoryResource>>, StatusCode> {
     let repo = HistoryRepository::new(state.db.clone());
 
-    let date = query.date
+    let date = query
+        .date
         .and_then(|d| DateTime::parse_from_rfc3339(&d).ok())
         .map(|d| d.with_timezone(&chrono::Utc))
         .unwrap_or_else(|| chrono::Utc::now() - chrono::Duration::days(7));
 
-    let items = repo.get_since(date).await
+    let items = repo
+        .get_since(date)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let mut records: Vec<HistoryResource> = items.iter().map(db_to_resource).collect();
@@ -175,7 +188,9 @@ pub async fn get_history_series(
     }
 
     let repo = HistoryRepository::new(state.db.clone());
-    let items = repo.get_by_series_id(series_id).await
+    let items = repo
+        .get_by_series_id(series_id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let mut records: Vec<HistoryResource> = items.iter().map(db_to_resource).collect();

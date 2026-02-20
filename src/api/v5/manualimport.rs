@@ -108,8 +108,7 @@ pub async fn get_manual_import(
 
         // Try to match to a series (year-aware scoring picks the best candidate)
         let matched_series = parsed.as_ref().and_then(|info| {
-            parser::best_series_match(info, &all_series)
-                .map(|idx| &all_series[idx])
+            parser::best_series_match(info, &all_series).map(|idx| &all_series[idx])
         });
 
         let series_json = matched_series.map(|s| {

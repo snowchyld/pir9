@@ -2,22 +2,21 @@
 //! TV Show domain models
 //! Series, Episode, and related entities
 
-use chrono::{DateTime, Utc, NaiveDate, NaiveTime};
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use crate::core::tv::{
-    Actor, MediaCover, NewItemMonitorType,
-    Ratings, Season, SeriesStatusType, SeriesType
-};
-use crate::core::profiles::QualityProfile;
 use crate::core::profiles::languages::Language;
+use crate::core::profiles::QualityProfile;
+use crate::core::tv::{
+    Actor, MediaCover, NewItemMonitorType, Ratings, Season, SeriesStatusType, SeriesType,
+};
 
 /// Series entity - represents a TV show
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Series {
     pub id: i64,
-    
+
     // External IDs
     pub tvdb_id: i64,
     pub tv_rage_id: i64,
@@ -26,7 +25,7 @@ pub struct Series {
     pub tmdb_id: i64,
     pub mal_ids: HashSet<i64>,
     pub anilist_ids: HashSet<i64>,
-    
+
     // Basic info
     pub title: String,
     pub clean_title: String,
@@ -36,19 +35,19 @@ pub struct Series {
     pub air_time: Option<NaiveTime>,
     pub monitored: bool,
     pub monitor_new_items: NewItemMonitorType,
-    
+
     // Quality and profile
     pub quality_profile_id: i64,
     pub quality_profile: Option<QualityProfile>,
     pub language_profile_id: Option<i64>,
-    
+
     // Organization
     pub season_folder: bool,
     pub series_type: SeriesType,
     pub title_slug: String,
     pub path: String,
     pub root_folder_path: String,
-    
+
     // Metadata
     pub year: i32,
     pub first_aired: Option<NaiveDate>,
@@ -61,16 +60,16 @@ pub struct Series {
     pub images: Vec<MediaCover>,
     pub ratings: Option<Ratings>,
     pub use_scene_numbering: bool,
-    
+
     // Seasons
     pub seasons: Vec<Season>,
-    
+
     // Tags
     pub tags: HashSet<i64>,
-    
+
     // Statistics
     pub statistics: Option<SeriesStatistics>,
-    
+
     // Timestamps
     pub added: DateTime<Utc>,
     pub last_info_sync: Option<DateTime<Utc>>,
@@ -82,7 +81,7 @@ impl Series {
         let clean_title = Self::clean_title(&title);
         let sort_title = clean_title.clone();
         let title_slug = Self::generate_slug(&title);
-        
+
         Self {
             id: 0,
             tvdb_id,
@@ -126,26 +125,28 @@ impl Series {
             last_info_sync: None,
         }
     }
-    
+
     /// Clean a title for searching/sorting
     fn clean_title(title: &str) -> String {
-        title.to_lowercase()
+        title
+            .to_lowercase()
             .replace(|c: char| !c.is_alphanumeric() && c != ' ', " ")
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
     }
-    
+
     /// Generate URL-friendly slug
     fn generate_slug(title: &str) -> String {
-        title.to_lowercase()
+        title
+            .to_lowercase()
             .replace(|c: char| !c.is_alphanumeric() && c != ' ', "-")
             .replace(' ', "-")
             .replace("--", "-")
             .trim_matches('-')
             .to_string()
     }
-    
+
     /// Check if series needs refresh from metadata source
     pub fn needs_refresh(&self) -> bool {
         match self.last_info_sync {
@@ -156,12 +157,16 @@ impl Series {
             }
         }
     }
-    
+
     /// Get the full path for this series
     pub fn full_path(&self) -> String {
-        format!("{}/{}", self.root_folder_path.trim_end_matches('/'), self.path)
+        format!(
+            "{}/{}",
+            self.root_folder_path.trim_end_matches('/'),
+            self.path
+        )
     }
-    
+
     /// Check if series has a specific tag
     pub fn has_tag(&self, tag_id: i64) -> bool {
         self.tags.contains(&tag_id)
@@ -193,7 +198,7 @@ pub struct Episode {
     pub series_id: i64,
     pub tvdb_id: i64,
     pub episode_file_id: Option<i64>,
-    
+
     // Season/Episode numbers
     pub season_number: i32,
     pub episode_number: i32,
@@ -201,25 +206,25 @@ pub struct Episode {
     pub scene_absolute_episode_number: Option<i32>,
     pub scene_episode_number: Option<i32>,
     pub scene_season_number: Option<i32>,
-    
+
     // Basic info
     pub title: String,
     pub overview: Option<String>,
     pub air_date: Option<NaiveDate>,
     pub air_date_utc: Option<DateTime<Utc>>,
-    
+
     // Runtime info
     pub runtime: i32,
     pub finale_type: Option<FinaleType>,
-    
+
     // Quality
     pub has_file: bool,
     pub monitored: bool,
     pub unverified_scene_numbering: bool,
-    
+
     // Images
     pub images: Vec<MediaCover>,
-    
+
     // Timestamps
     pub added: DateTime<Utc>,
     pub last_search_time: Option<DateTime<Utc>>,
@@ -262,12 +267,12 @@ impl Episode {
             last_search_time: None,
         }
     }
-    
+
     /// Get the season/episode string (e.g., "S01E05")
     pub fn season_episode_string(&self) -> String {
         format!("S{:02}E{:02}", self.season_number, self.episode_number)
     }
-    
+
     /// Check if episode has aired
     pub fn has_aired(&self) -> bool {
         match self.air_date_utc {
@@ -275,7 +280,7 @@ impl Episode {
             None => false,
         }
     }
-    
+
     /// Check if episode is missing (monitored but no file)
     pub fn is_missing(&self) -> bool {
         self.monitored && !self.has_file && self.has_aired()

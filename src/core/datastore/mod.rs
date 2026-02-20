@@ -22,7 +22,9 @@ impl Database {
     pub async fn connect(config: &DatabaseConfig) -> Result<Self> {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(config.max_connections)
-            .acquire_timeout(std::time::Duration::from_secs(config.connection_timeout_secs))
+            .acquire_timeout(std::time::Duration::from_secs(
+                config.connection_timeout_secs,
+            ))
             .connect(&config.connection_string)
             .await
             .context("Failed to connect to PostgreSQL database")?;

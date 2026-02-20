@@ -75,11 +75,7 @@ pub struct WorkerRunner {
 
 impl WorkerRunner {
     /// Create a new worker runner
-    pub async fn new(
-        redis_url: &str,
-        worker_id: &str,
-        worker_paths: Vec<String>,
-    ) -> Result<Self> {
+    pub async fn new(redis_url: &str, worker_id: &str, worker_paths: Vec<String>) -> Result<Self> {
         let paths: Vec<PathBuf> = worker_paths.iter().map(PathBuf::from).collect();
 
         // Validate paths exist
@@ -101,7 +97,8 @@ impl WorkerRunner {
 
     /// Get worker paths as strings
     fn paths_as_strings(&self) -> Vec<String> {
-        self.worker_paths.iter()
+        self.worker_paths
+            .iter()
             .map(|p| p.to_string_lossy().to_string())
             .collect()
     }
@@ -132,10 +129,14 @@ impl WorkerRunner {
         use crate::core::scanner::registry::HEARTBEAT_INTERVAL;
         use tokio::signal;
 
-        info!("Starting worker {} with paths: {:?}", self.worker_id, self.worker_paths);
+        info!(
+            "Starting worker {} with paths: {:?}",
+            self.worker_id, self.worker_paths
+        );
 
         // Connect to Redis
-        let event_bus = HybridEventBus::new_redis(&self.redis_url).await
+        let event_bus = HybridEventBus::new_redis(&self.redis_url)
+            .await
             .context("Failed to connect to Redis")?;
 
         let event_bus = Arc::new(event_bus);
@@ -152,10 +153,12 @@ impl WorkerRunner {
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // Announce that we're online
-        event_bus.publish(Message::WorkerOnline {
-            worker_id: self.worker_id.clone(),
-            paths: self.paths_as_strings(),
-        }).await;
+        event_bus
+            .publish(Message::WorkerOnline {
+                worker_id: self.worker_id.clone(),
+                paths: self.paths_as_strings(),
+            })
+            .await;
 
         info!("Worker online, waiting for scan requests...");
 
@@ -220,9 +223,11 @@ impl WorkerRunner {
         }
 
         // Announce that we're going offline
-        event_bus.publish(Message::WorkerOffline {
-            worker_id: self.worker_id.clone(),
-        }).await;
+        event_bus
+            .publish(Message::WorkerOffline {
+                worker_id: self.worker_id.clone(),
+            })
+            .await;
 
         info!("Worker shutdown complete");
         Ok(())
@@ -236,18 +241,26 @@ impl WorkerRunner {
 
     /// Handle an incoming message
     #[cfg(feature = "redis-events")]
-    async fn handle_message(&self, message: Message, event_bus: &crate::core::messaging::HybridEventBus) {
+    async fn handle_message(
+        &self,
+        message: Message,
+        event_bus: &crate::core::messaging::HybridEventBus,
+    ) {
         match &message {
-            Message::ScanRequest { job_id, scan_type, series_ids, paths } => {
+            Message::ScanRequest {
+                job_id,
+                scan_type,
+                series_ids,
+                paths,
+            } => {
                 info!(
                     "Received scan request: job_id={}, type={:?}, series={:?}",
                     job_id, scan_type, series_ids
                 );
 
                 // Check if this request is for paths we handle
-                let relevant_paths: Vec<&String> = paths.iter()
-                    .filter(|p| self.handles_path(p))
-                    .collect();
+                let relevant_paths: Vec<&String> =
+                    paths.iter().filter(|p| self.handles_path(p)).collect();
 
                 if relevant_paths.is_empty() {
                     debug!("Scan request not for our paths, ignoring");
@@ -255,7 +268,9 @@ impl WorkerRunner {
                 }
 
                 // Execute the scan
-                let result = self.execute_scan(job_id, scan_type, series_ids, &relevant_paths).await;
+                let result = self
+                    .execute_scan(job_id, scan_type, series_ids, &relevant_paths)
+                    .await;
 
                 // Publish results
                 for scan_result in result {
@@ -388,10 +403,7 @@ mod tests {
     fn test_handles_path() {
         let worker = WorkerRunner {
             worker_id: "test".to_string(),
-            worker_paths: vec![
-                PathBuf::from("/media/tv"),
-                PathBuf::from("/media/anime"),
-            ],
+            worker_paths: vec![PathBuf::from("/media/tv"), PathBuf::from("/media/anime")],
             redis_url: "redis://localhost".to_string(),
             scans_completed: std::sync::atomic::AtomicU64::new(0),
             files_found: std::sync::atomic::AtomicU64::new(0),

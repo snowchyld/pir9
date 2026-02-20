@@ -58,9 +58,10 @@ pub async fn get_filesystem(query: Query<FileSystemQuery>) -> Json<FileSystemRes
                 name: name.clone(),
                 path: entry_path.to_string_lossy().to_string(),
                 relative_path: Some(name),
-                last_modified: metadata.as_ref().and_then(|m| m.modified().ok()).map(|t| {
-                    chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
-                }),
+                last_modified: metadata
+                    .as_ref()
+                    .and_then(|m| m.modified().ok())
+                    .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()),
                 size: metadata.as_ref().map(|m| m.len() as i64),
             };
 
@@ -75,9 +76,15 @@ pub async fn get_filesystem(query: Query<FileSystemQuery>) -> Json<FileSystemRes
     directories.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
-    let parent = std::path::Path::new(&path).parent().map(|p| p.to_string_lossy().to_string());
+    let parent = std::path::Path::new(&path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string());
 
-    Json(FileSystemResource { parent, directories, files })
+    Json(FileSystemResource {
+        parent,
+        directories,
+        files,
+    })
 }
 
 pub async fn get_filesystem_type() -> Json<serde_json::Value> {

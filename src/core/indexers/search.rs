@@ -41,9 +41,7 @@ impl IndexerSearchService {
         }
 
         // Sort by quality and other criteria
-        all_releases.sort_by(|a, b| {
-            b.quality.quality.weight().cmp(&a.quality.quality.weight())
-        });
+        all_releases.sort_by(|a, b| b.quality.quality.weight().cmp(&a.quality.quality.weight()));
 
         Ok(all_releases)
     }
@@ -54,8 +52,8 @@ impl IndexerSearchService {
         indexer: &IndexerDbModel,
         criteria: &SearchCriteria,
     ) -> Result<Vec<ReleaseInfo>> {
-        let client = create_client_from_model(indexer)
-            .context("Failed to create indexer client")?;
+        let client =
+            create_client_from_model(indexer).context("Failed to create indexer client")?;
 
         // Sanitize series title for search (remove special characters)
         let search_term = sanitize_title_for_search(&criteria.series_title);
@@ -118,9 +116,7 @@ impl IndexerSearchService {
         }
 
         // Sort by quality
-        all_releases.sort_by(|a, b| {
-            b.quality.quality.weight().cmp(&a.quality.quality.weight())
-        });
+        all_releases.sort_by(|a, b| b.quality.quality.weight().cmp(&a.quality.quality.weight()));
 
         Ok(all_releases)
     }
@@ -170,9 +166,7 @@ impl IndexerSearchService {
         }
 
         // Sort by quality
-        all_releases.sort_by(|a, b| {
-            b.quality.quality.weight().cmp(&a.quality.quality.weight())
-        });
+        all_releases.sort_by(|a, b| b.quality.quality.weight().cmp(&a.quality.quality.weight()));
 
         Ok(all_releases)
     }
@@ -189,7 +183,7 @@ fn sanitize_title_for_search(title: &str) -> String {
             if c.is_alphanumeric() || c == ' ' || c == '-' || c == '\'' {
                 c
             } else {
-                ' '  // Replace special chars with space
+                ' ' // Replace special chars with space
             }
         })
         .collect();

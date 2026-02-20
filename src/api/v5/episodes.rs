@@ -1,11 +1,11 @@
 //! Episode API endpoints (v5)
 
 use axum::{
-    Router,
-    routing::{get, put},
     extract::{Path, Query, State},
-    response::{IntoResponse, Json},
     http::StatusCode,
+    response::{IntoResponse, Json},
+    routing::{get, put},
+    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -173,8 +173,8 @@ impl EpisodeResponse {
 impl EpisodeFileResource {
     fn from_db_model(ef: &crate::core::datastore::models::EpisodeFileDbModel) -> Self {
         // Parse quality JSON
-        let quality: QualityModel = serde_json::from_str(&ef.quality).unwrap_or_else(|_| {
-            QualityModel {
+        let quality: QualityModel =
+            serde_json::from_str(&ef.quality).unwrap_or_else(|_| QualityModel {
                 quality: QualityResource {
                     id: 0,
                     name: "Unknown".to_string(),
@@ -186,16 +186,16 @@ impl EpisodeFileResource {
                     real: 0,
                     is_repack: false,
                 },
-            }
-        });
+            });
 
         // Parse languages JSON
-        let languages: Vec<LanguageResource> = serde_json::from_str(&ef.languages).unwrap_or_else(|_| {
-            vec![LanguageResource {
-                id: 1,
-                name: "English".to_string(),
-            }]
-        });
+        let languages: Vec<LanguageResource> =
+            serde_json::from_str(&ef.languages).unwrap_or_else(|_| {
+                vec![LanguageResource {
+                    id: 1,
+                    name: "English".to_string(),
+                }]
+            });
 
         // Parse media info JSON
         let media_info: Option<serde_json::Value> = ef
@@ -239,13 +239,14 @@ async fn list_episodes(
 
     let episodes = match (params.series_id, params.season_number) {
         (Some(series_id), Some(season)) => {
-            repo.get_by_series_and_season(series_id, season).await
+            repo.get_by_series_and_season(series_id, season)
+                .await
                 .map_err(|e| EpisodeError::Internal(format!("Failed to fetch episodes: {}", e)))?
         }
-        (Some(series_id), None) => {
-            repo.get_by_series_id(series_id).await
-                .map_err(|e| EpisodeError::Internal(format!("Failed to fetch episodes: {}", e)))?
-        }
+        (Some(series_id), None) => repo
+            .get_by_series_id(series_id)
+            .await
+            .map_err(|e| EpisodeError::Internal(format!("Failed to fetch episodes: {}", e)))?,
         _ => {
             // Parse comma-separated episode IDs if provided
             if let Some(ids_str) = params.episode_ids {
@@ -256,8 +257,9 @@ async fn list_episodes(
 
                 let mut episodes = Vec::new();
                 for id in ids {
-                    if let Some(ep) = repo.get_by_id(id).await
-                        .map_err(|e| EpisodeError::Internal(format!("Failed to fetch episode: {}", e)))? {
+                    if let Some(ep) = repo.get_by_id(id).await.map_err(|e| {
+                        EpisodeError::Internal(format!("Failed to fetch episode: {}", e))
+                    })? {
                         episodes.push(ep);
                     }
                 }
@@ -303,7 +305,9 @@ async fn get_episode(
     let repo = EpisodeRepository::new(state.db.clone());
     let file_repo = EpisodeFileRepository::new(state.db.clone());
 
-    let episode = repo.get_by_id(id).await
+    let episode = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| EpisodeError::Internal(format!("Failed to fetch episode: {}", e)))?
         .ok_or(EpisodeError::NotFound)?;
 
@@ -314,7 +318,10 @@ async fn get_episode(
         None
     };
 
-    Ok(Json(EpisodeResponse::from_episode_with_file(episode, episode_file.as_ref())))
+    Ok(Json(EpisodeResponse::from_episode_with_file(
+        episode,
+        episode_file.as_ref(),
+    )))
 }
 
 /// PUT /api/v5/episode/{id} - Update an episode
@@ -325,7 +332,9 @@ async fn update_episode(
 ) -> Result<Json<EpisodeResponse>, EpisodeError> {
     let repo = EpisodeRepository::new(state.db.clone());
 
-    let mut episode = repo.get_by_id(id).await
+    let mut episode = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| EpisodeError::Internal(format!("Failed to fetch episode: {}", e)))?
         .ok_or(EpisodeError::NotFound)?;
 
@@ -334,10 +343,15 @@ async fn update_episode(
         episode.monitored = monitored;
     }
 
-    repo.update(&episode).await
+    repo.update(&episode)
+        .await
         .map_err(|e| EpisodeError::Internal(format!("Failed to update episode: {}", e)))?;
 
-    tracing::info!("Updated episode: id={}, title={}", episode.id, episode.title);
+    tracing::info!(
+        "Updated episode: id={}, title={}",
+        episode.id,
+        episode.title
+    );
 
     Ok(Json(episode.into()))
 }
@@ -349,7 +363,9 @@ async fn update_episode_monitor(
 ) -> Result<Json<Vec<EpisodeResponse>>, EpisodeError> {
     let repo = EpisodeRepository::new(state.db.clone());
 
-    let episodes = repo.update_monitored(&body.episode_ids, body.monitored).await
+    let episodes = repo
+        .update_monitored(&body.episode_ids, body.monitored)
+        .await
         .map_err(|e| EpisodeError::Internal(format!("Failed to update episodes: {}", e)))?;
 
     tracing::info!("Updated monitored status for {} episodes", episodes.len());
@@ -371,7 +387,10 @@ impl IntoResponse for EpisodeError {
             EpisodeError::NotFound => (StatusCode::NOT_FOUND, "Episode not found".to_string()),
             EpisodeError::Internal(msg) => {
                 tracing::error!("Episode error: {}", msg);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
             }
         };
 

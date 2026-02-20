@@ -32,24 +32,22 @@ pub struct UpdateChanges {
 /// GET /api/v3/update
 pub async fn get_updates() -> Json<Vec<UpdateResource>> {
     // Return current version as installed, no updates available
-    Json(vec![
-        UpdateResource {
-            version: "0.1.0".to_string(),
-            branch: "main".to_string(),
-            release_date: chrono::Utc::now().to_rfc3339(),
-            file_name: None,
-            url: None,
-            installed: true,
-            installed_on: Some(chrono::Utc::now().to_rfc3339()),
-            installable: false,
-            latest: true,
-            changes: UpdateChanges {
-                new: vec!["Initial Rust port".to_string()],
-                fixed: vec![],
-            },
-            hash: None,
+    Json(vec![UpdateResource {
+        version: "0.1.0".to_string(),
+        branch: "main".to_string(),
+        release_date: chrono::Utc::now().to_rfc3339(),
+        file_name: None,
+        url: None,
+        installed: true,
+        installed_on: Some(chrono::Utc::now().to_rfc3339()),
+        installable: false,
+        latest: true,
+        changes: UpdateChanges {
+            new: vec!["Initial Rust port".to_string()],
+            fixed: vec![],
         },
-    ])
+        hash: None,
+    }])
 }
 
 pub fn routes() -> Router<Arc<AppState>> {

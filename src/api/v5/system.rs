@@ -2,10 +2,9 @@
 //! System API endpoints
 
 use axum::{
-    Router,
-    routing::{get, post},
     extract::Query,
-    Json,
+    routing::{get, post},
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -30,8 +29,7 @@ async fn get_status(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Json<SystemStatus> {
     let db_type = state.config.database.database_type.clone();
-    let is_docker = std::path::Path::new("/.dockerenv").exists()
-        || std::env::var("DOCKER").is_ok();
+    let is_docker = std::path::Path::new("/.dockerenv").exists() || std::env::var("DOCKER").is_ok();
 
     // Read OS pretty name from /etc/os-release (Linux), fall back to std::env::consts::OS
     let (os_name, os_version) = get_os_info();
@@ -50,7 +48,9 @@ async fn get_status(
         is_production: !cfg!(debug_assertions),
         is_admin: false,
         is_user_interactive: false,
-        startup_path: std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        startup_path: std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
         app_data: "./config".to_string(),
         os_name,
         os_version,
@@ -76,14 +76,12 @@ async fn get_status(
 }
 
 async fn get_health() -> Json<Vec<HealthCheck>> {
-    Json(vec![
-        HealthCheck {
-            source: "DownloadClient".to_string(),
-            health_type: HealthType::Ok,
-            message: None,
-            wiki_url: None,
-        }
-    ])
+    Json(vec![HealthCheck {
+        source: "DownloadClient".to_string(),
+        health_type: HealthType::Ok,
+        message: None,
+        wiki_url: None,
+    }])
 }
 
 async fn get_disk_space(
@@ -161,7 +159,8 @@ async fn list_backups(
                 || path.extension().and_then(|e| e.to_str()) == Some("sql")
             {
                 if let Ok(meta) = entry.metadata() {
-                    let modified = meta.modified()
+                    let modified = meta
+                        .modified()
                         .map(chrono::DateTime::<chrono::Utc>::from)
                         .unwrap_or_else(|_| chrono::Utc::now());
                     backups.push(Backup {
@@ -204,7 +203,9 @@ async fn create_backup(
     let size = match result {
         Ok(output) if output.status.success() => {
             tracing::info!("Backup created: {}", filepath.display());
-            std::fs::metadata(&filepath).map(|m| m.len() as i64).unwrap_or(0)
+            std::fs::metadata(&filepath)
+                .map(|m| m.len() as i64)
+                .unwrap_or(0)
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -225,16 +226,12 @@ async fn create_backup(
     })
 }
 
-async fn restore_backup(
-    Json(_request): Json<RestoreBackupRequest>,
-) -> Json<BackupActionResponse> {
+async fn restore_backup(Json(_request): Json<RestoreBackupRequest>) -> Json<BackupActionResponse> {
     // Restore is complex and potentially destructive — left as a no-op
     Json(BackupActionResponse { success: true })
 }
 
-async fn get_logs(
-    Query(_params): Query<LogQuery>,
-) -> Json<Vec<LogEntry>> {
+async fn get_logs(Query(_params): Query<LogQuery>) -> Json<Vec<LogEntry>> {
     Json(vec![])
 }
 

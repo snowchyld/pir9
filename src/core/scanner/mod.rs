@@ -11,13 +11,13 @@ pub mod consumer;
 pub mod jobs;
 pub mod registry;
 
-use std::path::{Path, PathBuf};
 use regex::Regex;
+use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 
 use crate::core::messaging::ScannedFile;
 
-pub use consumer::{ScanResultConsumer, create_scan_request};
+pub use consumer::{create_scan_request, ScanResultConsumer};
 pub use jobs::JobTrackerService;
 pub use registry::WorkerRegistryService;
 
@@ -70,7 +70,10 @@ pub fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
         .ok()
         .and_then(|re| re.captures(filename))
     {
-        if let Some(season) = season_match.get(1).and_then(|m| m.as_str().parse::<i32>().ok()) {
+        if let Some(season) = season_match
+            .get(1)
+            .and_then(|m| m.as_str().parse::<i32>().ok())
+        {
             // Find all episode numbers after the season marker
             // Match pattern like S01E01E02E03 or S01E01-E02-E03
             if let Ok(re) = Regex::new(r"[Ss]\d{1,2}([Ee]\d{1,2})+") {
@@ -79,7 +82,9 @@ pub fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
                     // Extract all episode numbers from the match
                     if let Ok(ep_re) = Regex::new(r"[Ee](\d{1,2})") {
                         for cap in ep_re.captures_iter(episode_part) {
-                            if let Some(ep_num) = cap.get(1).and_then(|m| m.as_str().parse::<i32>().ok()) {
+                            if let Some(ep_num) =
+                                cap.get(1).and_then(|m| m.as_str().parse::<i32>().ok())
+                            {
                                 episodes.push((season, ep_num));
                             }
                         }
@@ -125,10 +130,7 @@ pub fn extract_release_group(filename: &str) -> Option<String> {
     if let Some(dash_pos) = name_without_ext.rfind('-') {
         let group = &name_without_ext[dash_pos + 1..];
         // Filter out common false positives
-        if !group.is_empty()
-            && !group.chars().all(|c| c.is_numeric())
-            && group.len() <= 20
-        {
+        if !group.is_empty() && !group.chars().all(|c| c.is_numeric()) && group.len() <= 20 {
             return Some(group.to_string());
         }
     }
@@ -170,7 +172,11 @@ pub fn scan_series_directory(series_path: &Path) -> Vec<ScannedFile> {
                 "Multi-episode file detected: {} -> S{:02}E{}",
                 filename,
                 season_number.unwrap_or(0),
-                episode_numbers.iter().map(|e| format!("{:02}", e)).collect::<Vec<_>>().join("E")
+                episode_numbers
+                    .iter()
+                    .map(|e| format!("{:02}", e))
+                    .collect::<Vec<_>>()
+                    .join("E")
             );
         }
 
@@ -204,9 +210,7 @@ pub fn scan_paths(paths: &[PathBuf]) -> Vec<(PathBuf, Vec<ScannedFile>)> {
             if is_video_file(path) {
                 if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
                     let parsed_episodes = parse_episodes_from_filename(filename);
-                    let file_size = std::fs::metadata(path)
-                        .map(|m| m.len() as i64)
-                        .unwrap_or(0);
+                    let file_size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
 
                     let scanned = ScannedFile {
                         path: path.clone(),
@@ -260,7 +264,10 @@ mod tests {
         let cases = vec![
             ("Show.S01E01E02.mkv", vec![(1, 1), (1, 2)]),
             ("Show.S01E01E02E03.720p.mkv", vec![(1, 1), (1, 2), (1, 3)]),
-            ("Show - S02E10E11E12 - Marathon.mkv", vec![(2, 10), (2, 11), (2, 12)]),
+            (
+                "Show - S02E10E11E12 - Marathon.mkv",
+                vec![(2, 10), (2, 11), (2, 12)],
+            ),
         ];
 
         for (filename, expected) in cases {
@@ -278,7 +285,7 @@ mod tests {
         let cases = vec![
             ("Show.S01E01.720p.HDTV.x264-GROUP.mkv", Some("GROUP")),
             ("Show.S01E01-DIMENSION.mkv", Some("DIMENSION")),
-            ("Show.S01E01.mkv", None), // No dash-group pattern
+            ("Show.S01E01.mkv", None),          // No dash-group pattern
             ("Show.S01E01.720p-123.mkv", None), // Numeric only = false positive
         ];
 

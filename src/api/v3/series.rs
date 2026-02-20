@@ -93,9 +93,7 @@ pub struct SeriesStatisticsResource {
 }
 
 /// GET /api/v3/series
-pub async fn get_series(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<SeriesResource>> {
+pub async fn get_series(State(state): State<Arc<AppState>>) -> Json<Vec<SeriesResource>> {
     let repo = SeriesRepository::new(state.db.clone());
 
     let series = match repo.get_all().await {
@@ -164,7 +162,10 @@ pub async fn get_series(
             genres: vec![],
             tags: vec![],
             added: s.added.to_rfc3339(),
-            ratings: RatingResource { votes: 0, value: 0.0 },
+            ratings: RatingResource {
+                votes: 0,
+                value: 0.0,
+            },
             statistics: SeriesStatisticsResource {
                 season_count,
                 episode_file_count,
@@ -251,7 +252,10 @@ pub async fn get_series_by_id(
         genres: vec![],
         tags: vec![],
         added: series.added.to_rfc3339(),
-        ratings: RatingResource { votes: 0, value: 0.0 },
+        ratings: RatingResource {
+            votes: 0,
+            value: 0.0,
+        },
         statistics: SeriesStatisticsResource {
             season_count,
             episode_file_count,
@@ -267,7 +271,10 @@ pub async fn get_series_by_id(
     }))
 }
 
-async fn get_series_stats(db: &crate::core::datastore::Database, series_id: i64) -> (i32, i32, i32) {
+async fn get_series_stats(
+    db: &crate::core::datastore::Database,
+    series_id: i64,
+) -> (i32, i32, i32) {
     use sqlx::Row;
 
     let pool = db.pool();
@@ -279,11 +286,12 @@ async fn get_series_stats(db: &crate::core::datastore::Database, series_id: i64)
             COUNT(DISTINCT season_number)::int as season_count
         FROM episodes
         WHERE series_id = $1
-        "#
+        "#,
     )
     .bind(series_id)
     .fetch_one(pool)
-    .await {
+    .await
+    {
         return (
             row.try_get::<i32, _>("episode_count").unwrap_or(0),
             row.try_get::<i32, _>("episode_file_count").unwrap_or(0),

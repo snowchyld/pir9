@@ -100,8 +100,8 @@ pub struct ProviderMessage {
 /// Convert DB model to API resource
 fn db_to_resource(model: &DownloadClientDbModel) -> DownloadClientResource {
     // Parse settings JSON to extract fields
-    let settings: serde_json::Value = serde_json::from_str(&model.settings)
-        .unwrap_or(serde_json::json!({}));
+    let settings: serde_json::Value =
+        serde_json::from_str(&model.settings).unwrap_or(serde_json::json!({}));
 
     let tags: Vec<i32> = serde_json::from_str(&model.tags).unwrap_or_default();
 
@@ -165,45 +165,110 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
     // Common fields based on implementation type
     match implementation {
         "QBittorrent" => {
-            fields.push(make_field(order, "host", "Host", "textbox",
-                settings.get("host").cloned()));
+            fields.push(make_field(
+                order,
+                "host",
+                "Host",
+                "textbox",
+                settings.get("host").cloned(),
+            ));
             order += 1;
-            fields.push(make_field(order, "port", "Port", "textbox",
-                settings.get("port").cloned()));
+            fields.push(make_field(
+                order,
+                "port",
+                "Port",
+                "textbox",
+                settings.get("port").cloned(),
+            ));
             order += 1;
-            fields.push(make_field(order, "useSsl", "Use SSL", "checkbox",
-                settings.get("useSsl").cloned()));
+            fields.push(make_field(
+                order,
+                "useSsl",
+                "Use SSL",
+                "checkbox",
+                settings.get("useSsl").cloned(),
+            ));
             order += 1;
-            fields.push(make_field(order, "urlBase", "URL Base", "textbox",
-                settings.get("urlBase").cloned()));
+            fields.push(make_field(
+                order,
+                "urlBase",
+                "URL Base",
+                "textbox",
+                settings.get("urlBase").cloned(),
+            ));
             order += 1;
-            fields.push(make_field(order, "username", "Username", "textbox",
-                settings.get("username").cloned()));
+            fields.push(make_field(
+                order,
+                "username",
+                "Username",
+                "textbox",
+                settings.get("username").cloned(),
+            ));
             order += 1;
-            fields.push(make_field(order, "password", "Password", "password",
-                settings.get("password").cloned()));
+            fields.push(make_field(
+                order,
+                "password",
+                "Password",
+                "password",
+                settings.get("password").cloned(),
+            ));
             order += 1;
-            fields.push(make_field(order, "tvCategory", "Category", "textbox",
-                settings.get("tvCategory").cloned()));
+            fields.push(make_field(
+                order,
+                "tvCategory",
+                "Category",
+                "textbox",
+                settings.get("tvCategory").cloned(),
+            ));
         }
         "Sabnzbd" | "SABnzbd" => {
-            fields.push(make_field(order, "host", "Host", "textbox",
-                settings.get("host").cloned()));
+            fields.push(make_field(
+                order,
+                "host",
+                "Host",
+                "textbox",
+                settings.get("host").cloned(),
+            ));
             order += 1;
-            fields.push(make_field(order, "port", "Port", "textbox",
-                settings.get("port").cloned()));
+            fields.push(make_field(
+                order,
+                "port",
+                "Port",
+                "textbox",
+                settings.get("port").cloned(),
+            ));
             order += 1;
-            fields.push(make_field(order, "useSsl", "Use SSL", "checkbox",
-                settings.get("useSsl").cloned()));
+            fields.push(make_field(
+                order,
+                "useSsl",
+                "Use SSL",
+                "checkbox",
+                settings.get("useSsl").cloned(),
+            ));
             order += 1;
-            fields.push(make_field(order, "urlBase", "URL Base", "textbox",
-                settings.get("urlBase").cloned()));
+            fields.push(make_field(
+                order,
+                "urlBase",
+                "URL Base",
+                "textbox",
+                settings.get("urlBase").cloned(),
+            ));
             order += 1;
-            fields.push(make_field(order, "apiKey", "API Key", "textbox",
-                settings.get("apiKey").cloned()));
+            fields.push(make_field(
+                order,
+                "apiKey",
+                "API Key",
+                "textbox",
+                settings.get("apiKey").cloned(),
+            ));
             order += 1;
-            fields.push(make_field(order, "tvCategory", "Category", "textbox",
-                settings.get("tvCategory").cloned()));
+            fields.push(make_field(
+                order,
+                "tvCategory",
+                "Category",
+                "textbox",
+                settings.get("tvCategory").cloned(),
+            ));
         }
         _ => {
             // Generic: just dump all settings as fields
@@ -220,7 +285,13 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
 }
 
 /// Create a field resource
-fn make_field(order: i32, name: &str, label: &str, field_type: &str, value: Option<serde_json::Value>) -> FieldResource {
+fn make_field(
+    order: i32,
+    name: &str,
+    label: &str,
+    field_type: &str,
+    value: Option<serde_json::Value>,
+) -> FieldResource {
     FieldResource {
         order,
         name: name.to_string(),
@@ -236,7 +307,11 @@ fn make_field(order: i32, name: &str, label: &str, field_type: &str, value: Opti
         select_options_provider_action: None,
         section: None,
         hidden: None,
-        privacy: if field_type == "password" { Some("password".to_string()) } else { None },
+        privacy: if field_type == "password" {
+            Some("password".to_string())
+        } else {
+            None
+        },
         placeholder: None,
         is_float: None,
     }
@@ -266,11 +341,17 @@ pub enum DownloadClientError {
 impl IntoResponse for DownloadClientError {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = match self {
-            DownloadClientError::NotFound => (StatusCode::NOT_FOUND, "Download client not found".to_string()),
+            DownloadClientError::NotFound => (
+                StatusCode::NOT_FOUND,
+                "Download client not found".to_string(),
+            ),
             DownloadClientError::TestFailed(msg) => (StatusCode::BAD_REQUEST, msg),
             DownloadClientError::Internal(msg) => {
                 tracing::error!("Download client error: {}", msg);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
             }
         };
 
@@ -284,12 +365,11 @@ pub async fn get_download_clients(
 ) -> Result<Json<Vec<DownloadClientResource>>, DownloadClientError> {
     let repo = DownloadClientRepository::new(state.db.clone());
 
-    let clients = repo.get_all().await
-        .map_err(|e| DownloadClientError::Internal(format!("Failed to fetch download clients: {}", e)))?;
+    let clients = repo.get_all().await.map_err(|e| {
+        DownloadClientError::Internal(format!("Failed to fetch download clients: {}", e))
+    })?;
 
-    let resources: Vec<DownloadClientResource> = clients.iter()
-        .map(db_to_resource)
-        .collect();
+    let resources: Vec<DownloadClientResource> = clients.iter().map(db_to_resource).collect();
 
     Ok(Json(resources))
 }
@@ -301,8 +381,12 @@ pub async fn get_download_client(
 ) -> Result<Json<DownloadClientResource>, DownloadClientError> {
     let repo = DownloadClientRepository::new(state.db.clone());
 
-    let client = repo.get_by_id(id as i64).await
-        .map_err(|e| DownloadClientError::Internal(format!("Failed to fetch download client: {}", e)))?
+    let client = repo
+        .get_by_id(id as i64)
+        .await
+        .map_err(|e| {
+            DownloadClientError::Internal(format!("Failed to fetch download client: {}", e))
+        })?
         .ok_or(DownloadClientError::NotFound)?;
 
     Ok(Json(db_to_resource(&client)))
@@ -317,20 +401,32 @@ pub async fn create_download_client(
 
     let db_model = resource_to_db(&body, None);
 
-    let id = repo.insert(&db_model).await
-        .map_err(|e| DownloadClientError::Internal(format!("Failed to create download client: {}", e)))?;
+    let id = repo.insert(&db_model).await.map_err(|e| {
+        DownloadClientError::Internal(format!("Failed to create download client: {}", e))
+    })?;
 
     // Fetch the created client
-    let created = repo.get_by_id(id).await
-        .map_err(|e| DownloadClientError::Internal(format!("Failed to fetch created client: {}", e)))?
-        .ok_or(DownloadClientError::Internal("Created client not found".to_string()))?;
+    let created = repo
+        .get_by_id(id)
+        .await
+        .map_err(|e| {
+            DownloadClientError::Internal(format!("Failed to fetch created client: {}", e))
+        })?
+        .ok_or(DownloadClientError::Internal(
+            "Created client not found".to_string(),
+        ))?;
 
-    tracing::info!("Created download client: {} ({})", created.name, created.implementation);
+    tracing::info!(
+        "Created download client: {} ({})",
+        created.name,
+        created.implementation
+    );
 
     crate::core::logging::log_info(
         "DownloadClientCreated",
-        &format!("Created download client: {}", created.name)
-    ).await;
+        &format!("Created download client: {}", created.name),
+    )
+    .await;
 
     Ok(Json(db_to_resource(&created)))
 }
@@ -344,19 +440,29 @@ pub async fn update_download_client(
     let repo = DownloadClientRepository::new(state.db.clone());
 
     // Verify it exists
-    repo.get_by_id(id as i64).await
-        .map_err(|e| DownloadClientError::Internal(format!("Failed to fetch download client: {}", e)))?
+    repo.get_by_id(id as i64)
+        .await
+        .map_err(|e| {
+            DownloadClientError::Internal(format!("Failed to fetch download client: {}", e))
+        })?
         .ok_or(DownloadClientError::NotFound)?;
 
     let db_model = resource_to_db(&body, Some(id as i64));
 
-    repo.update(&db_model).await
-        .map_err(|e| DownloadClientError::Internal(format!("Failed to update download client: {}", e)))?;
+    repo.update(&db_model).await.map_err(|e| {
+        DownloadClientError::Internal(format!("Failed to update download client: {}", e))
+    })?;
 
     // Fetch the updated client
-    let updated = repo.get_by_id(id as i64).await
-        .map_err(|e| DownloadClientError::Internal(format!("Failed to fetch updated client: {}", e)))?
-        .ok_or(DownloadClientError::Internal("Updated client not found".to_string()))?;
+    let updated = repo
+        .get_by_id(id as i64)
+        .await
+        .map_err(|e| {
+            DownloadClientError::Internal(format!("Failed to fetch updated client: {}", e))
+        })?
+        .ok_or(DownloadClientError::Internal(
+            "Updated client not found".to_string(),
+        ))?;
 
     tracing::info!("Updated download client: {} (id={})", updated.name, id);
 
@@ -371,19 +477,25 @@ pub async fn delete_download_client(
     let repo = DownloadClientRepository::new(state.db.clone());
 
     // Get client name for logging
-    let client = repo.get_by_id(id as i64).await
-        .map_err(|e| DownloadClientError::Internal(format!("Failed to fetch download client: {}", e)))?
+    let client = repo
+        .get_by_id(id as i64)
+        .await
+        .map_err(|e| {
+            DownloadClientError::Internal(format!("Failed to fetch download client: {}", e))
+        })?
         .ok_or(DownloadClientError::NotFound)?;
 
-    repo.delete(id as i64).await
-        .map_err(|e| DownloadClientError::Internal(format!("Failed to delete download client: {}", e)))?;
+    repo.delete(id as i64).await.map_err(|e| {
+        DownloadClientError::Internal(format!("Failed to delete download client: {}", e))
+    })?;
 
     tracing::info!("Deleted download client: {} (id={})", client.name, id);
 
     crate::core::logging::log_info(
         "DownloadClientDeleted",
-        &format!("Deleted download client: {}", client.name)
-    ).await;
+        &format!("Deleted download client: {}", client.name),
+    )
+    .await;
 
     Ok(Json(serde_json::json!({})))
 }
@@ -394,9 +506,11 @@ pub async fn test_download_client(
     Json(body): Json<DownloadClientResource>,
 ) -> Result<Json<serde_json::Value>, DownloadClientError> {
     // Log the settings being tested (without passwords)
-    tracing::debug!("Testing download client: implementation={}, fields={:?}",
+    tracing::debug!(
+        "Testing download client: implementation={}, fields={:?}",
         body.implementation,
-        body.fields.iter()
+        body.fields
+            .iter()
             .filter(|f| f.field_type != "password")
             .map(|f| format!("{}={:?}", f.name, f.value))
             .collect::<Vec<_>>()
@@ -406,24 +520,28 @@ pub async fn test_download_client(
     let db_model = resource_to_db(&body, None);
 
     // Create the actual client and test connection
-    let client = create_client_from_model(&db_model)
-        .map_err(|e| {
-            tracing::warn!("Failed to create download client for test: {}", e);
-            DownloadClientError::TestFailed(format!("Configuration error: {}", e))
-        })?;
+    let client = create_client_from_model(&db_model).map_err(|e| {
+        tracing::warn!("Failed to create download client for test: {}", e);
+        DownloadClientError::TestFailed(format!("Configuration error: {}", e))
+    })?;
 
     // Test the connection
-    client.test().await
-        .map_err(|e| {
-            tracing::warn!("Download client test failed: {}", e);
-            DownloadClientError::TestFailed(e.to_string())
-        })?;
+    client.test().await.map_err(|e| {
+        tracing::warn!("Download client test failed: {}", e);
+        DownloadClientError::TestFailed(e.to_string())
+    })?;
 
     // Get version info as extra validation
-    let version = client.get_version().await
+    let version = client
+        .get_version()
+        .await
         .unwrap_or_else(|_| "unknown".to_string());
 
-    tracing::info!("Download client test successful: {} (version: {})", body.name, version);
+    tracing::info!(
+        "Download client test successful: {} (version: {})",
+        body.name,
+        version
+    );
 
     Ok(Json(serde_json::json!({
         "isValid": true,
@@ -438,31 +556,30 @@ pub async fn test_all_download_clients(
 ) -> Result<Json<Vec<serde_json::Value>>, DownloadClientError> {
     let repo = DownloadClientRepository::new(state.db.clone());
 
-    let clients = repo.get_all().await
-        .map_err(|e| DownloadClientError::Internal(format!("Failed to fetch download clients: {}", e)))?;
+    let clients = repo.get_all().await.map_err(|e| {
+        DownloadClientError::Internal(format!("Failed to fetch download clients: {}", e))
+    })?;
 
     let mut results = Vec::new();
 
     for db_client in &clients {
         let test_result = match create_client_from_model(db_client) {
-            Ok(client) => {
-                match client.test().await {
-                    Ok(_) => serde_json::json!({
-                        "id": db_client.id,
-                        "name": db_client.name,
-                        "isValid": true
-                    }),
-                    Err(e) => serde_json::json!({
-                        "id": db_client.id,
-                        "name": db_client.name,
-                        "isValid": false,
-                        "validationFailures": [{
-                            "propertyName": "",
-                            "errorMessage": e.to_string()
-                        }]
-                    }),
-                }
-            }
+            Ok(client) => match client.test().await {
+                Ok(_) => serde_json::json!({
+                    "id": db_client.id,
+                    "name": db_client.name,
+                    "isValid": true
+                }),
+                Err(e) => serde_json::json!({
+                    "id": db_client.id,
+                    "name": db_client.name,
+                    "isValid": false,
+                    "validationFailures": [{
+                        "propertyName": "",
+                        "errorMessage": e.to_string()
+                    }]
+                }),
+            },
             Err(e) => serde_json::json!({
                 "id": db_client.id,
                 "name": db_client.name,
@@ -484,10 +601,7 @@ pub async fn test_all_download_clients(
 /// Get available download client types (schemas)
 pub async fn get_download_client_schema() -> Json<Vec<DownloadClientResource>> {
     // Return schemas for supported download clients
-    let schemas = vec![
-        create_qbittorrent_schema(),
-        create_sabnzbd_schema(),
-    ];
+    let schemas = vec![create_qbittorrent_schema(), create_sabnzbd_schema()];
 
     Json(schemas)
 }
@@ -498,18 +612,66 @@ fn create_qbittorrent_schema() -> DownloadClientResource {
         id: 0,
         name: "".to_string(),
         fields: vec![
-            make_field(0, "host", "Host", "textbox", Some(serde_json::json!("localhost"))),
+            make_field(
+                0,
+                "host",
+                "Host",
+                "textbox",
+                Some(serde_json::json!("localhost")),
+            ),
             make_field(1, "port", "Port", "textbox", Some(serde_json::json!(8080))),
-            make_field(2, "useSsl", "Use SSL", "checkbox", Some(serde_json::json!(false))),
+            make_field(
+                2,
+                "useSsl",
+                "Use SSL",
+                "checkbox",
+                Some(serde_json::json!(false)),
+            ),
             make_field(3, "urlBase", "URL Base", "textbox", None),
             make_field(4, "username", "Username", "textbox", None),
             make_field(5, "password", "Password", "password", None),
-            make_field(6, "tvCategory", "Category", "textbox", Some(serde_json::json!("sonarr"))),
-            make_field(7, "recentTvPriority", "Recent Priority", "select", Some(serde_json::json!(0))),
-            make_field(8, "olderTvPriority", "Older Priority", "select", Some(serde_json::json!(0))),
-            make_field(9, "initialState", "Initial State", "select", Some(serde_json::json!(0))),
-            make_field(10, "sequentialOrder", "Sequential Order", "checkbox", Some(serde_json::json!(false))),
-            make_field(11, "firstAndLast", "First and Last", "checkbox", Some(serde_json::json!(false))),
+            make_field(
+                6,
+                "tvCategory",
+                "Category",
+                "textbox",
+                Some(serde_json::json!("sonarr")),
+            ),
+            make_field(
+                7,
+                "recentTvPriority",
+                "Recent Priority",
+                "select",
+                Some(serde_json::json!(0)),
+            ),
+            make_field(
+                8,
+                "olderTvPriority",
+                "Older Priority",
+                "select",
+                Some(serde_json::json!(0)),
+            ),
+            make_field(
+                9,
+                "initialState",
+                "Initial State",
+                "select",
+                Some(serde_json::json!(0)),
+            ),
+            make_field(
+                10,
+                "sequentialOrder",
+                "Sequential Order",
+                "checkbox",
+                Some(serde_json::json!(false)),
+            ),
+            make_field(
+                11,
+                "firstAndLast",
+                "First and Last",
+                "checkbox",
+                Some(serde_json::json!(false)),
+            ),
         ],
         implementation_name: "qBittorrent".to_string(),
         implementation: "QBittorrent".to_string(),
@@ -532,14 +694,44 @@ fn create_sabnzbd_schema() -> DownloadClientResource {
         id: 0,
         name: "".to_string(),
         fields: vec![
-            make_field(0, "host", "Host", "textbox", Some(serde_json::json!("localhost"))),
+            make_field(
+                0,
+                "host",
+                "Host",
+                "textbox",
+                Some(serde_json::json!("localhost")),
+            ),
             make_field(1, "port", "Port", "textbox", Some(serde_json::json!(8080))),
-            make_field(2, "useSsl", "Use SSL", "checkbox", Some(serde_json::json!(false))),
+            make_field(
+                2,
+                "useSsl",
+                "Use SSL",
+                "checkbox",
+                Some(serde_json::json!(false)),
+            ),
             make_field(3, "urlBase", "URL Base", "textbox", None),
             make_field(4, "apiKey", "API Key", "textbox", None),
-            make_field(5, "tvCategory", "Category", "textbox", Some(serde_json::json!("tv"))),
-            make_field(6, "recentTvPriority", "Recent Priority", "select", Some(serde_json::json!(-100))),
-            make_field(7, "olderTvPriority", "Older Priority", "select", Some(serde_json::json!(-100))),
+            make_field(
+                5,
+                "tvCategory",
+                "Category",
+                "textbox",
+                Some(serde_json::json!("tv")),
+            ),
+            make_field(
+                6,
+                "recentTvPriority",
+                "Recent Priority",
+                "select",
+                Some(serde_json::json!(-100)),
+            ),
+            make_field(
+                7,
+                "olderTvPriority",
+                "Older Priority",
+                "select",
+                Some(serde_json::json!(-100)),
+            ),
         ],
         implementation_name: "SABnzbd".to_string(),
         implementation: "Sabnzbd".to_string(),

@@ -18,9 +18,7 @@ pub struct HealthResource {
 }
 
 /// GET /api/v3/health
-pub async fn get_health(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<HealthResource>> {
+pub async fn get_health(State(state): State<Arc<AppState>>) -> Json<Vec<HealthResource>> {
     let mut issues = Vec::new();
 
     // Check disk space on root folders

@@ -28,7 +28,10 @@ pub async fn get_custom_formats(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<CustomFormatResource>>, StatusCode> {
     let repo = CustomFormatRepository::new(state.db.clone());
-    let items = repo.get_all().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let items = repo
+        .get_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(items.iter().map(db_to_resource).collect()))
 }
 
@@ -37,7 +40,9 @@ pub async fn get_custom_format(
     Path(id): Path<i64>,
 ) -> Result<Json<CustomFormatResource>, StatusCode> {
     let repo = CustomFormatRepository::new(state.db.clone());
-    let item = repo.get_by_id(id).await
+    let item = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(db_to_resource(&item)))
@@ -49,8 +54,13 @@ pub async fn create_custom_format(
 ) -> Result<impl IntoResponse, StatusCode> {
     let repo = CustomFormatRepository::new(state.db.clone());
     let model = resource_to_db(&body, None);
-    let id = repo.insert(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let created = repo.get_by_id(id).await
+    let id = repo
+        .insert(&model)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let created = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok((StatusCode::CREATED, Json(db_to_resource(&created))))
@@ -62,11 +72,15 @@ pub async fn update_custom_format(
     Json(body): Json<CustomFormatResource>,
 ) -> Result<Json<CustomFormatResource>, StatusCode> {
     let repo = CustomFormatRepository::new(state.db.clone());
-    let _existing = repo.get_by_id(id).await
+    let _existing = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     let model = resource_to_db(&body, Some(id));
-    repo.update(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    repo.update(&model)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(db_to_resource(&model)))
 }
 
@@ -86,8 +100,8 @@ pub async fn get_custom_format_schema() -> Json<Vec<serde_json::Value>> {
 }
 
 fn db_to_resource(model: &CustomFormatDbModel) -> CustomFormatResource {
-    let specifications: Vec<serde_json::Value> = serde_json::from_str(&model.specifications)
-        .unwrap_or_default();
+    let specifications: Vec<serde_json::Value> =
+        serde_json::from_str(&model.specifications).unwrap_or_default();
     CustomFormatResource {
         id: model.id,
         name: model.name.clone(),
@@ -109,6 +123,11 @@ fn resource_to_db(resource: &CustomFormatResource, id: Option<i64>) -> CustomFor
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(get_custom_formats).post(create_custom_format))
-        .route("/{id}", get(get_custom_format).put(update_custom_format).delete(delete_custom_format))
+        .route(
+            "/{id}",
+            get(get_custom_format)
+                .put(update_custom_format)
+                .delete(delete_custom_format),
+        )
         .route("/schema", get(get_custom_format_schema))
 }

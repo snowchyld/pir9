@@ -6,6 +6,8 @@
 #[cfg(feature = "redis-events")]
 use anyhow::{Context, Result};
 #[cfg(feature = "redis-events")]
+use futures_util::StreamExt;
+#[cfg(feature = "redis-events")]
 use redis::aio::ConnectionManager;
 #[cfg(feature = "redis-events")]
 use redis::AsyncCommands;
@@ -13,8 +15,6 @@ use redis::AsyncCommands;
 use tokio::sync::broadcast;
 #[cfg(feature = "redis-events")]
 use tracing::{debug, error, info, warn};
-#[cfg(feature = "redis-events")]
-use futures_util::StreamExt;
 
 #[cfg(feature = "redis-events")]
 use crate::core::messaging::Message;
@@ -53,8 +53,7 @@ impl std::fmt::Debug for RedisEventBus {
 impl RedisEventBus {
     /// Create a new Redis event bus
     pub async fn new(redis_url: &str) -> Result<Self> {
-        let client = redis::Client::open(redis_url)
-            .context("Failed to create Redis client")?;
+        let client = redis::Client::open(redis_url).context("Failed to create Redis client")?;
 
         let redis_conn = ConnectionManager::new(client)
             .await
@@ -120,11 +119,15 @@ impl RedisEventBus {
         // Note: get_async_connection is deprecated in favor of get_multiplexed_async_connection,
         // but pubsub requires a dedicated connection that supports into_pubsub().
         #[allow(deprecated)]
-        let conn = client.get_async_connection().await
+        let conn = client
+            .get_async_connection()
+            .await
             .context("Failed to create Redis connection")?;
         let mut pubsub_conn = conn.into_pubsub();
 
-        pubsub_conn.subscribe(REDIS_CHANNEL).await
+        pubsub_conn
+            .subscribe(REDIS_CHANNEL)
+            .await
             .context("Failed to subscribe to Redis channel")?;
 
         info!("Redis subscriber started on channel {}", REDIS_CHANNEL);
@@ -194,8 +197,8 @@ impl Clone for RedisEventBus {
 // Unified EventBus that works with or without Redis
 // ============================================================================
 
-use tokio::sync::broadcast as tokio_broadcast;
 use crate::core::messaging::Message as LocalMessage;
+use tokio::sync::broadcast as tokio_broadcast;
 
 /// Event bus backend type
 #[derive(Debug, Clone)]

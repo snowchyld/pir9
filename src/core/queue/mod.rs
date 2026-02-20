@@ -6,8 +6,8 @@ pub mod service;
 
 pub use service::TrackedDownloadService;
 
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 /// Queue item status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,22 +98,22 @@ impl QueueService {
     pub async fn get_all(&self) -> Vec<QueueItem> {
         vec![]
     }
-    
+
     /// Get queue item by ID
     pub async fn get_by_id(&self, _id: i64) -> Option<QueueItem> {
         None
     }
-    
+
     /// Add item to queue
     pub async fn add(&self, _item: QueueItem) -> anyhow::Result<()> {
         Ok(())
     }
-    
+
     /// Remove item from queue
     pub async fn remove(&self, _id: i64, _blacklist: bool) -> anyhow::Result<()> {
         Ok(())
     }
-    
+
     /// Grab a release
     pub async fn grab(&self, _release_id: i64) -> anyhow::Result<()> {
         Ok(())

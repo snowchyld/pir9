@@ -42,7 +42,7 @@ impl DelayProfile {
             tags: vec![],
         }
     }
-    
+
     /// Get the delay for a specific protocol
     pub fn get_delay(&self, protocol: Protocol) -> i32 {
         match protocol {

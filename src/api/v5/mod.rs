@@ -1,14 +1,9 @@
 //! API v5 routes
 //! Latest version of the pir9 API
 
-use axum::{
-    Router,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
-use std::sync::Arc;
 use crate::web::AppState;
+use axum::{http::StatusCode, response::IntoResponse, Json, Router};
+use std::sync::Arc;
 
 pub mod blocklist;
 pub mod calendar;
@@ -53,7 +48,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .nest("/movie", movies::routes())
         .nest("/episode", episodes::routes())
         .nest("/episodeFile", episodefile::routes())
-        .nest("/episodefile", episodefile::routes())  // lowercase alias
+        .nest("/episodefile", episodefile::routes()) // lowercase alias
         .nest("/calendar", calendar::routes())
         .nest("/wanted", wanted::routes())
         .nest("/queue", queue::routes())
@@ -61,53 +56,48 @@ pub fn routes() -> Router<Arc<AppState>> {
         .nest("/parse", parse::routes())
         .nest("/release", release::routes())
         .nest("/manualImport", manualimport::routes())
-        .nest("/manualimport", manualimport::routes())  // lowercase alias
+        .nest("/manualimport", manualimport::routes()) // lowercase alias
         .nest("/seasonPass", seasonpass::routes())
-        .nest("/seasonpass", seasonpass::routes())  // lowercase alias
-
+        .nest("/seasonpass", seasonpass::routes()) // lowercase alias
         // Configuration
         .nest("/config", config::routes())
         .nest("/settings", settings::routes())
         .nest("/qualityProfile", profile::quality_profile_routes())
-        .nest("/qualityprofile", profile::quality_profile_routes())  // lowercase alias
+        .nest("/qualityprofile", profile::quality_profile_routes()) // lowercase alias
         .nest("/qualityDefinition", quality::routes())
-        .nest("/qualitydefinition", quality::routes())  // lowercase alias
+        .nest("/qualitydefinition", quality::routes()) // lowercase alias
         .nest("/delayProfile", profile::delay_profile_routes())
-        .nest("/delayprofile", profile::delay_profile_routes())  // lowercase alias
+        .nest("/delayprofile", profile::delay_profile_routes()) // lowercase alias
         .nest("/releaseProfile", profile::release_profile_routes())
-        .nest("/releaseprofile", profile::release_profile_routes())  // lowercase alias
+        .nest("/releaseprofile", profile::release_profile_routes()) // lowercase alias
         .nest("/customFormat", customformat::routes())
-        .nest("/customformat", customformat::routes())  // lowercase alias
+        .nest("/customformat", customformat::routes()) // lowercase alias
         .nest("/customFilter", customfilter::routes())
-        .nest("/customfilter", customfilter::routes())  // lowercase alias
-
+        .nest("/customfilter", customfilter::routes()) // lowercase alias
         // Providers
         .nest("/downloadClient", download::routes())
-        .nest("/downloadclient", download::routes())  // lowercase alias
+        .nest("/downloadclient", download::routes()) // lowercase alias
         .nest("/indexer", indexers::routes())
         .nest("/notification", notification::routes())
-
         // System
         .nest("/system", system::routes())
         .nest("/health", health::routes())
         .nest("/diskSpace", diskspace::routes())
-        .nest("/diskspace", diskspace::routes())  // lowercase alias
+        .nest("/diskspace", diskspace::routes()) // lowercase alias
         .nest("/update", update::routes())
         .nest("/log", log::routes())
         .nest("/command", command::routes())
         .nest("/fileSystem", filesystem::routes())
-        .nest("/filesystem", filesystem::routes())  // lowercase alias
-
+        .nest("/filesystem", filesystem::routes()) // lowercase alias
         // IMDB local database
         .nest("/imdb", imdb::routes())
-
         // Other
         .nest("/localization", localization::routes())
         .nest("/tag", tag::routes())
         .nest("/rootFolder", rootfolder::routes())
-        .nest("/rootfolder", rootfolder::routes())  // lowercase alias
+        .nest("/rootfolder", rootfolder::routes()) // lowercase alias
         .nest("/remotePathMapping", remotepathmapping::routes())
-        .nest("/remotepathmapping", remotepathmapping::routes())  // lowercase alias
+        .nest("/remotepathmapping", remotepathmapping::routes()) // lowercase alias
         .nest("/blocklist", blocklist::routes())
         // Fallback for unknown API endpoints - return JSON 404, not HTML
         .fallback(api_not_found)
@@ -118,6 +108,6 @@ async fn api_not_found() -> impl IntoResponse {
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({
             "message": "Resource not found"
-        }))
+        })),
     )
 }

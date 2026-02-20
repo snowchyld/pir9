@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::core::movies::MovieStatusType;
-use crate::core::tv::{MediaCover, Ratings};
-use crate::core::profiles::QualityProfile;
 use crate::core::profiles::languages::Language;
+use crate::core::profiles::QualityProfile;
+use crate::core::tv::{MediaCover, Ratings};
 
 /// Movie entity - represents a movie in the library
 #[derive(Debug, Clone, Serialize, Deserialize)]

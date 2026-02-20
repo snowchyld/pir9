@@ -3,19 +3,18 @@
 //! CRUD operations for movies
 
 use axum::{
-    Router,
-    routing::{get, post},
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
+    routing::{get, post},
+    Json, Router,
 };
 use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::core::datastore::models::{MovieDbModel, MovieFileDbModel};
-use crate::core::datastore::repositories::{MovieRepository, MovieFileRepository};
+use crate::core::datastore::repositories::{MovieFileRepository, MovieRepository};
 use crate::web::AppState;
 
 // Re-use ApiError from series module
@@ -32,7 +31,10 @@ pub struct MovieListQuery {
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_movies).post(create_movie))
-        .route("/{id}", get(get_movie).put(update_movie).delete(delete_movie))
+        .route(
+            "/{id}",
+            get(get_movie).put(update_movie).delete(delete_movie),
+        )
         .route("/lookup", get(lookup_movie))
         .route("/import", post(import_movies))
 }
@@ -46,7 +48,9 @@ async fn list_movies(
 
     // If tmdbId filter is provided, return just that movie
     if let Some(tmdb_id) = query.tmdb_id {
-        let movie = repo.get_by_tmdb_id(tmdb_id).await
+        let movie = repo
+            .get_by_tmdb_id(tmdb_id)
+            .await
             .map_err(|e| ApiError::Internal(format!("Failed to fetch movie: {}", e)))?;
         return match movie {
             Some(m) => {
@@ -58,7 +62,9 @@ async fn list_movies(
         };
     }
 
-    let db_movies = repo.get_all().await
+    let db_movies = repo
+        .get_all()
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch movies: {}", e)))?;
 
     let mut movies = Vec::with_capacity(db_movies.len());
@@ -78,7 +84,9 @@ async fn get_movie(
 ) -> Result<Json<MovieResponse>, ApiError> {
     let repo = MovieRepository::new(state.db.clone());
 
-    let movie = repo.get_by_id(id).await
+    let movie = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch movie: {}", e)))?
         .ok_or(ApiError::NotFound)?;
 
@@ -89,16 +97,20 @@ async fn get_movie(
 }
 
 /// Enrich a MovieResponse with file statistics from the database
-async fn enrich_movie_response(response: &mut MovieResponse, db: &crate::core::datastore::Database) {
+async fn enrich_movie_response(
+    response: &mut MovieResponse,
+    db: &crate::core::datastore::Database,
+) {
     use sqlx::Row;
 
     let pool = db.pool();
     if let Ok(row) = sqlx::query(
-        "SELECT COALESCE(SUM(size), 0) as size_on_disk FROM movie_files WHERE movie_id = $1"
+        "SELECT COALESCE(SUM(size), 0) as size_on_disk FROM movie_files WHERE movie_id = $1",
     )
     .bind(response.id)
     .fetch_one(pool)
-    .await {
+    .await
+    {
         let size_on_disk: i64 = row.try_get("size_on_disk").unwrap_or(0);
         response.statistics = Some(MovieStatistics {
             size_on_disk,
@@ -117,7 +129,9 @@ async fn create_movie(
     let repo = MovieRepository::new(state.db.clone());
 
     // Check if movie already exists by tmdbId
-    if let Some(_existing) = repo.get_by_tmdb_id(options.tmdb_id).await
+    if let Some(_existing) = repo
+        .get_by_tmdb_id(options.tmdb_id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?
     {
         return Err(ApiError::Validation("Movie already exists".to_string()));
@@ -130,7 +144,9 @@ async fn create_movie(
     let full_path = options.get_full_path();
     let root_folder_path = options.get_root_folder_path();
 
-    let release_date = options.release_date.as_ref()
+    let release_date = options
+        .release_date
+        .as_ref()
         .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
 
     let status = match options.status.as_deref() {
@@ -187,14 +203,20 @@ async fn create_movie(
         imdb_votes: None,
     };
 
-    let id = repo.insert(&db_movie).await
+    let id = repo
+        .insert(&db_movie)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to create movie: {}", e)))?;
 
     tracing::info!("Created movie: id={}, title={}", id, options.title);
 
-    let created = repo.get_by_id(id).await
+    let created = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch created movie: {}", e)))?
-        .ok_or(ApiError::Internal("Movie not found after creation".to_string()))?;
+        .ok_or(ApiError::Internal(
+            "Movie not found after creation".to_string(),
+        ))?;
 
     let mut response = MovieResponse::from(created);
     enrich_movie_response(&mut response, &state.db).await;
@@ -210,7 +232,9 @@ async fn update_movie(
 ) -> Result<Json<MovieResponse>, ApiError> {
     let repo = MovieRepository::new(state.db.clone());
 
-    let mut movie = repo.get_by_id(id).await
+    let mut movie = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch movie: {}", e)))?
         .ok_or(ApiError::NotFound)?;
 
@@ -233,7 +257,8 @@ async fn update_movie(
         movie.tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
     }
 
-    repo.update(&movie).await
+    repo.update(&movie)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to update movie: {}", e)))?;
 
     tracing::info!("Updated movie: id={}", id);
@@ -252,7 +277,9 @@ async fn delete_movie(
 ) -> Result<(), ApiError> {
     let repo = MovieRepository::new(state.db.clone());
 
-    let movie = repo.get_by_id(id).await
+    let movie = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch movie: {}", e)))?
         .ok_or(ApiError::NotFound)?;
 
@@ -270,10 +297,16 @@ async fn delete_movie(
     }
 
     // Delete from database (movie_files cascade)
-    repo.delete(id).await
+    repo.delete(id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to delete movie: {}", e)))?;
 
-    tracing::info!("Deleted movie: id={}, title={}, delete_files={}", id, movie.title, params.delete_files);
+    tracing::info!(
+        "Deleted movie: id={}, title={}, delete_files={}",
+        id,
+        movie.title,
+        params.delete_files
+    );
 
     Ok(())
 }
@@ -283,18 +316,25 @@ async fn lookup_movie(
     State(state): State<Arc<AppState>>,
     Query(query): Query<LookupQuery>,
 ) -> Result<Json<Vec<MovieLookupResult>>, ApiError> {
-    let results = state.imdb_client.search_movies(&query.term, 25).await
+    let results = state
+        .imdb_client
+        .search_movies(&query.term, 25)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to search movies: {}", e)))?;
 
     // Fire Radarr metadata lookups in parallel for all results (same pattern as series Skyhook)
-    let radarr_futures: Vec<_> = results.iter().map(|m| {
-        let imdb_id = m.imdb_id.clone();
-        async move { fetch_radarr_metadata(&imdb_id).await }
-    }).collect();
+    let radarr_futures: Vec<_> = results
+        .iter()
+        .map(|m| {
+            let imdb_id = m.imdb_id.clone();
+            async move { fetch_radarr_metadata(&imdb_id).await }
+        })
+        .collect();
 
     let radarr_results = futures::future::join_all(radarr_futures).await;
 
-    let lookup_results: Vec<MovieLookupResult> = results.into_iter()
+    let lookup_results: Vec<MovieLookupResult> = results
+        .into_iter()
         .zip(radarr_results)
         .map(|(m, radarr)| {
             let (tmdb_id, images) = radarr.unwrap_or((0, vec![]));
@@ -316,7 +356,8 @@ async fn lookup_movie(
                 runtime: m.runtime_minutes.unwrap_or(0),
                 certification: None,
             }
-        }).collect();
+        })
+        .collect();
 
     Ok(Json(lookup_results))
 }
@@ -344,9 +385,12 @@ pub async fn fetch_radarr_metadata(imdb_id: &str) -> Option<(i64, Vec<MovieImage
     let url = format!("https://api.radarr.video/v1/movie/imdb/{}", imdb_id);
     let client = reqwest::Client::new();
 
-    let resp = client.get(&url)
+    let resp = client
+        .get(&url)
         .header("User-Agent", format!("pir9/{}", env!("CARGO_PKG_VERSION")))
-        .send().await.ok()?;
+        .send()
+        .await
+        .ok()?;
 
     if !resp.status().is_success() {
         tracing::warn!("Radarr API returned {} for {}", resp.status(), imdb_id);
@@ -370,31 +414,37 @@ pub async fn fetch_radarr_metadata(imdb_id: &str) -> Option<(i64, Vec<MovieImage
     };
 
     let tmdb_id = radarr.TmdbId.unwrap_or(0);
-    let images: Vec<MovieImage> = radarr.Images.into_iter().filter_map(|img| {
-        let cover_type = match img.CoverType.as_str() {
-            "Poster" => "poster",
-            "Fanart" => "fanart",
-            _ => return None,
-        };
-        Some(MovieImage {
-            cover_type: cover_type.to_string(),
-            url: img.Url.clone(),
-            remote_url: Some(img.Url),
+    let images: Vec<MovieImage> = radarr
+        .Images
+        .into_iter()
+        .filter_map(|img| {
+            let cover_type = match img.CoverType.as_str() {
+                "Poster" => "poster",
+                "Fanart" => "fanart",
+                _ => return None,
+            };
+            Some(MovieImage {
+                cover_type: cover_type.to_string(),
+                url: img.Url.clone(),
+                remote_url: Some(img.Url),
+            })
         })
-    }).collect();
+        .collect();
 
     Some((tmdb_id, images))
 }
 
 /// Fetch poster and fanart images from Radarr metadata API for a given IMDB ID
 pub async fn fetch_radarr_images(imdb_id: &str) -> Vec<MovieImage> {
-    fetch_radarr_metadata(imdb_id).await
+    fetch_radarr_metadata(imdb_id)
+        .await
         .map(|(_, images)| images)
         .unwrap_or_default()
 }
 
 fn clean_title(title: &str) -> String {
-    title.to_lowercase()
+    title
+        .to_lowercase()
         .replace(|c: char| !c.is_alphanumeric() && c != ' ', " ")
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -402,7 +452,8 @@ fn clean_title(title: &str) -> String {
 }
 
 fn generate_slug(title: &str) -> String {
-    title.to_lowercase()
+    title
+        .to_lowercase()
         .replace(|c: char| !c.is_alphanumeric() && c != ' ', "-")
         .replace(' ', "-")
         .replace("--", "-")
@@ -452,7 +503,9 @@ impl CreateMovieRequest {
             return Err(ApiError::Validation("title is required".to_string()));
         }
         if self.path.is_none() && self.root_folder_path.as_ref().is_none_or(|s| s.is_empty()) {
-            return Err(ApiError::Validation("path or rootFolderPath is required".to_string()));
+            return Err(ApiError::Validation(
+                "path or rootFolderPath is required".to_string(),
+            ));
         }
         Ok(())
     }
@@ -618,14 +671,21 @@ impl From<MovieDbModel> for MovieResponse {
             ]
         } else {
             // Rewrite urls to local proxy paths, preserving remote_url for CDN access
-            images.into_iter().map(|img| {
-                let ext = "jpg";
-                MovieImage {
-                    url: format!("/MediaCover/Movies/{}/{}.{}", m.id, img.cover_type, ext),
-                    remote_url: if img.remote_url.is_some() { img.remote_url } else { Some(img.url).filter(|u| u.starts_with("http")) },
-                    cover_type: img.cover_type,
-                }
-            }).collect()
+            images
+                .into_iter()
+                .map(|img| {
+                    let ext = "jpg";
+                    MovieImage {
+                        url: format!("/MediaCover/Movies/{}/{}.{}", m.id, img.cover_type, ext),
+                        remote_url: if img.remote_url.is_some() {
+                            img.remote_url
+                        } else {
+                            Some(img.url).filter(|u| u.starts_with("http"))
+                        },
+                        cover_type: img.cover_type,
+                    }
+                })
+                .collect()
         };
 
         let folder = m.path.split('/').next_back().map(|f| f.to_string());
@@ -720,7 +780,9 @@ async fn import_movies(
 
     for import_req in movie_list {
         // Extract folder name and year from path
-        let folder_name = import_req.path.as_ref()
+        let folder_name = import_req
+            .path
+            .as_ref()
             .and_then(|p| p.rsplit('/').next())
             .unwrap_or("")
             .to_string();
@@ -754,42 +816,87 @@ async fn import_movies(
         }
 
         // If imdb_id not provided, try to look up via IMDB service
-        let (resolved_imdb_id, resolved_title, resolved_year, resolved_overview, resolved_runtime, resolved_genres, resolved_rating, resolved_votes) =
-            if imdb_id.as_ref().is_none_or(|id| id.is_empty()) && state.imdb_client.is_enabled() {
-                tracing::info!("Looking up movie for import: {} (year={:?})", lookup_title, folder_year);
-                match state.imdb_client.search_movies(&lookup_title, 10).await {
-                    Ok(results) if !results.is_empty() => {
-                        // Pick best match by year proximity
-                        let best = if let Some(yr) = folder_year {
-                            results.iter()
-                                .filter(|m| m.year.is_some())
-                                .min_by_key(|m| (m.year.unwrap_or(0) - yr).unsigned_abs())
-                                .or(results.first())
-                        } else {
-                            results.first()
-                        };
+        let (
+            resolved_imdb_id,
+            resolved_title,
+            resolved_year,
+            resolved_overview,
+            resolved_runtime,
+            resolved_genres,
+            resolved_rating,
+            resolved_votes,
+        ) = if imdb_id.as_ref().is_none_or(|id| id.is_empty()) && state.imdb_client.is_enabled() {
+            tracing::info!(
+                "Looking up movie for import: {} (year={:?})",
+                lookup_title,
+                folder_year
+            );
+            match state.imdb_client.search_movies(&lookup_title, 10).await {
+                Ok(results) if !results.is_empty() => {
+                    // Pick best match by year proximity
+                    let best = if let Some(yr) = folder_year {
+                        results
+                            .iter()
+                            .filter(|m| m.year.is_some())
+                            .min_by_key(|m| (m.year.unwrap_or(0) - yr).unsigned_abs())
+                            .or(results.first())
+                    } else {
+                        results.first()
+                    };
 
-                        if let Some(m) = best {
-                            tracing::info!("IMDB match: {} ({}) [{}]", m.title, m.year.unwrap_or(0), m.imdb_id);
-                            (
-                                Some(m.imdb_id.clone()),
-                                m.title.clone(),
-                                m.year,
-                                None::<String>, // IMDB search doesn't return overview
-                                m.runtime_minutes,
-                                m.genres.clone(),
-                                m.rating.map(|r| r as f32),
-                                m.votes.map(|v| v as i32),
-                            )
-                        } else {
-                            (None, lookup_title.clone(), folder_year, None, None, vec![], None, None)
-                        }
+                    if let Some(m) = best {
+                        tracing::info!(
+                            "IMDB match: {} ({}) [{}]",
+                            m.title,
+                            m.year.unwrap_or(0),
+                            m.imdb_id
+                        );
+                        (
+                            Some(m.imdb_id.clone()),
+                            m.title.clone(),
+                            m.year,
+                            None::<String>, // IMDB search doesn't return overview
+                            m.runtime_minutes,
+                            m.genres.clone(),
+                            m.rating.map(|r| r as f32),
+                            m.votes.map(|v| v as i32),
+                        )
+                    } else {
+                        (
+                            None,
+                            lookup_title.clone(),
+                            folder_year,
+                            None,
+                            None,
+                            vec![],
+                            None,
+                            None,
+                        )
                     }
-                    _ => (None, lookup_title.clone(), folder_year, None, None, vec![], None, None),
                 }
-            } else {
-                (imdb_id, lookup_title.clone(), import_req.year.or(folder_year), import_req.overview.clone(), import_req.runtime, import_req.genres.clone().unwrap_or_default(), None, None)
-            };
+                _ => (
+                    None,
+                    lookup_title.clone(),
+                    folder_year,
+                    None,
+                    None,
+                    vec![],
+                    None,
+                    None,
+                ),
+            }
+        } else {
+            (
+                imdb_id,
+                lookup_title.clone(),
+                import_req.year.or(folder_year),
+                import_req.overview.clone(),
+                import_req.runtime,
+                import_req.genres.clone().unwrap_or_default(),
+                None,
+                None,
+            )
+        };
 
         // Double-check resolved imdb_id for duplicates
         if let Some(ref id) = resolved_imdb_id {
@@ -816,8 +923,10 @@ async fn import_movies(
         });
 
         let year = resolved_year.unwrap_or(0);
-        let genres_json = serde_json::to_string(&resolved_genres).unwrap_or_else(|_| "[]".to_string());
-        let tags_json = serde_json::to_string(&import_req.tags.unwrap_or_default()).unwrap_or_else(|_| "[]".to_string());
+        let genres_json =
+            serde_json::to_string(&resolved_genres).unwrap_or_else(|_| "[]".to_string());
+        let tags_json = serde_json::to_string(&import_req.tags.unwrap_or_default())
+            .unwrap_or_else(|_| "[]".to_string());
 
         // Use images from request; if empty, try to fetch from Radarr metadata API
         let images = match import_req.images {
@@ -881,7 +990,11 @@ async fn import_movies(
                             .bind(id)
                             .execute(pool)
                             .await;
-                            tracing::info!("Found video file for movie {}: {}", id, movie_file.path);
+                            tracing::info!(
+                                "Found video file for movie {}: {}",
+                                id,
+                                movie_file.path
+                            );
                         }
                         Err(e) => {
                             tracing::error!("Failed to insert movie file for {}: {}", id, e);
@@ -901,15 +1014,17 @@ async fn import_movies(
         }
     }
 
-    tracing::info!("Bulk movie import complete: {} movies imported", results.len());
+    tracing::info!(
+        "Bulk movie import complete: {} movies imported",
+        results.len()
+    );
     Ok(Json(results))
 }
 
 /// Extract a year (1900-2099) from a folder name like "The Matrix (1999)" or "The.Matrix.1999"
 fn extract_year_from_folder(folder: &str) -> Option<i32> {
-    static PAREN_YEAR_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
-        regex::Regex::new(r"\((\d{4})\)").expect("valid regex")
-    });
+    static PAREN_YEAR_RE: once_cell::sync::Lazy<regex::Regex> =
+        once_cell::sync::Lazy::new(|| regex::Regex::new(r"\((\d{4})\)").expect("valid regex"));
     static FOLDER_YEAR_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
         regex::Regex::new(r"[\s.\(_-]((?:19|20)\d{2})[\s.\)_-]?$").expect("valid regex")
     });
@@ -944,7 +1059,12 @@ fn scan_movie_folder(folder_path: &str, movie_id: i64) -> Option<MovieFileDbMode
 
     let mut best_file: Option<(std::path::PathBuf, u64)> = None;
 
-    fn walk_dir(dir: &Path, extensions: &[&str], best: &mut Option<(std::path::PathBuf, u64)>, depth: usize) {
+    fn walk_dir(
+        dir: &Path,
+        extensions: &[&str],
+        best: &mut Option<(std::path::PathBuf, u64)>,
+        depth: usize,
+    ) {
         if depth > 2 {
             return;
         }
@@ -954,15 +1074,14 @@ fn scan_movie_folder(folder_path: &str, movie_id: i64) -> Option<MovieFileDbMode
                 if path.is_dir() {
                     walk_dir(&path, extensions, best, depth + 1);
                 } else {
-                    let is_video = path.extension()
+                    let is_video = path
+                        .extension()
                         .and_then(|ext| ext.to_str())
                         .map(|ext| extensions.contains(&ext.to_lowercase().as_str()))
                         .unwrap_or(false);
 
                     if is_video {
-                        let size = std::fs::metadata(&path)
-                            .map(|m| m.len())
-                            .unwrap_or(0);
+                        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                         if best.as_ref().is_none_or(|(_, s)| size > *s) {
                             *best = Some((path, size));
                         }
@@ -975,11 +1094,10 @@ fn scan_movie_folder(folder_path: &str, movie_id: i64) -> Option<MovieFileDbMode
     walk_dir(root, &video_extensions, &mut best_file, 0);
 
     best_file.map(|(file_path, size)| {
-        let file_name = file_path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let file_name = file_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-        let relative_path = file_path.strip_prefix(root)
+        let relative_path = file_path
+            .strip_prefix(root)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| file_name.to_string());
 
@@ -995,7 +1113,8 @@ fn scan_movie_folder(folder_path: &str, movie_id: i64) -> Option<MovieFileDbMode
             date_added: Utc::now(),
             scene_name: Some(file_name.to_string()),
             release_group,
-            quality: serde_json::to_string(&quality).unwrap_or_else(|_| r#"{"quality":{"id":1,"name":"HDTV-720p"}}"#.to_string()),
+            quality: serde_json::to_string(&quality)
+                .unwrap_or_else(|_| r#"{"quality":{"id":1,"name":"HDTV-720p"}}"#.to_string()),
             languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
             media_info: None,
             original_file_path: Some(file_path.to_string_lossy().to_string()),

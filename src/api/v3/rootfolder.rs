@@ -55,7 +55,9 @@ pub async fn get_root_folders(
 ) -> Result<Json<Vec<RootFolderResource>>, RootFolderError> {
     let repo = RootFolderRepository::new(state.db.clone());
 
-    let db_folders = repo.get_all().await
+    let db_folders = repo
+        .get_all()
+        .await
         .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folders: {}", e)))?;
 
     let folders: Vec<RootFolderResource> = db_folders
@@ -67,7 +69,8 @@ pub async fn get_root_folders(
                 path: f.path,
                 accessible,
                 free_space,
-                unmapped_folders: f.unmapped_folders
+                unmapped_folders: f
+                    .unmapped_folders
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or_default(),
             }
@@ -84,7 +87,9 @@ pub async fn get_root_folder(
 ) -> Result<Json<RootFolderResource>, RootFolderError> {
     let repo = RootFolderRepository::new(state.db.clone());
 
-    let folder = repo.get_by_id(id as i64).await
+    let folder = repo
+        .get_by_id(id as i64)
+        .await
         .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folder: {}", e)))?
         .ok_or(RootFolderError::NotFound)?;
 
@@ -95,7 +100,8 @@ pub async fn get_root_folder(
         path: folder.path,
         accessible,
         free_space,
-        unmapped_folders: folder.unmapped_folders
+        unmapped_folders: folder
+            .unmapped_folders
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
     }))
@@ -117,7 +123,9 @@ pub async fn create_root_folder(
 
     // Insert into database
     let repo = RootFolderRepository::new(state.db.clone());
-    let id = repo.insert(path).await
+    let id = repo
+        .insert(path)
+        .await
         .map_err(|e| RootFolderError::Internal(format!("Failed to create root folder: {}", e)))?;
 
     tracing::info!("Created root folder: id={}, path={}", id, path);
@@ -138,7 +146,8 @@ pub async fn delete_root_folder(
 ) -> Result<Json<serde_json::Value>, RootFolderError> {
     let repo = RootFolderRepository::new(state.db.clone());
 
-    repo.delete(id as i64).await
+    repo.delete(id as i64)
+        .await
         .map_err(|e| RootFolderError::Internal(format!("Failed to delete root folder: {}", e)))?;
 
     tracing::info!("Deleted root folder: id={}", id);
@@ -213,11 +222,16 @@ pub enum RootFolderError {
 impl IntoResponse for RootFolderError {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = match self {
-            RootFolderError::NotFound => (StatusCode::NOT_FOUND, "Root folder not found".to_string()),
+            RootFolderError::NotFound => {
+                (StatusCode::NOT_FOUND, "Root folder not found".to_string())
+            }
             RootFolderError::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
             RootFolderError::Internal(msg) => {
                 tracing::error!("Root folder error: {}", msg);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
             }
         };
 

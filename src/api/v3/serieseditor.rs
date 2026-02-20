@@ -37,6 +37,5 @@ pub async fn delete_series_editor(
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/", put(update_series_editor).delete(delete_series_editor))
+    Router::new().route("/", put(update_series_editor).delete(delete_series_editor))
 }

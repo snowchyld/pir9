@@ -65,10 +65,16 @@ pub async fn get_logs(
     let page = query.page.unwrap_or(1);
     let page_size = query.page_size.unwrap_or(50);
     let sort_key = query.sort_key.clone().unwrap_or_else(|| "time".to_string());
-    let sort_direction = query.sort_direction.clone().unwrap_or_else(|| "descending".to_string());
+    let sort_direction = query
+        .sort_direction
+        .clone()
+        .unwrap_or_else(|| "descending".to_string());
     let level = query.level.as_deref();
 
-    match repo.get_paged(page, page_size, level, &sort_key, &sort_direction).await {
+    match repo
+        .get_paged(page, page_size, level, &sort_key, &sort_direction)
+        .await
+    {
         Ok((logs, total)) => {
             let records: Vec<LogResource> = logs
                 .into_iter()
@@ -106,9 +112,7 @@ pub async fn get_logs(
     }
 }
 
-pub async fn get_log_files(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<LogFileResource>> {
+pub async fn get_log_files(State(state): State<Arc<AppState>>) -> Json<Vec<LogFileResource>> {
     let log_dir = &state.config.paths.log_dir;
     let mut files = Vec::new();
     let mut id = 1;
@@ -120,7 +124,8 @@ pub async fn get_log_files(
                 || path.extension().and_then(|e| e.to_str()) == Some("txt")
             {
                 if let Ok(meta) = entry.metadata() {
-                    let modified = meta.modified()
+                    let modified = meta
+                        .modified()
                         .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
                         .unwrap_or_default();
                     let filename = entry.file_name().to_string_lossy().to_string();

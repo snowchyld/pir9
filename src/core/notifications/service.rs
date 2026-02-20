@@ -1,17 +1,16 @@
 //! Notification service
 //! Subscribes to events and dispatches notifications to configured providers
 
-use std::sync::Arc;
 use anyhow::Result;
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-use crate::core::datastore::Database;
-use crate::core::datastore::repositories::NotificationRepository;
-use crate::core::messaging::{EventBus, Message};
 use super::{
-    NotificationPayload, NotificationEventType, ReleaseInfo, HealthInfo,
-    create_provider_from_model,
+    create_provider_from_model, HealthInfo, NotificationEventType, NotificationPayload, ReleaseInfo,
 };
+use crate::core::datastore::repositories::NotificationRepository;
+use crate::core::datastore::Database;
+use crate::core::messaging::{EventBus, Message};
 
 /// Service that listens to events and sends notifications
 pub struct NotificationService {
@@ -223,10 +222,12 @@ impl NotificationService {
                         provider.implementation()
                     );
                     // Publish success event
-                    self.event_bus.publish(Message::NotificationSent {
-                        notification_type: provider.implementation().to_string(),
-                        success: true,
-                    }).await;
+                    self.event_bus
+                        .publish(Message::NotificationSent {
+                            notification_type: provider.implementation().to_string(),
+                            success: true,
+                        })
+                        .await;
                 }
                 Err(e) => {
                     error!(
@@ -236,10 +237,12 @@ impl NotificationService {
                         e
                     );
                     // Publish failure event
-                    self.event_bus.publish(Message::NotificationSent {
-                        notification_type: provider.implementation().to_string(),
-                        success: false,
-                    }).await;
+                    self.event_bus
+                        .publish(Message::NotificationSent {
+                            notification_type: provider.implementation().to_string(),
+                            success: false,
+                        })
+                        .await;
                 }
             }
         }
@@ -250,7 +253,9 @@ impl NotificationService {
     /// Test a specific notification configuration
     pub async fn test_notification(&self, notification_id: i64) -> Result<()> {
         let repo = NotificationRepository::new(self.db.clone());
-        let notification = repo.get_by_id(notification_id).await?
+        let notification = repo
+            .get_by_id(notification_id)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Notification not found"))?;
 
         let provider = create_provider_from_model(&notification)?;
@@ -290,6 +295,9 @@ mod tests {
     fn test_event_type_mapping() {
         assert_eq!(NotificationEventType::Grab.as_event_key(), "grab");
         assert_eq!(NotificationEventType::Download.as_event_key(), "download");
-        assert_eq!(NotificationEventType::SeriesDelete.as_event_key(), "series_delete");
+        assert_eq!(
+            NotificationEventType::SeriesDelete.as_event_key(),
+            "series_delete"
+        );
     }
 }

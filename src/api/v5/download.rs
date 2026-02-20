@@ -18,7 +18,12 @@ use crate::web::AppState;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_download_clients).post(create_download_client))
-        .route("/{id}", get(get_download_client).put(update_download_client).delete(delete_download_client))
+        .route(
+            "/{id}",
+            get(get_download_client)
+                .put(update_download_client)
+                .delete(delete_download_client),
+        )
         .route("/{id}/test", post(test_download_client))
 }
 
@@ -26,7 +31,10 @@ async fn list_download_clients(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<DownloadClientResponse>>, StatusCode> {
     let repo = DownloadClientRepository::new(state.db.clone());
-    let clients = repo.get_all().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let clients = repo
+        .get_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(clients.iter().map(db_to_response).collect()))
 }
 
@@ -35,7 +43,9 @@ async fn get_download_client(
     Path(id): Path<i64>,
 ) -> Result<Json<DownloadClientResponse>, StatusCode> {
     let repo = DownloadClientRepository::new(state.db.clone());
-    let client = repo.get_by_id(id).await
+    let client = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(db_to_response(&client)))
@@ -47,7 +57,8 @@ async fn create_download_client(
 ) -> Result<impl IntoResponse, StatusCode> {
     let repo = DownloadClientRepository::new(state.db.clone());
     let settings = fields_to_settings(&body.fields);
-    let tags = serde_json::to_string(&body.tags.unwrap_or_default()).unwrap_or_else(|_| "[]".to_string());
+    let tags =
+        serde_json::to_string(&body.tags.unwrap_or_default()).unwrap_or_else(|_| "[]".to_string());
 
     let model = DownloadClientDbModel {
         id: 0,
@@ -61,8 +72,13 @@ async fn create_download_client(
         tags,
     };
 
-    let id = repo.insert(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let created = repo.get_by_id(id).await
+    let id = repo
+        .insert(&model)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let created = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok((StatusCode::CREATED, Json(db_to_response(&created))))
@@ -74,19 +90,31 @@ async fn update_download_client(
     Json(body): Json<UpdateDownloadClientRequest>,
 ) -> Result<Json<DownloadClientResponse>, StatusCode> {
     let repo = DownloadClientRepository::new(state.db.clone());
-    let mut model = repo.get_by_id(id).await
+    let mut model = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if let Some(name) = body.name { model.name = name; }
-    if let Some(enable) = body.enable { model.enable = enable; }
-    if let Some(priority) = body.priority { model.priority = priority; }
-    if let Some(fields) = body.fields { model.settings = fields_to_settings(&fields); }
+    if let Some(name) = body.name {
+        model.name = name;
+    }
+    if let Some(enable) = body.enable {
+        model.enable = enable;
+    }
+    if let Some(priority) = body.priority {
+        model.priority = priority;
+    }
+    if let Some(fields) = body.fields {
+        model.settings = fields_to_settings(&fields);
+    }
     if let Some(tags) = body.tags {
         model.tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
     }
 
-    repo.update(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    repo.update(&model)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(db_to_response(&model)))
 }
 
@@ -108,21 +136,35 @@ async fn test_download_client(
     let repo = DownloadClientRepository::new(state.db.clone());
     let model = match repo.get_by_id(id).await {
         Ok(Some(m)) => m,
-        _ => return Json(TestResult { success: false, message: Some("Client not found".into()) }),
+        _ => {
+            return Json(TestResult {
+                success: false,
+                message: Some("Client not found".into()),
+            })
+        }
     };
 
     match create_client_from_model(&model) {
         Ok(client) => match client.test().await {
-            Ok(()) => Json(TestResult { success: true, message: None }),
-            Err(e) => Json(TestResult { success: false, message: Some(e.to_string()) }),
+            Ok(()) => Json(TestResult {
+                success: true,
+                message: None,
+            }),
+            Err(e) => Json(TestResult {
+                success: false,
+                message: Some(e.to_string()),
+            }),
         },
-        Err(e) => Json(TestResult { success: false, message: Some(e.to_string()) }),
+        Err(e) => Json(TestResult {
+            success: false,
+            message: Some(e.to_string()),
+        }),
     }
 }
 
 fn db_to_response(model: &DownloadClientDbModel) -> DownloadClientResponse {
-    let settings: serde_json::Value = serde_json::from_str(&model.settings)
-        .unwrap_or(serde_json::json!({}));
+    let settings: serde_json::Value =
+        serde_json::from_str(&model.settings).unwrap_or(serde_json::json!({}));
     let tags: Vec<i32> = serde_json::from_str(&model.tags).unwrap_or_default();
     let fields = settings_to_fields(&settings);
 
@@ -141,13 +183,15 @@ fn db_to_response(model: &DownloadClientDbModel) -> DownloadClientResponse {
 
 fn settings_to_fields(settings: &serde_json::Value) -> Vec<DownloadClientField> {
     match settings.as_object() {
-        Some(obj) => obj.iter().enumerate().map(|(i, (k, v))| {
-            DownloadClientField {
+        Some(obj) => obj
+            .iter()
+            .enumerate()
+            .map(|(i, (k, v))| DownloadClientField {
                 order: i as i32,
                 name: k.clone(),
                 value: v.clone(),
-            }
-        }).collect(),
+            })
+            .collect(),
         None => vec![],
     }
 }

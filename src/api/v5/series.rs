@@ -3,20 +3,21 @@
 //! CRUD operations for TV series
 
 use axum::{
-    Router,
-    routing::{get, post},
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
+    routing::{get, post},
+    Json, Router,
 };
 use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::core::datastore::models::SeriesDbModel;
-use crate::core::datastore::repositories::{SeriesRepository, EpisodeFileRepository};
-use crate::core::mediafiles::{move_series_folder, delete_series_folder, update_episode_file_paths};
+use crate::core::datastore::repositories::{EpisodeFileRepository, SeriesRepository};
+use crate::core::mediafiles::{
+    delete_series_folder, move_series_folder, update_episode_file_paths,
+};
 use crate::web::AppState;
 
 /// Query parameters for listing series
@@ -29,8 +30,16 @@ pub struct SeriesListQuery {
 /// Create series router
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/", get(list_series).post(create_series).put(update_series_by_body))
-        .route("/{id}", get(get_series).put(update_series).delete(delete_series))
+        .route(
+            "/",
+            get(list_series)
+                .post(create_series)
+                .put(update_series_by_body),
+        )
+        .route(
+            "/{id}",
+            get(get_series).put(update_series).delete(delete_series),
+        )
         .route("/{id}/refresh", post(refresh_series))
         .route("/{id}/rescan", post(rescan_series))
         .route("/lookup", get(lookup_series))
@@ -44,7 +53,9 @@ async fn list_series(
 ) -> Result<Json<Vec<SeriesResponse>>, ApiError> {
     let repo = SeriesRepository::new(state.db.clone());
 
-    let db_series = repo.get_all().await
+    let db_series = repo
+        .get_all()
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch series: {}", e)))?;
 
     let mut series_list = Vec::with_capacity(db_series.len());
@@ -65,7 +76,9 @@ async fn get_series(
 ) -> Result<Json<SeriesResponse>, ApiError> {
     let repo = SeriesRepository::new(state.db.clone());
 
-    let series = repo.get_by_id(id).await
+    let series = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch series: {}", e)))?
         .ok_or(ApiError::NotFound)?;
 
@@ -76,7 +89,10 @@ async fn get_series(
 }
 
 /// Enrich a SeriesResponse with seasons and statistics from the database
-async fn enrich_series_response(response: &mut SeriesResponse, db: &crate::core::datastore::Database) {
+async fn enrich_series_response(
+    response: &mut SeriesResponse,
+    db: &crate::core::datastore::Database,
+) {
     use sqlx::Row;
 
     let mut total_episodes = 0i32;
@@ -158,7 +174,9 @@ async fn create_series(
     let repo = SeriesRepository::new(state.db.clone());
 
     // Check if series already exists
-    if let Some(_existing) = repo.get_by_tvdb_id(options.tvdb_id).await
+    if let Some(_existing) = repo
+        .get_by_tvdb_id(options.tvdb_id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?
     {
         return Err(ApiError::Validation("Series already exists".to_string()));
@@ -174,7 +192,9 @@ async fn create_series(
     let root_folder_path = options.get_root_folder_path();
 
     // Parse first_aired date if provided
-    let first_aired = options.first_aired.as_ref()
+    let first_aired = options
+        .first_aired
+        .as_ref()
         .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
 
     let series_type = match options.series_type.as_str() {
@@ -217,7 +237,9 @@ async fn create_series(
         imdb_votes: None,
     };
 
-    let id = repo.insert(&db_series).await
+    let id = repo
+        .insert(&db_series)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to create series: {}", e)))?;
 
     tracing::info!("Created series: id={}, title={}", id, options.title);
@@ -228,7 +250,11 @@ async fn create_series(
     let series_id = id;
     let series_title = options.title.clone();
     tokio::spawn(async move {
-        tracing::info!("Auto-refreshing new series: {} (id={})", series_title, series_id);
+        tracing::info!(
+            "Auto-refreshing new series: {} (id={})",
+            series_title,
+            series_id
+        );
 
         // Trigger refresh to fetch episodes from IMDB + Skyhook
         if let Err(e) = auto_refresh_series(series_id, &db_clone, &metadata_svc).await {
@@ -242,9 +268,13 @@ async fn create_series(
     });
 
     // Fetch the created series
-    let created = repo.get_by_id(id).await
+    let created = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch created series: {}", e)))?
-        .ok_or(ApiError::Internal("Series not found after creation".to_string()))?;
+        .ok_or(ApiError::Internal(
+            "Series not found after creation".to_string(),
+        ))?;
 
     let mut response = SeriesResponse::from(created);
     enrich_series_response(&mut response, &state.db).await;
@@ -263,7 +293,9 @@ async fn import_series(
 
     for import_req in series_list {
         // Extract folder name and year from path
-        let folder_name = import_req.path.as_ref()
+        let folder_name = import_req
+            .path
+            .as_ref()
             .and_then(|p| p.rsplit('/').next())
             .unwrap_or("")
             .to_string();
@@ -287,10 +319,21 @@ async fn import_series(
 
         // If tvdbId is not provided or is 0, lookup the series
         let tvdb_id = if import_req.tvdb_id.unwrap_or(0) <= 0 {
-            tracing::info!("Looking up series for import: {} (year={:?})", lookup_title, folder_year);
-            match lookup_series_by_title_and_year(&lookup_title, folder_year, &state.imdb_client).await {
+            tracing::info!(
+                "Looking up series for import: {} (year={:?})",
+                lookup_title,
+                folder_year
+            );
+            match lookup_series_by_title_and_year(&lookup_title, folder_year, &state.imdb_client)
+                .await
+            {
                 Ok(Some(result)) => {
-                    tracing::info!("Found series: {} (tvdbId={}, year={:?})", result.title, result.tvdb_id, result.year);
+                    tracing::info!(
+                        "Found series: {} (tvdbId={}, year={:?})",
+                        result.title,
+                        result.tvdb_id,
+                        result.year
+                    );
                     result.tvdb_id
                 }
                 Ok(None) => {
@@ -320,7 +363,9 @@ async fn import_series(
             root_folder_path: import_req.root_folder_path,
             path: import_req.path,
             monitored: import_req.monitored.unwrap_or(true),
-            series_type: import_req.series_type.unwrap_or_else(|| "standard".to_string()),
+            series_type: import_req
+                .series_type
+                .unwrap_or_else(|| "standard".to_string()),
             season_folder: import_req.season_folder.unwrap_or(true),
             tags: import_req.tags.unwrap_or_default(),
             add_options: AddOptionsRequest::default(),
@@ -348,7 +393,9 @@ async fn import_series(
         let root_folder_path = options.get_root_folder_path();
 
         // Parse first_aired date if provided
-        let first_aired = options.first_aired.as_ref()
+        let first_aired = options
+            .first_aired
+            .as_ref()
             .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
 
         let series_type = match options.series_type.as_str() {
@@ -402,7 +449,11 @@ async fn import_series(
                     let metadata_svc = state.metadata_service.clone();
                     let series_title = options.title.clone();
                     tokio::spawn(async move {
-                        tracing::info!("Auto-refreshing imported series: {} (id={})", series_title, id);
+                        tracing::info!(
+                            "Auto-refreshing imported series: {} (id={})",
+                            series_title,
+                            id
+                        );
                         if let Err(e) = auto_refresh_series(id, &db_clone, &metadata_svc).await {
                             tracing::error!("Failed to auto-refresh series {}: {}", id, e);
                         }
@@ -430,7 +481,9 @@ async fn update_series(
 ) -> Result<Json<SeriesResponse>, ApiError> {
     let repo = SeriesRepository::new(state.db.clone());
 
-    let mut series = repo.get_by_id(id).await
+    let mut series = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch series: {}", e)))?
         .ok_or(ApiError::NotFound)?;
 
@@ -460,7 +513,8 @@ async fn update_series(
         };
     }
 
-    repo.update(&series).await
+    repo.update(&series)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to update series: {}", e)))?;
 
     tracing::info!("Updated series: id={}", id);
@@ -478,7 +532,9 @@ async fn update_series_by_body(
     let repo = SeriesRepository::new(state.db.clone());
     let id = body.id;
 
-    let mut series = repo.get_by_id(id).await
+    let mut series = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch series: {}", e)))?
         .ok_or(ApiError::NotFound)?;
 
@@ -512,10 +568,7 @@ async fn update_series_by_body(
 
     // Handle moveFiles if path changed
     if params.move_files && series.path != old_path {
-        tracing::info!(
-            "Moving series files from {} to {}",
-            old_path, series.path
-        );
+        tracing::info!("Moving series files from {} to {}", old_path, series.path);
 
         let old_path_ref = std::path::Path::new(&old_path);
         let new_path_ref = std::path::Path::new(&series.path);
@@ -555,7 +608,8 @@ async fn update_series_by_body(
         }
     }
 
-    repo.update(&series).await
+    repo.update(&series)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to update series: {}", e)))?;
 
     tracing::info!("Updated series: id={}, moveFiles={}", id, params.move_files);
@@ -572,7 +626,9 @@ async fn delete_series(
     let repo = SeriesRepository::new(state.db.clone());
 
     // Check if series exists
-    let series = repo.get_by_id(id).await
+    let series = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch series: {}", e)))?
         .ok_or(ApiError::NotFound)?;
 
@@ -596,7 +652,8 @@ async fn delete_series(
     }
 
     // Delete from database
-    repo.delete(id).await
+    repo.delete(id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to delete series: {}", e)))?;
 
     tracing::info!(
@@ -621,21 +678,33 @@ async fn refresh_series(
     let repo = SeriesRepository::new(state.db.clone());
     let episode_repo = EpisodeRepository::new(state.db.clone());
 
-    let mut series = repo.get_by_id(id).await
+    let mut series = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch series: {}", e)))?
         .ok_or(ApiError::NotFound)?;
 
-    tracing::info!("Refreshing series: {} (TVDB: {})", series.title, series.tvdb_id);
+    tracing::info!(
+        "Refreshing series: {} (TVDB: {})",
+        series.title,
+        series.tvdb_id
+    );
 
     // Fetch merged metadata from IMDB + Skyhook
-    let metadata = state.metadata_service
+    let metadata = state
+        .metadata_service
         .fetch_series_metadata(series.tvdb_id, series.imdb_id.as_deref())
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch metadata: {}", e)))?;
 
     // Update series metadata from merged result
     series.overview = metadata.overview;
-    series.status = match metadata.status.as_deref().map(|s| s.to_lowercase()).as_deref() {
+    series.status = match metadata
+        .status
+        .as_deref()
+        .map(|s| s.to_lowercase())
+        .as_deref()
+    {
         Some("continuing") => 0,
         Some("ended") => 1,
         Some("upcoming") => 2,
@@ -666,7 +735,8 @@ async fn refresh_series(
     series.last_info_sync = Some(Utc::now());
 
     // Update series in database
-    repo.update(&series).await
+    repo.update(&series)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to update series: {}", e)))?;
 
     // Sync episodes from Skyhook (episodes always come from Skyhook for tvdb_id matching)
@@ -674,21 +744,31 @@ async fn refresh_series(
     let mut episodes_updated = 0;
 
     for ep in metadata.episodes {
-        let air_date = ep.air_date.as_ref()
+        let air_date = ep
+            .air_date
+            .as_ref()
             .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-        let air_date_utc = ep.air_date_utc.as_ref()
+        let air_date_utc = ep
+            .air_date_utc
+            .as_ref()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc));
 
         let existing = if ep.tvdb_id > 0 {
             episode_repo.get_by_tvdb_id(ep.tvdb_id).await.ok().flatten()
         } else {
-            episode_repo.get_by_series_season_episode(id, ep.season_number, ep.episode_number).await.ok().flatten()
+            episode_repo
+                .get_by_series_season_episode(id, ep.season_number, ep.episode_number)
+                .await
+                .ok()
+                .flatten()
         };
 
         match existing {
             Some(mut episode) => {
-                episode.title = ep.title.unwrap_or_else(|| format!("Episode {}", ep.episode_number));
+                episode.title = ep
+                    .title
+                    .unwrap_or_else(|| format!("Episode {}", ep.episode_number));
                 episode.overview = ep.overview;
                 episode.air_date = air_date;
                 episode.air_date_utc = air_date_utc;
@@ -698,7 +778,9 @@ async fn refresh_series(
                     episode.tvdb_id = ep.tvdb_id;
                 }
 
-                episode_repo.update(&episode).await
+                episode_repo
+                    .update(&episode)
+                    .await
                     .map_err(|e| ApiError::Internal(format!("Failed to update episode: {}", e)))?;
                 episodes_updated += 1;
             }
@@ -714,7 +796,9 @@ async fn refresh_series(
                     scene_absolute_episode_number: None,
                     scene_episode_number: None,
                     scene_season_number: None,
-                    title: ep.title.unwrap_or_else(|| format!("Episode {}", ep.episode_number)),
+                    title: ep
+                        .title
+                        .unwrap_or_else(|| format!("Episode {}", ep.episode_number)),
                     overview: ep.overview,
                     air_date,
                     air_date_utc,
@@ -729,7 +813,9 @@ async fn refresh_series(
                     imdb_votes: None,
                 };
 
-                episode_repo.insert(&episode).await
+                episode_repo
+                    .insert(&episode)
+                    .await
                     .map_err(|e| ApiError::Internal(format!("Failed to insert episode: {}", e)))?;
                 episodes_added += 1;
             }
@@ -738,20 +824,25 @@ async fn refresh_series(
 
     // Enrich episodes with IMDB ratings after Skyhook sync
     if let Some(imdb_id) = &series.imdb_id {
-        let all_episodes = episode_repo.get_by_series_id(id).await
+        let all_episodes = episode_repo
+            .get_by_series_id(id)
+            .await
             .map_err(|e| ApiError::Internal(format!("Failed to fetch episodes: {}", e)))?;
-        let mut enrichments: Vec<EpisodeEnrichment> = all_episodes.iter().map(|ep| {
-            EpisodeEnrichment {
+        let mut enrichments: Vec<EpisodeEnrichment> = all_episodes
+            .iter()
+            .map(|ep| EpisodeEnrichment {
                 season_number: ep.season_number,
                 episode_number: ep.episode_number,
                 imdb_id: None,
                 imdb_rating: None,
                 imdb_votes: None,
-            }
-        }).collect();
+            })
+            .collect();
 
-        if let Ok(enriched) = state.metadata_service
-            .enrich_episodes_with_imdb(imdb_id, &mut enrichments).await
+        if let Ok(enriched) = state
+            .metadata_service
+            .enrich_episodes_with_imdb(imdb_id, &mut enrichments)
+            .await
         {
             if enriched > 0 {
                 // Apply enrichments back to DB
@@ -770,11 +861,15 @@ async fn refresh_series(
 
     tracing::info!(
         "Refreshed series {}: {} episodes added, {} updated",
-        series.title, episodes_added, episodes_updated
+        series.title,
+        episodes_added,
+        episodes_updated
     );
 
     // Return updated series
-    let updated = repo.get_by_id(id).await
+    let updated = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch updated series: {}", e)))?
         .ok_or(ApiError::NotFound)?;
 
@@ -825,7 +920,9 @@ async fn rescan_series(
 ) -> Result<Json<SeriesResponse>, ApiError> {
     let repo = SeriesRepository::new(state.db.clone());
 
-    let series = repo.get_by_id(id).await
+    let series = repo
+        .get_by_id(id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch series: {}", e)))?
         .ok_or(ApiError::NotFound)?;
 
@@ -876,15 +973,25 @@ async fn lookup_series(
             overview: s.overview,
             year: s.year.unwrap_or(0),
             status: s.status.unwrap_or_else(|| "unknown".to_string()),
-            images: s.images.unwrap_or_default().into_iter().map(|img| SeriesImage {
-                cover_type: img.cover_type,
-                url: img.url,
-            }).collect(),
-            seasons: s.seasons.unwrap_or_default().into_iter().map(|season| SeasonResource {
-                season_number: season.season_number,
-                monitored: true,
-                statistics: None,
-            }).collect(),
+            images: s
+                .images
+                .unwrap_or_default()
+                .into_iter()
+                .map(|img| SeriesImage {
+                    cover_type: img.cover_type,
+                    url: img.url,
+                })
+                .collect(),
+            seasons: s
+                .seasons
+                .unwrap_or_default()
+                .into_iter()
+                .map(|season| SeasonResource {
+                    season_number: season.season_number,
+                    monitored: true,
+                    statistics: None,
+                })
+                .collect(),
             ratings: Ratings {
                 votes: s.ratings.as_ref().and_then(|r| r.votes).unwrap_or(0),
                 value: s.ratings.as_ref().and_then(|r| r.value).unwrap_or(0.0),
@@ -905,7 +1012,8 @@ async fn lookup_series(
 // Helper functions
 
 fn clean_title(title: &str) -> String {
-    title.to_lowercase()
+    title
+        .to_lowercase()
         .replace(|c: char| !c.is_alphanumeric() && c != ' ', " ")
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -913,7 +1021,8 @@ fn clean_title(title: &str) -> String {
 }
 
 fn generate_slug(title: &str) -> String {
-    title.to_lowercase()
+    title
+        .to_lowercase()
         .replace(|c: char| !c.is_alphanumeric() && c != ' ', "-")
         .replace(' ', "-")
         .replace("--", "-")
@@ -927,9 +1036,8 @@ fn extract_year_from_folder(folder: &str) -> Option<i32> {
         regex::Regex::new(r"[\s.\(_-]((?:19|20)\d{2})[\s.\)_-]?$").expect("valid regex")
     });
     // Also try parenthesized year anywhere: "Show (2014)"
-    static PAREN_YEAR_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
-        regex::Regex::new(r"\((\d{4})\)").expect("valid regex")
-    });
+    static PAREN_YEAR_RE: once_cell::sync::Lazy<regex::Regex> =
+        once_cell::sync::Lazy::new(|| regex::Regex::new(r"\((\d{4})\)").expect("valid regex"));
 
     if let Some(caps) = PAREN_YEAR_RE.captures(folder) {
         if let Ok(y) = caps[1].parse::<i32>() {
@@ -965,7 +1073,8 @@ async fn lookup_series_by_title_and_year(
             if !imdb_results.is_empty() {
                 // Pick the IMDB result whose start_year best matches
                 let best = if let Some(yr) = year {
-                    imdb_results.iter()
+                    imdb_results
+                        .iter()
                         .filter(|s| s.start_year.is_some())
                         .min_by_key(|s| (s.start_year.unwrap_or(0) - yr).unsigned_abs())
                         .or(imdb_results.first())
@@ -995,7 +1104,9 @@ async fn lookup_series_by_title_and_year(
                             imdb_match.title.clone()
                         };
 
-                        if let Ok(Some(skyhook)) = search_skyhook_by_title_year(&skyhook_term, imdb_match.start_year).await {
+                        if let Ok(Some(skyhook)) =
+                            search_skyhook_by_title_year(&skyhook_term, imdb_match.start_year).await
+                        {
                             return Ok(Some(skyhook));
                         }
                     }
@@ -1042,16 +1153,15 @@ async fn search_skyhook_by_title_year(
     // If we have a year, sort by year proximity; otherwise take the first result
     match year {
         Some(yr) => {
-            let best = results.into_iter()
-                .min_by_key(|s| {
-                    let s_year = s.year.unwrap_or(0);
-                    if s_year == 0 {
-                        // No year info — deprioritize but don't eliminate
-                        1000i32
-                    } else {
-                        (s_year - yr).abs()
-                    }
-                });
+            let best = results.into_iter().min_by_key(|s| {
+                let s_year = s.year.unwrap_or(0);
+                if s_year == 0 {
+                    // No year info — deprioritize but don't eliminate
+                    1000i32
+                } else {
+                    (s_year - yr).abs()
+                }
+            });
             Ok(best)
         }
         None => Ok(results.into_iter().next()),
@@ -1071,11 +1181,17 @@ async fn auto_refresh_series(
     let series_repo = SeriesRepository::new(db.clone());
     let episode_repo = EpisodeRepository::new(db.clone());
 
-    let mut series = series_repo.get_by_id(series_id).await
+    let mut series = series_repo
+        .get_by_id(series_id)
+        .await
         .map_err(|e| format!("Failed to fetch series: {}", e))?
         .ok_or_else(|| "Series not found".to_string())?;
 
-    tracing::info!("Fetching episodes for {} (TVDB: {})", series.title, series.tvdb_id);
+    tracing::info!(
+        "Fetching episodes for {} (TVDB: {})",
+        series.title,
+        series.tvdb_id
+    );
 
     // Fetch merged metadata from IMDB + Skyhook
     let metadata = metadata_service
@@ -1085,7 +1201,12 @@ async fn auto_refresh_series(
 
     // Update series metadata
     series.overview = metadata.overview;
-    series.status = match metadata.status.as_deref().map(|s| s.to_lowercase()).as_deref() {
+    series.status = match metadata
+        .status
+        .as_deref()
+        .map(|s| s.to_lowercase())
+        .as_deref()
+    {
         Some("continuing") => 0,
         Some("ended") => 1,
         Some("upcoming") => 2,
@@ -1114,20 +1235,29 @@ async fn auto_refresh_series(
     series.imdb_votes = metadata.imdb_votes;
     series.last_info_sync = Some(Utc::now());
 
-    series_repo.update(&series).await
+    series_repo
+        .update(&series)
+        .await
         .map_err(|e| format!("Failed to update series: {}", e))?;
 
     // Sync episodes
     let mut added = 0;
     for ep in metadata.episodes {
-        let air_date = ep.air_date.as_ref()
+        let air_date = ep
+            .air_date
+            .as_ref()
             .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-        let air_date_utc = ep.air_date_utc.as_ref()
+        let air_date_utc = ep
+            .air_date_utc
+            .as_ref()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc));
 
-        let existing = episode_repo.get_by_series_season_episode(series_id, ep.season_number, ep.episode_number)
-            .await.ok().flatten();
+        let existing = episode_repo
+            .get_by_series_season_episode(series_id, ep.season_number, ep.episode_number)
+            .await
+            .ok()
+            .flatten();
 
         if existing.is_none() {
             let episode = EpisodeDbModel {
@@ -1141,7 +1271,9 @@ async fn auto_refresh_series(
                 scene_absolute_episode_number: None,
                 scene_episode_number: None,
                 scene_season_number: None,
-                title: ep.title.unwrap_or_else(|| format!("Episode {}", ep.episode_number)),
+                title: ep
+                    .title
+                    .unwrap_or_else(|| format!("Episode {}", ep.episode_number)),
                 overview: ep.overview,
                 air_date,
                 air_date_utc,
@@ -1163,20 +1295,24 @@ async fn auto_refresh_series(
 
     // Enrich episodes with IMDB ratings
     if let Some(imdb_id) = &series.imdb_id {
-        let all_episodes = episode_repo.get_by_series_id(series_id).await
+        let all_episodes = episode_repo
+            .get_by_series_id(series_id)
+            .await
             .map_err(|e| format!("Failed to fetch episodes: {}", e))?;
-        let mut enrichments: Vec<EpisodeEnrichment> = all_episodes.iter().map(|ep| {
-            EpisodeEnrichment {
+        let mut enrichments: Vec<EpisodeEnrichment> = all_episodes
+            .iter()
+            .map(|ep| EpisodeEnrichment {
                 season_number: ep.season_number,
                 episode_number: ep.episode_number,
                 imdb_id: None,
                 imdb_rating: None,
                 imdb_votes: None,
-            }
-        }).collect();
+            })
+            .collect();
 
         if let Ok(enriched) = metadata_service
-            .enrich_episodes_with_imdb(imdb_id, &mut enrichments).await
+            .enrich_episodes_with_imdb(imdb_id, &mut enrichments)
+            .await
         {
             if enriched > 0 {
                 for (ep, enr) in all_episodes.iter().zip(enrichments.iter()) {
@@ -1197,14 +1333,21 @@ async fn auto_refresh_series(
 }
 
 /// Auto-scan a series: scan disk for existing episode files
-async fn auto_scan_series(series_id: i64, db: &crate::core::datastore::Database) -> Result<(), String> {
-    use crate::core::datastore::repositories::{EpisodeRepository, EpisodeFileRepository, SeriesRepository};
+async fn auto_scan_series(
+    series_id: i64,
+    db: &crate::core::datastore::Database,
+) -> Result<(), String> {
+    use crate::core::datastore::repositories::{
+        EpisodeFileRepository, EpisodeRepository, SeriesRepository,
+    };
     use std::path::Path;
 
     let series_repo = SeriesRepository::new(db.clone());
     let episode_repo = EpisodeRepository::new(db.clone());
 
-    let series = series_repo.get_by_id(series_id).await
+    let series = series_repo
+        .get_by_id(series_id)
+        .await
         .map_err(|e| format!("Failed to fetch series: {}", e))?
         .ok_or_else(|| "Series not found".to_string())?;
 
@@ -1217,7 +1360,9 @@ async fn auto_scan_series(series_id: i64, db: &crate::core::datastore::Database)
     tracing::info!("Scanning disk for {}: {}", series.title, series.path);
 
     // Get all episodes for this series
-    let episodes = episode_repo.get_by_series_id(series_id).await
+    let episodes = episode_repo
+        .get_by_series_id(series_id)
+        .await
         .map_err(|e| format!("Failed to fetch episodes: {}", e))?;
 
     // Walk the series directory looking for video files
@@ -1250,10 +1395,12 @@ async fn auto_scan_series(series_id: i64, db: &crate::core::datastore::Database)
 
     // Get existing episode files to avoid duplicates
     let file_repo = EpisodeFileRepository::new(db.clone());
-    let existing_files = file_repo.get_by_series_id(series_id).await.unwrap_or_default();
-    let existing_paths: std::collections::HashSet<_> = existing_files.iter()
-        .map(|f| f.path.clone())
-        .collect();
+    let existing_files = file_repo
+        .get_by_series_id(series_id)
+        .await
+        .unwrap_or_default();
+    let existing_paths: std::collections::HashSet<_> =
+        existing_files.iter().map(|f| f.path.clone()).collect();
 
     // Try to match files to episodes using filename parsing
     for file_path in &video_files {
@@ -1268,7 +1415,8 @@ async fn auto_scan_series(series_id: i64, db: &crate::core::datastore::Database)
             // Parse season and episode from filename (e.g., "S01E01", "1x01", etc.)
             if let Some((season, episode)) = parse_season_episode(file_name) {
                 // Find matching episode
-                if let Some(mut ep) = episodes.iter()
+                if let Some(mut ep) = episodes
+                    .iter()
                     .find(|e| e.season_number == season && e.episode_number == episode)
                     .cloned()
                 {
@@ -1278,7 +1426,8 @@ async fn auto_scan_series(series_id: i64, db: &crate::core::datastore::Database)
                         .unwrap_or(0);
 
                     // Calculate relative path from series folder
-                    let relative_path = file_path.strip_prefix(series_path)
+                    let relative_path = file_path
+                        .strip_prefix(series_path)
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_else(|_| file_name.to_string());
 
@@ -1296,7 +1445,9 @@ async fn auto_scan_series(series_id: i64, db: &crate::core::datastore::Database)
                         date_added: Utc::now(),
                         scene_name: Some(file_name.to_string()),
                         release_group: parse_release_group(file_name),
-                        quality: serde_json::to_string(&quality).unwrap_or_else(|_| r#"{"quality":{"id":1,"name":"HDTV-720p"}}"#.to_string()),
+                        quality: serde_json::to_string(&quality).unwrap_or_else(|_| {
+                            r#"{"quality":{"id":1,"name":"HDTV-720p"}}"#.to_string()
+                        }),
                         languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
                         media_info: None,
                         original_file_path: Some(file_path_str.clone()),
@@ -1329,7 +1480,9 @@ async fn auto_scan_series(series_id: i64, db: &crate::core::datastore::Database)
 
     tracing::info!(
         "Disk scan complete for {}: {} files found, {} episodes matched",
-        series.title, files_found, episodes_matched
+        series.title,
+        files_found,
+        episodes_matched
     );
 
     Ok(())
@@ -1466,9 +1619,10 @@ where
     match value {
         None => Ok(None),
         Some(serde_json::Value::Number(n)) => Ok(n.as_f64()),
-        Some(serde_json::Value::String(s)) => {
-            s.parse::<f64>().map(Some).map_err(|_| D::Error::custom("invalid rating value"))
-        }
+        Some(serde_json::Value::String(s)) => s
+            .parse::<f64>()
+            .map(Some)
+            .map_err(|_| D::Error::custom("invalid rating value")),
         _ => Ok(None),
     }
 }
@@ -1526,7 +1680,9 @@ impl CreateSeriesRequest {
         }
         // Either path or rootFolderPath must be provided
         if self.path.is_none() && self.root_folder_path.as_ref().is_none_or(|s| s.is_empty()) {
-            return Err(ApiError::Validation("path or rootFolderPath is required".to_string()));
+            return Err(ApiError::Validation(
+                "path or rootFolderPath is required".to_string(),
+            ));
         }
         Ok(())
     }
@@ -1814,7 +1970,10 @@ impl From<SeriesDbModel> for SeriesResponse {
             network: s.network,
             air_time: None,
             images,
-            original_language: Some(LanguageResource { id: 1, name: "English".to_string() }),
+            original_language: Some(LanguageResource {
+                id: 1,
+                name: "English".to_string(),
+            }),
             remote_poster: None,
             seasons: vec![], // TODO: populate from database
             year: s.year,
@@ -1838,8 +1997,8 @@ impl From<SeriesDbModel> for SeriesResponse {
             root_folder_path: s.root_folder_path,
             folder,
             certification: s.certification,
-            genres: vec![],  // TODO: populate from database
-            tags: vec![],    // TODO: populate from database
+            genres: vec![], // TODO: populate from database
+            tags: vec![],   // TODO: populate from database
             added: s.added.to_rfc3339(),
             add_options: None,
             ratings: Ratings {
@@ -1925,7 +2084,10 @@ impl IntoResponse for ApiError {
             ApiError::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
             ApiError::Internal(msg) => {
                 tracing::error!("Internal error: {}", msg);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
             }
         };
 

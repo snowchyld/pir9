@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, error, info, warn};
 
 use crate::core::datastore::Database;
 use crate::core::messaging::{HybridEventBus, Message, ScanType};
@@ -197,7 +197,10 @@ impl JobTracker {
     pub fn record_result(&mut self, job_id: &str) -> Option<JobState> {
         if let Some(job) = self.jobs.get_mut(job_id) {
             job.record_result();
-            debug!("Job {} received result {}/{}", job_id, job.results_received, job.results_expected);
+            debug!(
+                "Job {} received result {}/{}",
+                job_id, job.results_received, job.results_expected
+            );
             Some(job.state.clone())
         } else {
             None
@@ -210,8 +213,11 @@ impl JobTracker {
 
         for job in self.jobs.values_mut() {
             if job.is_timed_out(self.timeout) {
-                warn!("Job {} timed out (last update: {:?} ago)",
-                      job.job_id, job.updated_at.elapsed());
+                warn!(
+                    "Job {} timed out (last update: {:?} ago)",
+                    job.job_id,
+                    job.updated_at.elapsed()
+                );
                 job.mark_failed("Timeout - no response from workers");
                 timed_out.push(job.clone());
             }
@@ -228,7 +234,10 @@ impl JobTracker {
             if job.state == JobState::Failed && job.can_retry() {
                 job.prepare_retry();
                 to_retry.push(job.clone());
-                info!("Preparing job {} for retry (attempt {})", job.job_id, job.retry_count);
+                info!(
+                    "Preparing job {} for retry (attempt {})",
+                    job.job_id, job.retry_count
+                );
             }
         }
 
@@ -350,7 +359,11 @@ impl JobTrackerService {
 
     /// Dispatch a job to workers
     async fn dispatch_job(&self, job: &ScanJob) {
-        info!("Dispatching job {} (attempt {})", job.job_id, job.retry_count + 1);
+        info!(
+            "Dispatching job {} (attempt {})",
+            job.job_id,
+            job.retry_count + 1
+        );
 
         let message = Message::ScanRequest {
             job_id: job.job_id.clone(),
@@ -372,7 +385,12 @@ impl JobTrackerService {
     /// Retry a failed job
     async fn retry_job(&self, job: &ScanJob) {
         let delay = job.retry_delay();
-        info!("Retrying job {} in {:?} (attempt {})", job.job_id, delay, job.retry_count + 1);
+        info!(
+            "Retrying job {} in {:?} (attempt {})",
+            job.job_id,
+            delay,
+            job.retry_count + 1
+        );
 
         // Wait for retry delay
         tokio::time::sleep(delay).await;
@@ -407,7 +425,9 @@ impl JobTrackerService {
     /// Execute a scan locally (fallback)
     async fn execute_local_scan(&self, job: &ScanJob) -> anyhow::Result<()> {
         use crate::core::datastore::models::EpisodeFileDbModel;
-        use crate::core::datastore::repositories::{EpisodeFileRepository, EpisodeRepository, SeriesRepository};
+        use crate::core::datastore::repositories::{
+            EpisodeFileRepository, EpisodeRepository, SeriesRepository,
+        };
         use crate::core::scanner;
         use chrono::Utc;
         use std::path::Path;
@@ -434,12 +454,17 @@ impl JobTrackerService {
                 let file_path_str = file.path.to_string_lossy().to_string();
 
                 // Check if file exists
-                if episode_file_repo.get_by_path(&file_path_str).await?.is_some() {
+                if episode_file_repo
+                    .get_by_path(&file_path_str)
+                    .await?
+                    .is_some()
+                {
                     continue;
                 }
 
                 let season_number = file.season_number.unwrap_or(1);
-                let relative_path = file.path
+                let relative_path = file
+                    .path
                     .strip_prefix(&series.path)
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|_| file.filename.clone());
@@ -476,7 +501,8 @@ impl JobTrackerService {
 
                 // Link episodes
                 for ep_num in &file.episode_numbers {
-                    if let Some(mut ep) = episodes.iter()
+                    if let Some(mut ep) = episodes
+                        .iter()
                         .find(|e| e.season_number == season_number && e.episode_number == *ep_num)
                         .cloned()
                     {

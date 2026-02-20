@@ -1,6 +1,11 @@
 //! Manual Import API endpoints
 
-use axum::{extract::{Query, State}, response::Json, routing::get, Router};
+use axum::{
+    extract::{Query, State},
+    response::Json,
+    routing::get,
+    Router,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -214,6 +219,5 @@ pub async fn get_manual_import(
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/", get(get_manual_import))
+    Router::new().route("/", get(get_manual_import))
 }

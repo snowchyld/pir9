@@ -30,7 +30,10 @@ pub async fn get_custom_filters(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<CustomFilterResource>>, StatusCode> {
     let repo = CustomFilterRepository::new(state.db.clone());
-    let items = repo.get_all().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let items = repo
+        .get_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(items.iter().map(db_to_resource).collect()))
 }
 
@@ -39,7 +42,9 @@ pub async fn get_custom_filter(
     Path(id): Path<i64>,
 ) -> Result<Json<CustomFilterResource>, StatusCode> {
     let repo = CustomFilterRepository::new(state.db.clone());
-    let item = repo.get_by_id(id).await
+    let item = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(db_to_resource(&item)))
@@ -51,8 +56,13 @@ pub async fn create_custom_filter(
 ) -> Result<impl IntoResponse, StatusCode> {
     let repo = CustomFilterRepository::new(state.db.clone());
     let model = resource_to_db(&body, None);
-    let id = repo.insert(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let created = repo.get_by_id(id).await
+    let id = repo
+        .insert(&model)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let created = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok((StatusCode::CREATED, Json(db_to_resource(&created))))
@@ -64,11 +74,15 @@ pub async fn update_custom_filter(
     Json(body): Json<CustomFilterResource>,
 ) -> Result<Json<CustomFilterResource>, StatusCode> {
     let repo = CustomFilterRepository::new(state.db.clone());
-    let _existing = repo.get_by_id(id).await
+    let _existing = repo
+        .get_by_id(id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     let model = resource_to_db(&body, Some(id));
-    repo.update(&model).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    repo.update(&model)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(db_to_resource(&model)))
 }
 
@@ -84,8 +98,7 @@ pub async fn delete_custom_filter(
 }
 
 fn db_to_resource(model: &CustomFilterDbModel) -> CustomFilterResource {
-    let filters: Vec<serde_json::Value> = serde_json::from_str(&model.filters)
-        .unwrap_or_default();
+    let filters: Vec<serde_json::Value> = serde_json::from_str(&model.filters).unwrap_or_default();
     CustomFilterResource {
         id: model.id as i32,
         filter_type: model.filter_type.clone(),
@@ -99,13 +112,17 @@ fn resource_to_db(resource: &CustomFilterResource, id: Option<i64>) -> CustomFil
         id: id.unwrap_or(0),
         filter_type: resource.filter_type.clone(),
         label: resource.label.clone(),
-        filters: serde_json::to_string(&resource.filters)
-            .unwrap_or_else(|_| "[]".to_string()),
+        filters: serde_json::to_string(&resource.filters).unwrap_or_else(|_| "[]".to_string()),
     }
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(get_custom_filters).post(create_custom_filter))
-        .route("/{id}", get(get_custom_filter).put(update_custom_filter).delete(delete_custom_filter))
+        .route(
+            "/{id}",
+            get(get_custom_filter)
+                .put(update_custom_filter)
+                .delete(delete_custom_filter),
+        )
 }

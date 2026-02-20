@@ -68,17 +68,17 @@ fn default_redis_timeout() -> u64 {
 pub struct ServerConfig {
     #[validate(range(min = 1, max = 65535))]
     pub port: u16,
-    
+
     #[validate(length(min = 1))]
     pub bind_address: String,
-    
+
     pub enable_ssl: bool,
     pub ssl_cert_path: Option<PathBuf>,
     pub ssl_key_path: Option<PathBuf>,
-    
+
     #[validate(range(min = 1))]
     pub request_timeout_secs: u64,
-    
+
     #[validate(range(min = 1))]
     pub max_body_size_mb: usize,
 }
@@ -87,12 +87,12 @@ pub struct ServerConfig {
 pub struct DatabaseConfig {
     #[validate(length(min = 1))]
     pub database_type: String,
-    
+
     pub connection_string: String,
-    
+
     #[validate(range(min = 1))]
     pub max_connections: u32,
-    
+
     #[validate(range(min = 1))]
     pub connection_timeout_secs: u64,
 }
@@ -153,10 +153,10 @@ fn default_max_login_attempts() -> u32 {
 pub struct DownloadConfig {
     #[validate(range(min = 1))]
     pub check_interval_secs: u64,
-    
+
     #[validate(range(min = 1))]
     pub download_timeout_mins: u64,
-    
+
     pub enable_completed_download_handling: bool,
     pub remove_completed_downloads: bool,
     pub remove_failed_downloads: bool,
@@ -165,21 +165,21 @@ pub struct DownloadConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct MediaConfig {
     pub default_root_folder: PathBuf,
-    
+
     pub rename_episodes: bool,
     pub replace_illegal_chars: bool,
     pub colon_replacement_format: String,
-    
+
     #[validate(length(min = 1))]
     pub episode_naming_pattern: String,
-    
+
     #[validate(length(min = 1))]
     pub season_folder_format: String,
-    
+
     pub create_empty_series_folders: bool,
     pub delete_empty_folders: bool,
     pub skip_free_space_check: bool,
-    
+
     #[validate(range(min = 1))]
     pub minimum_free_space_mb: u64,
 }
@@ -193,11 +193,26 @@ pub struct NotificationConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NotificationProvider {
-    Webhook { url: String, method: String },
-    Email { smtp_server: String, port: u16, username: String, password: String },
-    Discord { webhook_url: String },
-    Slack { webhook_url: String },
-    Telegram { bot_token: String, chat_id: String },
+    Webhook {
+        url: String,
+        method: String,
+    },
+    Email {
+        smtp_server: String,
+        port: u16,
+        username: String,
+        password: String,
+    },
+    Discord {
+        webhook_url: String,
+    },
+    Slack {
+        webhook_url: String,
+    },
+    Telegram {
+        bot_token: String,
+        chat_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,7 +264,9 @@ impl Default for AppConfig {
                 rename_episodes: true,
                 replace_illegal_chars: true,
                 colon_replacement_format: "dash".to_string(),
-                episode_naming_pattern: "{Series Title} - S{season:00}E{episode:00} - {Episode Title} [{Quality Full}]".to_string(),
+                episode_naming_pattern:
+                    "{Series Title} - S{season:00}E{episode:00} - {Episode Title} [{Quality Full}]"
+                        .to_string(),
                 season_folder_format: "Season {season:00}".to_string(),
                 create_empty_series_folders: false,
                 delete_empty_folders: true,
@@ -279,25 +296,26 @@ impl AppConfig {
                 .map(|d| d.join("pir9/config.toml"))
                 .unwrap_or_default(),
         ];
-        
+
         for path in &config_paths {
             if path.exists() {
                 let content = std::fs::read_to_string(path)
                     .with_context(|| format!("Failed to read config from {:?}", path))?;
-                
+
                 let mut config: AppConfig = toml::from_str(&content)
                     .with_context(|| format!("Failed to parse config from {:?}", path))?;
-                
+
                 // Override with environment variables
                 config.override_from_env()?;
-                
-                config.validate()
+
+                config
+                    .validate()
                     .context("Configuration validation failed")?;
-                
+
                 return Ok(config);
             }
         }
-        
+
         // Create default configuration
         let config = AppConfig::default();
 
@@ -309,38 +327,36 @@ impl AppConfig {
         };
 
         // Ensure config directory exists
-        std::fs::create_dir_all(&config_dir)
-            .context("Failed to create config directory")?;
+        std::fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
 
         // Save default config
-        let config_str = toml::to_string_pretty(&config)
-            .context("Failed to serialize default config")?;
+        let config_str =
+            toml::to_string_pretty(&config).context("Failed to serialize default config")?;
 
         std::fs::write(config_dir.join("config.toml"), config_str)
             .context("Failed to write default config")?;
-        
+
         Ok(config)
     }
-    
+
     /// Override configuration values from environment variables
     fn override_from_env(&mut self) -> Result<()> {
         if let Ok(port) = std::env::var("PIR9_PORT") {
-            self.server.port = port.parse()
-                .context("Invalid PIR9_PORT value")?;
+            self.server.port = port.parse().context("Invalid PIR9_PORT value")?;
         }
-        
+
         if let Ok(bind) = std::env::var("PIR9_BIND") {
             self.server.bind_address = bind;
         }
-        
+
         if let Ok(db_type) = std::env::var("PIR9_DB_TYPE") {
             self.database.database_type = db_type;
         }
-        
+
         if let Ok(conn_str) = std::env::var("PIR9_DB_CONNECTION") {
             self.database.connection_string = conn_str;
         }
-        
+
         if let Ok(secret) = std::env::var("PIR9_SECRET_KEY") {
             self.security.secret_key = secret;
         }
@@ -364,22 +380,21 @@ impl AppConfig {
 
         Ok(())
     }
-    
+
     /// Save configuration to file
     pub fn save(&self, path: &Path) -> Result<()> {
-        let config_str = toml::to_string_pretty(self)
-            .context("Failed to serialize config")?;
-        
+        let config_str = toml::to_string_pretty(self).context("Failed to serialize config")?;
+
         std::fs::write(path, config_str)
             .with_context(|| format!("Failed to write config to {:?}", path))?;
-        
+
         Ok(())
     }
 }
 
 fn generate_secret_key() -> String {
+    use base64::{engine::general_purpose, Engine as _};
     use rand::Rng;
-    use base64::{Engine as _, engine::general_purpose};
     let mut rng = rand::thread_rng();
     let bytes: Vec<u8> = (0..64).map(|_| rng.gen()).collect();
     general_purpose::STANDARD.encode(&bytes)
@@ -394,14 +409,14 @@ impl From<&AppConfig> for DatabaseConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_default_config() {
         let config = AppConfig::default();
         assert_eq!(config.server.port, 8989);
         assert!(config.validate().is_ok());
     }
-    
+
     #[test]
     fn test_config_serialization() {
         let config = AppConfig::default();

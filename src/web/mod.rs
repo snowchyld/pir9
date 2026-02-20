@@ -3,24 +3,27 @@
 //! WebSocket handlers and static file serving
 
 use axum::{
-    extract::{ws::{WebSocket, Message as WsMessage}, WebSocketUpgrade, State},
-    response::{Response, Json},
-    http::{Request, Uri},
     body::Body,
+    extract::{
+        ws::{Message as WsMessage, WebSocket},
+        State, WebSocketUpgrade,
+    },
+    http::{Request, Uri},
+    response::{Json, Response},
 };
+use futures::{sink::SinkExt, stream::StreamExt};
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use futures::{sink::SinkExt, stream::StreamExt};
 use tower::{Layer, Service};
-use tracing::{info, error};
+use tracing::{error, info};
 
 use crate::core::{
     configuration::AppConfig,
     datastore::Database,
     imdb::ImdbClient,
+    messaging::{EventBus, HybridEventBus},
     metadata::MetadataService,
     scheduler::JobScheduler,
-    messaging::{EventBus, HybridEventBus},
 };
 
 /// Application state shared across handlers
@@ -121,12 +124,12 @@ pub async fn websocket_handler(
 
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     info!("New WebSocket connection established");
-    
+
     let (mut sender, mut receiver) = socket.split();
-    
+
     // Subscribe to events
     let mut event_rx = state.event_bus.subscribe();
-    
+
     // Spawn task to send events to client
     let send_task = tokio::spawn(async move {
         while let Ok(event) = event_rx.recv().await {
@@ -136,7 +139,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             }
         }
     });
-    
+
     // Handle incoming messages from client
     while let Some(Ok(msg)) = receiver.next().await {
         match msg {
@@ -158,7 +161,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             _ => {}
         }
     }
-    
+
     // Clean up
     send_task.abort();
     info!("WebSocket connection closed");
@@ -187,9 +190,16 @@ async fn handle_client_message(msg: ClientMessage, _state: &AppState) {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
     Ping,
-    Subscribe { channel: String },
-    Unsubscribe { channel: String },
-    Command { name: String, args: Option<serde_json::Value> },
+    Subscribe {
+        channel: String,
+    },
+    Unsubscribe {
+        channel: String,
+    },
+    Command {
+        name: String,
+        args: Option<serde_json::Value>,
+    },
 }
 
 /// Initialize.json response for frontend bootstrap
@@ -214,9 +224,7 @@ pub struct InitializeResponse {
 }
 
 /// Handler for /initialize.json endpoint
-pub async fn initialize_json(
-    State(state): State<Arc<AppState>>,
-) -> Json<InitializeResponse> {
+pub async fn initialize_json(State(state): State<Arc<AppState>>) -> Json<InitializeResponse> {
     Json(InitializeResponse {
         api_root: "/api/v3".to_string(),
         api_key: state.config.security.secret_key.chars().take(32).collect(),
@@ -295,10 +303,13 @@ where
 fn normalize_api_path(path: &str) -> String {
     // For API paths, normalize segments to lowercase to match registered routes
     let parts: Vec<&str> = path.split('/').collect();
-    let normalized: Vec<String> = parts.iter().map(|segment| {
-        // API segments (after /api/v3 or /api/v5) should be lowercase
-        segment.to_lowercase()
-    }).collect();
+    let normalized: Vec<String> = parts
+        .iter()
+        .map(|segment| {
+            // API segments (after /api/v3 or /api/v5) should be lowercase
+            segment.to_lowercase()
+        })
+        .collect();
 
     normalized.join("/")
 }

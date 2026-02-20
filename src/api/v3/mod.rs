@@ -1,13 +1,8 @@
 //! API v3 routes (legacy compatibility)
 
-use axum::{
-    Router,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
-use std::sync::Arc;
 use crate::web::AppState;
+use axum::{http::StatusCode, response::IntoResponse, Json, Router};
+use std::sync::Arc;
 
 mod autotagging;
 mod backup;
@@ -39,6 +34,7 @@ mod notification;
 mod parse;
 mod qualitydefinition;
 mod qualityprofile;
+mod queue;
 mod release;
 mod releaseprofile;
 mod remotepathmapping;
@@ -52,7 +48,6 @@ mod system;
 mod tag;
 mod update;
 mod wanted;
-mod queue;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -74,7 +69,6 @@ pub fn routes() -> Router<Arc<AppState>> {
         .nest("/manualimport", manualimport::routes()) // lowercase alias
         .nest("/seasonPass", seasonpass::routes())
         .nest("/seasonpass", seasonpass::routes()) // lowercase alias
-
         // Configuration
         .nest("/config", config::routes())
         .nest("/qualityProfile", qualityprofile::routes())
@@ -94,7 +88,6 @@ pub fn routes() -> Router<Arc<AppState>> {
         .nest("/customfilter", customfilter::routes()) // lowercase alias
         .nest("/autoTagging", autotagging::routes())
         .nest("/autotagging", autotagging::routes()) // lowercase alias
-
         // Providers
         .nest("/downloadClient", downloadclient::routes())
         .nest("/downloadclient", downloadclient::routes()) // lowercase alias
@@ -105,7 +98,6 @@ pub fn routes() -> Router<Arc<AppState>> {
         .nest("/importlist", importlist::routes()) // lowercase alias
         .nest("/notification", notification::routes())
         .nest("/metadata", metadata::routes())
-
         // System
         .nest("/system", system::routes())
         .nest("/system/backup", backup::routes())
@@ -120,7 +112,6 @@ pub fn routes() -> Router<Arc<AppState>> {
         .nest("/MediaCover", mediacover::routes())
         .nest("/mediaCover", mediacover::routes()) // camelCase alias
         .nest("/mediacover", mediacover::routes()) // lowercase alias
-
         // Other
         .nest("/localization", localization::routes())
         .nest("/tag", tag::routes())
@@ -138,6 +129,6 @@ async fn api_not_found() -> impl IntoResponse {
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({
             "message": "Resource not found"
-        }))
+        })),
     )
 }

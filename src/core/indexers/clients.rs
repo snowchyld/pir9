@@ -10,8 +10,8 @@ use serde::Deserialize;
 use std::time::Duration;
 
 use super::{Protocol, ReleaseInfo};
-use crate::core::profiles::qualities::{Quality, QualityModel, Revision};
 use crate::core::profiles::languages::Language;
+use crate::core::profiles::qualities::{Quality, QualityModel, Revision};
 
 /// Indexer client trait
 #[async_trait::async_trait]
@@ -75,7 +75,10 @@ pub struct IndexerLimits {
 
 impl Default for IndexerLimits {
     fn default() -> Self {
-        Self { default: 100, max: 100 }
+        Self {
+            default: 100,
+            max: 100,
+        }
     }
 }
 
@@ -111,8 +114,10 @@ impl NewznabClient {
 
     /// Build API URL with parameters
     fn build_url(&self, action: &str, extra_params: &[(&str, &str)]) -> String {
-        let mut url = format!("{}/api?t={}&apikey={}&o=xml",
-            self.base_url, action, self.api_key);
+        let mut url = format!(
+            "{}/api?t={}&apikey={}&o=xml",
+            self.base_url, action, self.api_key
+        );
 
         for (key, value) in extra_params {
             url.push_str(&format!("&{}={}", key, urlencoding::encode(value)));
@@ -123,8 +128,7 @@ impl NewznabClient {
 
     /// Parse Newznab XML response into releases
     fn parse_releases(&self, xml: &str, indexer_id: i64) -> Result<Vec<ReleaseInfo>> {
-        let rss: NewznabRss = from_str(xml)
-            .context("Failed to parse Newznab XML response")?;
+        let rss: NewznabRss = from_str(xml).context("Failed to parse Newznab XML response")?;
 
         let mut releases = Vec::new();
 
@@ -141,9 +145,10 @@ impl NewznabClient {
 
     /// Parse a single Newznab item into ReleaseInfo
     fn parse_item(&self, item: &NewznabItem, indexer_id: i64) -> Option<ReleaseInfo> {
-        let guid = item.guid.clone().unwrap_or_else(|| {
-            item.link.clone().unwrap_or_default()
-        });
+        let guid = item
+            .guid
+            .clone()
+            .unwrap_or_else(|| item.link.clone().unwrap_or_default());
 
         let title = item.title.clone()?;
 
@@ -181,13 +186,17 @@ impl NewznabClient {
         }
 
         // Parse publish date
-        let publish_date = item.pub_date.as_ref()
+        let publish_date = item
+            .pub_date
+            .as_ref()
             .and_then(|d| DateTime::parse_from_rfc2822(d).ok())
             .map(|d| d.with_timezone(&Utc))
             .unwrap_or_else(Utc::now);
 
         // Get download URL from enclosure or link
-        let download_url = item.enclosure.as_ref()
+        let download_url = item
+            .enclosure
+            .as_ref()
             .map(|e| e.url.clone())
             .or_else(|| item.link.clone());
 
@@ -263,7 +272,8 @@ impl IndexerClient for NewznabClient {
     async fn get_capabilities(&self) -> Result<IndexerCapabilities> {
         let url = self.build_url("caps", &[]);
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .send()
             .await
@@ -274,19 +284,27 @@ impl IndexerClient for NewznabClient {
         }
 
         let body = response.text().await?;
-        let caps: NewznabCaps = from_str(&body)
-            .context("Failed to parse capabilities XML")?;
+        let caps: NewznabCaps = from_str(&body).context("Failed to parse capabilities XML")?;
 
         let mut capabilities = IndexerCapabilities::default();
 
         // Parse searching capabilities
         if let Some(searching) = caps.searching {
-            capabilities.search_available = searching.search.as_ref()
-                .map(|s| s.available == "yes").unwrap_or(false);
-            capabilities.tv_search_available = searching.tv_search.as_ref()
-                .map(|s| s.available == "yes").unwrap_or(false);
-            capabilities.movie_search_available = searching.movie_search.as_ref()
-                .map(|s| s.available == "yes").unwrap_or(false);
+            capabilities.search_available = searching
+                .search
+                .as_ref()
+                .map(|s| s.available == "yes")
+                .unwrap_or(false);
+            capabilities.tv_search_available = searching
+                .tv_search
+                .as_ref()
+                .map(|s| s.available == "yes")
+                .unwrap_or(false);
+            capabilities.movie_search_available = searching
+                .movie_search
+                .as_ref()
+                .map(|s| s.available == "yes")
+                .unwrap_or(false);
         }
 
         // Parse categories
@@ -325,7 +343,11 @@ impl IndexerClient for NewznabClient {
         let mut params: Vec<(&str, String)> = Vec::new();
 
         // Use tvsearch if we have TVDB ID
-        let action = if query.tvdb_id.is_some() { "tvsearch" } else { "search" };
+        let action = if query.tvdb_id.is_some() {
+            "tvsearch"
+        } else {
+            "search"
+        };
 
         if let Some(q) = &query.query {
             params.push(("q", q.clone()));
@@ -353,13 +375,12 @@ impl IndexerClient for NewznabClient {
             params.push(("cat", cats.join(",")));
         }
 
-        let params_ref: Vec<(&str, &str)> = params.iter()
-            .map(|(k, v)| (*k, v.as_str()))
-            .collect();
+        let params_ref: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
 
         let url = self.build_url(action, &params_ref);
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .send()
             .await
@@ -385,7 +406,8 @@ impl IndexerClient for NewznabClient {
 
         let url = self.build_url("search", &params);
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .send()
             .await
@@ -429,10 +451,8 @@ impl TorznabClient {
             // If we have an info_hash, build magnet URL
             if let Some(hash) = &release.info_hash {
                 let title_encoded = urlencoding::encode(&release.title);
-                release.magnet_url = Some(format!(
-                    "magnet:?xt=urn:btih:{}&dn={}",
-                    hash, title_encoded
-                ));
+                release.magnet_url =
+                    Some(format!("magnet:?xt=urn:btih:{}&dn={}", hash, title_encoded));
             }
         }
 
@@ -461,7 +481,11 @@ impl IndexerClient for TorznabClient {
     async fn search(&self, query: &SearchQuery) -> Result<Vec<ReleaseInfo>> {
         let mut params: Vec<(&str, String)> = Vec::new();
 
-        let action = if query.tvdb_id.is_some() { "tvsearch" } else { "search" };
+        let action = if query.tvdb_id.is_some() {
+            "tvsearch"
+        } else {
+            "search"
+        };
 
         if let Some(q) = &query.query {
             params.push(("q", q.clone()));
@@ -486,13 +510,13 @@ impl IndexerClient for TorznabClient {
             params.push(("cat", cats.join(",")));
         }
 
-        let params_ref: Vec<(&str, &str)> = params.iter()
-            .map(|(k, v)| (*k, v.as_str()))
-            .collect();
+        let params_ref: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
 
         let url = self.inner.build_url(action, &params_ref);
 
-        let response = self.inner.http_client
+        let response = self
+            .inner
+            .http_client
             .get(&url)
             .send()
             .await
@@ -518,7 +542,9 @@ impl IndexerClient for TorznabClient {
 
         let url = self.inner.build_url("search", &params);
 
-        let response = self.inner.http_client
+        let response = self
+            .inner
+            .http_client
             .get(&url)
             .send()
             .await
@@ -640,12 +666,19 @@ struct NewznabLimits {
 fn parse_quality_from_title(title: &str) -> QualityModel {
     let title_lower = title.to_lowercase();
 
-    let quality = if title_lower.contains("2160p") || title_lower.contains("4k") || title_lower.contains("uhd") {
+    let quality = if title_lower.contains("2160p")
+        || title_lower.contains("4k")
+        || title_lower.contains("uhd")
+    {
         if title_lower.contains("remux") {
             Quality::Bluray2160pRemux
         } else if title_lower.contains("bluray") || title_lower.contains("blu-ray") {
             Quality::Bluray2160p
-        } else if title_lower.contains("webdl") || title_lower.contains("web-dl") || title_lower.contains("webrip") || title_lower.contains("web-rip") {
+        } else if title_lower.contains("webdl")
+            || title_lower.contains("web-dl")
+            || title_lower.contains("webrip")
+            || title_lower.contains("web-rip")
+        {
             Quality::WebDl2160p
         } else {
             Quality::Hdtv2160p
@@ -655,7 +688,11 @@ fn parse_quality_from_title(title: &str) -> QualityModel {
             Quality::Bluray1080pRemux
         } else if title_lower.contains("bluray") || title_lower.contains("blu-ray") {
             Quality::Bluray1080p
-        } else if title_lower.contains("webdl") || title_lower.contains("web-dl") || title_lower.contains("webrip") || title_lower.contains("web-rip") {
+        } else if title_lower.contains("webdl")
+            || title_lower.contains("web-dl")
+            || title_lower.contains("webrip")
+            || title_lower.contains("web-rip")
+        {
             Quality::WebDl1080p
         } else {
             Quality::Hdtv1080p
@@ -663,13 +700,21 @@ fn parse_quality_from_title(title: &str) -> QualityModel {
     } else if title_lower.contains("720p") {
         if title_lower.contains("bluray") || title_lower.contains("blu-ray") {
             Quality::Bluray720p
-        } else if title_lower.contains("webdl") || title_lower.contains("web-dl") || title_lower.contains("webrip") || title_lower.contains("web-rip") {
+        } else if title_lower.contains("webdl")
+            || title_lower.contains("web-dl")
+            || title_lower.contains("webrip")
+            || title_lower.contains("web-rip")
+        {
             Quality::WebDl720p
         } else {
             Quality::Hdtv720p
         }
     } else if title_lower.contains("480p") {
-        if title_lower.contains("webdl") || title_lower.contains("web-dl") || title_lower.contains("webrip") || title_lower.contains("web-rip") {
+        if title_lower.contains("webdl")
+            || title_lower.contains("web-dl")
+            || title_lower.contains("webrip")
+            || title_lower.contains("web-rip")
+        {
             Quality::WebDl480p
         } else if title_lower.contains("dvd") {
             Quality::Dvd
@@ -706,36 +751,39 @@ fn parse_quality_from_title(title: &str) -> QualityModel {
 // ============================================================================
 
 /// Create an indexer client from database model
-pub fn create_client_from_model(model: &crate::core::datastore::models::IndexerDbModel) -> Result<Box<dyn IndexerClient>> {
-    let settings: serde_json::Value = serde_json::from_str(&model.settings)
-        .context("Failed to parse indexer settings")?;
+pub fn create_client_from_model(
+    model: &crate::core::datastore::models::IndexerDbModel,
+) -> Result<Box<dyn IndexerClient>> {
+    let settings: serde_json::Value =
+        serde_json::from_str(&model.settings).context("Failed to parse indexer settings")?;
 
-    let base_url = settings.get("baseUrl")
+    let base_url = settings
+        .get("baseUrl")
         .or_else(|| settings.get("url"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let api_key = settings.get("apiKey")
+    let api_key = settings
+        .get("apiKey")
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
     match model.implementation.as_str() {
-        "Newznab" => {
-            Ok(Box::new(NewznabClient::new(
-                model.name.clone(),
-                base_url.to_string(),
-                api_key.to_string(),
-            )))
-        }
-        "Torznab" => {
-            Ok(Box::new(TorznabClient::new(
-                model.name.clone(),
-                base_url.to_string(),
-                api_key.to_string(),
-            )))
-        }
+        "Newznab" => Ok(Box::new(NewznabClient::new(
+            model.name.clone(),
+            base_url.to_string(),
+            api_key.to_string(),
+        ))),
+        "Torznab" => Ok(Box::new(TorznabClient::new(
+            model.name.clone(),
+            base_url.to_string(),
+            api_key.to_string(),
+        ))),
         _ => {
-            anyhow::bail!("Unsupported indexer implementation: {}", model.implementation)
+            anyhow::bail!(
+                "Unsupported indexer implementation: {}",
+                model.implementation
+            )
         }
     }
 }

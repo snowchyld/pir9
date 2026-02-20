@@ -13,11 +13,11 @@ use tracing::info;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
-    
+
     /// Configuration directory
     #[arg(short, long, default_value = "/config")]
     config: String,
-    
+
     /// Database path
     #[arg(short, long)]
     database: Option<String>,
@@ -30,19 +30,19 @@ enum Commands {
         #[command(subcommand)]
         command: DbCommands,
     },
-    
+
     /// Series operations
     Series {
         #[command(subcommand)]
         command: SeriesCommands,
     },
-    
+
     /// System operations
     System {
         #[command(subcommand)]
         command: SystemCommands,
     },
-    
+
     /// Configuration operations
     Config {
         #[command(subcommand)]
@@ -54,17 +54,17 @@ enum Commands {
 enum DbCommands {
     /// Run database migrations
     Migrate,
-    
+
     /// Rollback migrations
     Rollback {
         /// Number of migrations to rollback
         #[arg(short, long, default_value = "1")]
         steps: i32,
     },
-    
+
     /// Reset database (drop all tables)
     Reset,
-    
+
     /// Show migration status
     Status,
 }
@@ -77,56 +77,56 @@ enum SeriesCommands {
         #[arg(short, long, default_value = "table")]
         format: String,
     },
-    
+
     /// Add a new series
     Add {
         /// TVDB ID
         #[arg(short, long)]
         tvdb_id: i64,
-        
+
         /// Series title
         #[arg(short, long)]
         title: String,
-        
+
         /// Quality profile ID
         #[arg(short, long, default_value = "1")]
         quality_profile: i64,
-        
+
         /// Root folder path
         #[arg(short, long, default_value = "/data/tv")]
         root_folder: String,
     },
-    
+
     /// Delete a series
     Delete {
         /// Series ID
         id: i64,
-        
+
         /// Also delete files
         #[arg(short, long)]
         delete_files: bool,
     },
-    
+
     /// Refresh series from metadata
     Refresh {
         /// Series ID (or "all" for all series)
         id: String,
-        
+
         /// Force refresh even if recently updated
         #[arg(short, long)]
         force: bool,
     },
-    
+
     /// Search for episodes
     Search {
         /// Series ID
         #[arg(short, long)]
         series_id: Option<i64>,
-        
+
         /// Season number
         #[arg(short, long)]
         season: Option<i32>,
-        
+
         /// Episode number
         #[arg(short, long)]
         episode: Option<i32>,
@@ -137,26 +137,26 @@ enum SeriesCommands {
 enum SystemCommands {
     /// Show system status
     Status,
-    
+
     /// Run health check
     Health,
-    
+
     /// Show disk space
     Diskspace,
-    
+
     /// Create backup
     Backup {
         /// Backup path
         #[arg(short, long)]
         path: Option<String>,
     },
-    
+
     /// Restore from backup
     Restore {
         /// Backup file path
         path: String,
     },
-    
+
     /// Clear logs
     ClearLogs,
 }
@@ -165,19 +165,19 @@ enum SystemCommands {
 enum ConfigCommands {
     /// Show current configuration
     Show,
-    
+
     /// Set configuration value
     Set {
         /// Configuration key (e.g., "server.port")
         key: String,
-        
+
         /// Configuration value
         value: String,
     },
-    
+
     /// Reset to defaults
     Reset,
-    
+
     /// Validate configuration
     Validate,
 }
@@ -186,11 +186,11 @@ enum ConfigCommands {
 async fn main() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt::init();
-    
+
     let cli = Cli::parse();
-    
+
     info!("pir9 CLI v{}", env!("CARGO_PKG_VERSION"));
-    
+
     match cli.command {
         Commands::Db { command } => handle_db_command(command).await,
         Commands::Series { command } => handle_series_command(command).await,
@@ -227,7 +227,12 @@ async fn handle_series_command(command: SeriesCommands) -> Result<()> {
             info!("Listing series (format: {})...", format);
             Ok(())
         }
-        SeriesCommands::Add { tvdb_id, title, quality_profile: _, root_folder: _ } => {
+        SeriesCommands::Add {
+            tvdb_id,
+            title,
+            quality_profile: _,
+            root_folder: _,
+        } => {
             info!("Adding series: {} (TVDB: {})", title, tvdb_id);
             Ok(())
         }
@@ -239,7 +244,11 @@ async fn handle_series_command(command: SeriesCommands) -> Result<()> {
             info!("Refreshing series: {} (force: {})", id, force);
             Ok(())
         }
-        SeriesCommands::Search { series_id: _, season: _, episode: _ } => {
+        SeriesCommands::Search {
+            series_id: _,
+            season: _,
+            episode: _,
+        } => {
             info!("Searching for episodes...");
             Ok(())
         }

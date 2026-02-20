@@ -114,7 +114,8 @@ impl MediaAnalyzer {
     fn detect_video_codec(filename: &str) -> Option<String> {
         if filename.contains("x265") || filename.contains("h265") || filename.contains("hevc") {
             Some("x265".to_string())
-        } else if filename.contains("x264") || filename.contains("h264") || filename.contains("avc") {
+        } else if filename.contains("x264") || filename.contains("h264") || filename.contains("avc")
+        {
             Some("x264".to_string())
         } else if filename.contains("av1") {
             Some("AV1".to_string())
@@ -142,9 +143,13 @@ impl MediaAnalyzer {
             Some("DTS".to_string())
         } else if filename.contains("flac") {
             Some("FLAC".to_string())
-        } else if filename.contains("eac3") || filename.contains("ddp") || filename.contains("dd+") {
+        } else if filename.contains("eac3") || filename.contains("ddp") || filename.contains("dd+")
+        {
             Some("EAC3".to_string())
-        } else if filename.contains("ac3") || filename.contains("dd5") || filename.contains("dolby.digital") {
+        } else if filename.contains("ac3")
+            || filename.contains("dd5")
+            || filename.contains("dolby.digital")
+        {
             Some("AC3".to_string())
         } else if filename.contains("aac") {
             Some("AAC".to_string())
@@ -170,26 +175,17 @@ impl MediaAnalyzer {
     }
 
     fn detect_hdr(filename: &str) -> (Option<String>, Option<String>) {
-        if filename.contains("dolby.vision") || filename.contains("dovi") || filename.contains("dv") && filename.contains("hdr") {
-            (
-                Some("HDR".to_string()),
-                Some("Dolby Vision".to_string()),
-            )
+        if filename.contains("dolby.vision")
+            || filename.contains("dovi")
+            || filename.contains("dv") && filename.contains("hdr")
+        {
+            (Some("HDR".to_string()), Some("Dolby Vision".to_string()))
         } else if filename.contains("hdr10+") || filename.contains("hdr10plus") {
-            (
-                Some("HDR".to_string()),
-                Some("HDR10Plus".to_string()),
-            )
+            (Some("HDR".to_string()), Some("HDR10Plus".to_string()))
         } else if filename.contains("hdr10") || filename.contains("hdr") {
-            (
-                Some("HDR".to_string()),
-                Some("HDR10".to_string()),
-            )
+            (Some("HDR".to_string()), Some("HDR10".to_string()))
         } else if filename.contains("hlg") {
-            (
-                Some("HDR".to_string()),
-                Some("HLG".to_string()),
-            )
+            (Some("HDR".to_string()), Some("HLG".to_string()))
         } else {
             (None, None)
         }
@@ -269,8 +265,10 @@ pub fn move_series_folder(source: &Path, destination: &Path) -> Result<MoveResul
     // Create destination parent directory if needed
     if let Some(parent) = destination.parent() {
         if !parent.exists() {
-            std::fs::create_dir_all(parent)
-                .context(format!("Failed to create parent directory: {}", parent.display()))?;
+            std::fs::create_dir_all(parent).context(format!(
+                "Failed to create parent directory: {}",
+                parent.display()
+            ))?;
             result.dirs_created += 1;
         }
     }
@@ -306,9 +304,15 @@ pub fn move_series_folder(source: &Path, destination: &Path) -> Result<MoveResul
 }
 
 /// Copy a directory recursively
-fn copy_directory_recursive(source: &Path, destination: &Path, result: &mut MoveResult) -> Result<()> {
-    std::fs::create_dir_all(destination)
-        .context(format!("Failed to create directory: {}", destination.display()))?;
+fn copy_directory_recursive(
+    source: &Path,
+    destination: &Path,
+    result: &mut MoveResult,
+) -> Result<()> {
+    std::fs::create_dir_all(destination).context(format!(
+        "Failed to create directory: {}",
+        destination.display()
+    ))?;
     result.dirs_created += 1;
 
     for entry in std::fs::read_dir(source)
@@ -323,7 +327,11 @@ fn copy_directory_recursive(source: &Path, destination: &Path, result: &mut Move
         } else {
             match std::fs::copy(&entry_path, &dest_path) {
                 Ok(_) => {
-                    debug!("Copied file: {} -> {}", entry_path.display(), dest_path.display());
+                    debug!(
+                        "Copied file: {} -> {}",
+                        entry_path.display(),
+                        dest_path.display()
+                    );
                     result.files_moved += 1;
                 }
                 Err(e) => {
@@ -356,7 +364,10 @@ fn count_files_recursive(path: &Path) -> usize {
 /// Delete a series folder and all its contents
 pub fn delete_series_folder(path: &Path) -> Result<usize> {
     if !path.exists() {
-        info!("Series folder does not exist, nothing to delete: {}", path.display());
+        info!(
+            "Series folder does not exist, nothing to delete: {}",
+            path.display()
+        );
         return Ok(0);
     }
 

@@ -1,11 +1,6 @@
 //! Release Profile API endpoints
 
-use axum::{
-    extract::Path,
-    response::Json,
-    routing::get,
-    Router,
-};
+use axum::{extract::Path, response::Json, routing::get, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

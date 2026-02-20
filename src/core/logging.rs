@@ -4,8 +4,8 @@
 
 use tokio::sync::RwLock;
 
-use crate::core::datastore::Database;
 use crate::core::datastore::repositories::LogRepository;
+use crate::core::datastore::Database;
 
 /// Log levels for database logging
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +49,8 @@ impl AppLogger {
     /// Log an event to the database
     pub async fn log(&self, level: LogLevel, logger: &str, message: &str) -> anyhow::Result<i64> {
         let repo = LogRepository::new(self.db.clone());
-        repo.insert(level.as_str(), logger, message, None, None).await
+        repo.insert(level.as_str(), logger, message, None, None)
+            .await
     }
 
     /// Log an event with exception details
@@ -62,7 +63,14 @@ impl AppLogger {
         exception_type: Option<&str>,
     ) -> anyhow::Result<i64> {
         let repo = LogRepository::new(self.db.clone());
-        repo.insert(level.as_str(), logger, message, Some(exception), exception_type).await
+        repo.insert(
+            level.as_str(),
+            logger,
+            message,
+            Some(exception),
+            exception_type,
+        )
+        .await
     }
 
     /// Log an info event
@@ -87,7 +95,8 @@ impl AppLogger {
         message: &str,
         exception: &str,
     ) -> anyhow::Result<i64> {
-        self.log_exception(LogLevel::Error, logger, message, exception, None).await
+        self.log_exception(LogLevel::Error, logger, message, exception, None)
+            .await
     }
 }
 
@@ -135,7 +144,10 @@ pub async fn log_error(logger: &str, message: &str) {
 /// Log an error with exception details using the global logger
 pub async fn log_error_exception(logger: &str, message: &str, exception: &str) {
     if let Some(app_logger) = get_app_logger().await {
-        if let Err(e) = app_logger.error_with_exception(logger, message, exception).await {
+        if let Err(e) = app_logger
+            .error_with_exception(logger, message, exception)
+            .await
+        {
             tracing::warn!("Failed to write to event log: {}", e);
         }
     }

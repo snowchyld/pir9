@@ -15,9 +15,7 @@ use axum::{
 use clap::Parser;
 use tokio::signal;
 use tower_http::{
-    compression::CompressionLayer,
-    cors::CorsLayer,
-    normalize_path::NormalizePathLayer,
+    compression::CompressionLayer, cors::CorsLayer, normalize_path::NormalizePathLayer,
     trace::TraceLayer,
 };
 use tracing::{info, warn};
@@ -71,20 +69,22 @@ async fn main() -> Result<()> {
 async fn run_worker_mode(args: &Args) -> Result<()> {
     use crate::core::worker::WorkerRunner;
 
-    let redis_url = args.redis_url.as_ref()
+    let redis_url = args
+        .redis_url
+        .as_ref()
         .expect("Redis URL validated in args.validate()");
 
-    let worker_id = args.worker_id.clone()
+    let worker_id = args
+        .worker_id
+        .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     info!("Worker ID: {}", worker_id);
     info!("Worker paths: {:?}", args.worker_paths);
 
-    let worker = WorkerRunner::new(
-        redis_url,
-        &worker_id,
-        args.worker_paths.clone(),
-    ).await.context("Failed to initialize worker")?;
+    let worker = WorkerRunner::new(redis_url, &worker_id, args.worker_paths.clone())
+        .await
+        .context("Failed to initialize worker")?;
 
     // Run the worker (blocks until shutdown signal)
     worker.run().await
@@ -93,8 +93,7 @@ async fn run_worker_mode(args: &Args) -> Result<()> {
 /// Run in server or all mode - web server + scheduler
 async fn run_server_mode(args: &Args) -> Result<()> {
     // Load configuration
-    let mut config = AppConfig::load()
-        .context("Failed to load application configuration")?;
+    let mut config = AppConfig::load().context("Failed to load application configuration")?;
 
     // Override port if specified on command line
     if let Some(port) = args.port {
@@ -105,13 +104,16 @@ async fn run_server_mode(args: &Args) -> Result<()> {
 
     // Initialize database connection
     let db_config = DatabaseConfig::from(&config);
-    let database = Database::connect(&db_config).await
+    let database = Database::connect(&db_config)
+        .await
         .context("Failed to connect to database")?;
 
     info!("Database connection established");
 
     // Run database migrations
-    database.migrate().await
+    database
+        .migrate()
+        .await
         .context("Failed to run database migrations")?;
 
     // Initialize the application event logger
@@ -125,8 +127,13 @@ async fn run_server_mode(args: &Args) -> Result<()> {
     };
     crate::core::logging::log_info(
         "ApplicationStartup",
-        &format!("pir9 v{} started in {} mode", env!("CARGO_PKG_VERSION"), mode_str)
-    ).await;
+        &format!(
+            "pir9 v{} started in {} mode",
+            env!("CARGO_PKG_VERSION"),
+            mode_str
+        ),
+    )
+    .await;
 
     // Clean up stale commands from previous server sessions
     {
@@ -144,8 +151,8 @@ async fn run_server_mode(args: &Args) -> Result<()> {
     }
 
     // Initialize job scheduler with metadata service for IMDB-enriched refreshes
-    let mut scheduler = JobScheduler::new(database.clone())
-        .context("Failed to initialize job scheduler")?;
+    let mut scheduler =
+        JobScheduler::new(database.clone()).context("Failed to initialize job scheduler")?;
     {
         let imdb_client = crate::core::imdb::ImdbClient::from_env();
         let metadata_service = crate::core::metadata::MetadataService::new(imdb_client);
@@ -154,10 +161,14 @@ async fn run_server_mode(args: &Args) -> Result<()> {
 
     // Create application state (with Redis event bus if in server mode)
     let state = if args.mode == RunMode::Server {
-        let redis_url = args.redis_url.as_ref()
+        let redis_url = args
+            .redis_url
+            .as_ref()
             .expect("Redis URL validated in args.validate()");
         info!("Initializing distributed scanning mode with Redis");
-        let state = AppState::new_with_redis(config.clone(), database.clone(), scheduler, redis_url).await?;
+        let state =
+            AppState::new_with_redis(config.clone(), database.clone(), scheduler, redis_url)
+                .await?;
         info!("Distributed scanning enabled - file scans will be delegated to workers");
         state
     } else {
@@ -179,7 +190,9 @@ async fn run_server_mode(args: &Args) -> Result<()> {
     // Start distributed scanning services if in server mode
     if args.mode == RunMode::Server {
         if let Some(ref hybrid_bus) = state.hybrid_event_bus {
-            use crate::core::scanner::{ScanResultConsumer, JobTrackerService, WorkerRegistryService};
+            use crate::core::scanner::{
+                JobTrackerService, ScanResultConsumer, WorkerRegistryService,
+            };
 
             // Start scan result consumer
             let consumer = std::sync::Arc::new(ScanResultConsumer::new(
@@ -190,17 +203,14 @@ async fn run_server_mode(args: &Args) -> Result<()> {
             info!("Scan result consumer started");
 
             // Start job tracker (handles timeouts and retries)
-            let job_tracker = std::sync::Arc::new(JobTrackerService::new(
-                database.clone(),
-                hybrid_bus.clone(),
-            ));
+            let job_tracker =
+                std::sync::Arc::new(JobTrackerService::new(database.clone(), hybrid_bus.clone()));
             tokio::spawn(job_tracker.run());
             info!("Job tracker service started");
 
             // Start worker registry (tracks online workers)
-            let worker_registry = std::sync::Arc::new(WorkerRegistryService::new(
-                hybrid_bus.clone(),
-            ));
+            let worker_registry =
+                std::sync::Arc::new(WorkerRegistryService::new(hybrid_bus.clone()));
             tokio::spawn(worker_registry.run());
             info!("Worker registry service started");
 
@@ -215,7 +225,8 @@ async fn run_server_mode(args: &Args) -> Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
     info!("Starting HTTP server on {}", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
         .context("Failed to bind to address")?;
 
     axum::serve(listener, app)
@@ -229,9 +240,7 @@ async fn run_server_mode(args: &Args) -> Result<()> {
 
 fn init_tracing() {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| {
-            tracing_subscriber::EnvFilter::new("info,pir9=debug,tower_http=debug")
-        });
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,pir9=debug,tower_http=debug"));
 
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
@@ -246,28 +255,30 @@ fn create_router(state: Arc<AppState>) -> Router {
     Router::new()
         // Health check
         .route("/health", get(api::health_check))
-
         // Initialize.json for frontend bootstrap
         .route("/initialize.json", get(web::initialize_json))
-
         // API v5 routes
         .nest("/api/v5", api::v5::routes())
-
         // Legacy API v3 routes (for compatibility)
         .nest("/api/v3", api::v3::routes())
-
         // WebSocket endpoint for real-time updates
         .route("/ws", get(web::websocket_handler))
-
         // MediaCover routes - serve/proxy artwork (must be before static files)
-        .route("/MediaCover/Series/{series_id}/{filename}", get(media_cover_handler))
-        .route("/MediaCover/Movies/{movie_id}/{filename}", get(movie_media_cover_handler))
-
+        .route(
+            "/MediaCover/Series/{series_id}/{filename}",
+            get(media_cover_handler),
+        )
+        .route(
+            "/MediaCover/Movies/{movie_id}/{filename}",
+            get(movie_media_cover_handler),
+        )
         // Static files (frontend) with SPA fallback
         // Using fallback_service so explicit routes above take precedence
-        .fallback_service(tower_http::services::ServeDir::new("frontend/dist")
-            .fallback(tower_http::services::ServeFile::new("frontend/dist/index.html")))
-
+        .fallback_service(
+            tower_http::services::ServeDir::new("frontend/dist").fallback(
+                tower_http::services::ServeFile::new("frontend/dist/index.html"),
+            ),
+        )
         // Add middleware
         .layer(TraceLayer::new_for_http())
         .layer(CompressionLayer::new())
@@ -295,7 +306,9 @@ async fn media_cover_handler(
 
     tracing::debug!(
         "MediaCover request: series_id={}, filename={}, cover_type={}",
-        series_id, filename, cover_type
+        series_id,
+        filename,
+        cover_type
     );
 
     let content_type = if filename.ends_with(".jpg") || filename.ends_with(".jpeg") {
@@ -313,24 +326,40 @@ async fn media_cover_handler(
     if let Ok(data) = tokio::fs::read(&cache_path).await {
         return (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "max-age=86400")],
+            [
+                (header::CONTENT_TYPE, content_type),
+                (header::CACHE_CONTROL, "max-age=86400"),
+            ],
             data,
-        ).into_response();
+        )
+            .into_response();
     }
 
     // Try fallback sizes if exact size not found (e.g., poster-1000.jpg -> poster-500.jpg -> poster-250.jpg)
     let fallback_sizes = ["500", "250", "1000"];
-    let extension = if filename.ends_with(".png") { "png" } else { "jpg" };
+    let extension = if filename.ends_with(".png") {
+        "png"
+    } else {
+        "jpg"
+    };
 
     for size in fallback_sizes {
         let fallback_path = format!("{}/{}-{}.{}", cache_dir, cover_type, size, extension);
         if let Ok(data) = tokio::fs::read(&fallback_path).await {
-            tracing::debug!("Using fallback image: {} for requested {}", fallback_path, filename);
+            tracing::debug!(
+                "Using fallback image: {} for requested {}",
+                fallback_path,
+                filename
+            );
             return (
                 StatusCode::OK,
-                [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "max-age=86400")],
+                [
+                    (header::CONTENT_TYPE, content_type),
+                    (header::CACHE_CONTROL, "max-age=86400"),
+                ],
                 data,
-            ).into_response();
+            )
+                .into_response();
         }
     }
 
@@ -389,12 +418,19 @@ async fn media_cover_handler(
     let available_types: Vec<String> = images.iter().map(|i| i.cover_type.clone()).collect();
     tracing::debug!(
         "Skyhook returned {} images: {:?}, looking for: {}",
-        images.len(), available_types, cover_type
+        images.len(),
+        available_types,
+        cover_type
     );
 
-    let image_url = images.iter()
+    let image_url = images
+        .iter()
         .find(|img| img.cover_type.to_lowercase() == cover_type.to_lowercase())
-        .or_else(|| images.iter().find(|img| img.cover_type.eq_ignore_ascii_case("fanart")))
+        .or_else(|| {
+            images
+                .iter()
+                .find(|img| img.cover_type.eq_ignore_ascii_case("fanart"))
+        })
         .map(|img| img.url.clone());
 
     let image_url = match image_url {
@@ -405,7 +441,9 @@ async fn media_cover_handler(
         None => {
             tracing::warn!(
                 "Image type '{}' not found for series {}. Available: {:?}",
-                cover_type, series_id, available_types
+                cover_type,
+                series_id,
+                available_types
             );
             return (StatusCode::NOT_FOUND, "Image type not found").into_response();
         }
@@ -438,9 +476,13 @@ async fn media_cover_handler(
 
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "max-age=86400")],
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "max-age=86400"),
+        ],
         image_data,
-    ).into_response()
+    )
+        .into_response()
 }
 
 /// Handler for /MediaCover/Movies/:movie_id/:filename
@@ -461,7 +503,9 @@ async fn movie_media_cover_handler(
 
     tracing::debug!(
         "Movie MediaCover request: movie_id={}, filename={}, cover_type={}",
-        movie_id, filename, cover_type
+        movie_id,
+        filename,
+        cover_type
     );
 
     let content_type = if filename.ends_with(".jpg") || filename.ends_with(".jpeg") {
@@ -479,23 +523,35 @@ async fn movie_media_cover_handler(
     if let Ok(data) = tokio::fs::read(&cache_path).await {
         return (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "max-age=86400")],
+            [
+                (header::CONTENT_TYPE, content_type),
+                (header::CACHE_CONTROL, "max-age=86400"),
+            ],
             data,
-        ).into_response();
+        )
+            .into_response();
     }
 
     // Try fallback sizes
     let fallback_sizes = ["500", "250", "1000"];
-    let extension = if filename.ends_with(".png") { "png" } else { "jpg" };
+    let extension = if filename.ends_with(".png") {
+        "png"
+    } else {
+        "jpg"
+    };
 
     for size in fallback_sizes {
         let fallback_path = format!("{}/{}-{}.{}", cache_dir, cover_type, size, extension);
         if let Ok(data) = tokio::fs::read(&fallback_path).await {
             return (
                 StatusCode::OK,
-                [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "max-age=86400")],
+                [
+                    (header::CONTENT_TYPE, content_type),
+                    (header::CACHE_CONTROL, "max-age=86400"),
+                ],
                 data,
-            ).into_response();
+            )
+                .into_response();
         }
     }
 
@@ -518,7 +574,8 @@ async fn movie_media_cover_handler(
     }
 
     let stored_images: Vec<StoredImage> = serde_json::from_str(&movie.images).unwrap_or_default();
-    let stored_url = stored_images.into_iter()
+    let stored_url = stored_images
+        .into_iter()
         .find(|img| img.cover_type.eq_ignore_ascii_case(cover_type))
         .and_then(|img| img.remote_url);
 
@@ -529,9 +586,11 @@ async fn movie_media_cover_handler(
         // Call Radarr metadata proxy (mirrors the series Skyhook pattern)
         let radarr_url = format!("https://api.radarr.video/v1/movie/imdb/{}", imdb_id);
         let client = reqwest::Client::new();
-        match client.get(&radarr_url)
+        match client
+            .get(&radarr_url)
             .header("User-Agent", format!("pir9/{}", env!("CARGO_PKG_VERSION")))
-            .send().await
+            .send()
+            .await
         {
             Ok(resp) if resp.status().is_success() => {
                 #[derive(serde::Deserialize)]
@@ -553,7 +612,9 @@ async fn movie_media_cover_handler(
                             "fanart" | "backdrop" => "Fanart",
                             _ => "Poster",
                         };
-                        radarr.Images.into_iter()
+                        radarr
+                            .Images
+                            .into_iter()
                             .find(|img| img.CoverType == radarr_cover)
                             .map(|img| img.Url)
                     }
@@ -604,9 +665,13 @@ async fn movie_media_cover_handler(
 
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "max-age=86400")],
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "max-age=86400"),
+        ],
         image_data,
-    ).into_response()
+    )
+        .into_response()
 }
 
 async fn shutdown_signal() {

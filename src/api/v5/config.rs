@@ -1,15 +1,10 @@
 //! Configuration API endpoints
 
-use axum::{
-    Router,
-    routing::get,
-    extract::State,
-    Json,
-};
+use crate::web::AppState;
+use axum::{extract::State, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::web::AppState;
 
 /// Shared mutable configuration state
 static CONFIG_STATE: once_cell::sync::Lazy<RwLock<HostConfigResource>> =
@@ -19,14 +14,18 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/host", get(get_host_config).put(update_host_config))
         .route("/naming", get(get_naming_config).put(update_naming_config))
-        .route("/mediamanagement", get(get_media_management_config).put(update_media_management_config))
-        .route("/mediaManagement", get(get_media_management_config).put(update_media_management_config))
+        .route(
+            "/mediamanagement",
+            get(get_media_management_config).put(update_media_management_config),
+        )
+        .route(
+            "/mediaManagement",
+            get(get_media_management_config).put(update_media_management_config),
+        )
         .route("/ui", get(get_ui_config).put(update_ui_config))
 }
 
-async fn get_host_config(
-    State(state): State<Arc<AppState>>,
-) -> Json<HostConfigResource> {
+async fn get_host_config(State(state): State<Arc<AppState>>) -> Json<HostConfigResource> {
     let config = CONFIG_STATE.read().await;
     let mut result = config.clone();
 
@@ -83,9 +82,7 @@ async fn get_naming_config() -> Json<NamingConfig> {
     Json(NamingConfig::default())
 }
 
-async fn update_naming_config(
-    Json(config): Json<NamingConfig>,
-) -> Json<NamingConfig> {
+async fn update_naming_config(Json(config): Json<NamingConfig>) -> Json<NamingConfig> {
     Json(config)
 }
 
@@ -103,15 +100,13 @@ async fn get_ui_config() -> Json<UiConfig> {
     Json(UiConfig::default())
 }
 
-async fn update_ui_config(
-    Json(config): Json<UiConfig>,
-) -> Json<UiConfig> {
+async fn update_ui_config(Json(config): Json<UiConfig>) -> Json<UiConfig> {
     Json(config)
 }
 
 /// Hash password using bcrypt
 fn hash_password(password: &str) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(password.as_bytes());
     format!("{:x}", hasher.finalize())
@@ -135,7 +130,7 @@ pub async fn get_auth_credentials() -> Option<(String, String)> {
         (Some(username), Some(hash)) if !username.is_empty() => {
             Some((username.clone(), hash.clone()))
         }
-        _ => None
+        _ => None,
     }
 }
 

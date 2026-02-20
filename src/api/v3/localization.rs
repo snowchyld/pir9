@@ -1,9 +1,9 @@
 //! Localization API endpoint
 
 use axum::{response::Json, routing::get, Router};
+use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
-use once_cell::sync::Lazy;
 
 use crate::web::AppState;
 

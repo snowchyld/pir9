@@ -3,18 +3,20 @@
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, error, info, warn};
 
-use crate::core::datastore::Database;
 use crate::core::datastore::models::TrackedDownloadDbModel;
 use crate::core::datastore::repositories::{
-    TrackedDownloadRepository, DownloadClientRepository, SeriesRepository, EpisodeRepository,
+    DownloadClientRepository, EpisodeRepository, SeriesRepository, TrackedDownloadRepository,
 };
+use crate::core::datastore::Database;
 use crate::core::download::clients::{create_client_from_model, DownloadOptions, DownloadState};
 use crate::core::indexers::ReleaseInfo;
 use crate::core::profiles::qualities::QualityModel;
 
-use super::{TrackedDownloadState, TrackedDownloadStatus, Protocol, QueueItem, QueueStatus, StatusMessage};
+use super::{
+    Protocol, QueueItem, QueueStatus, StatusMessage, TrackedDownloadState, TrackedDownloadStatus,
+};
 
 /// Service for managing tracked downloads
 pub struct TrackedDownloadService {
@@ -46,12 +48,12 @@ impl TrackedDownloadService {
         };
 
         // Serialize quality and languages
-        let quality_json = serde_json::to_string(&release.quality)
-            .unwrap_or_else(|_| "{}".to_string());
-        let languages_json = serde_json::to_string(&release.languages)
-            .unwrap_or_else(|_| "[]".to_string());
-        let episode_ids_json = serde_json::to_string(&episode_ids)
-            .unwrap_or_else(|_| "[]".to_string());
+        let quality_json =
+            serde_json::to_string(&release.quality).unwrap_or_else(|_| "{}".to_string());
+        let languages_json =
+            serde_json::to_string(&release.languages).unwrap_or_else(|_| "[]".to_string());
+        let episode_ids_json =
+            serde_json::to_string(&episode_ids).unwrap_or_else(|_| "[]".to_string());
 
         let tracked = TrackedDownloadDbModel {
             id: 0, // Will be set by database
@@ -74,7 +76,10 @@ impl TrackedDownloadService {
         };
 
         let id = repo.insert(&tracked).await?;
-        info!("Tracked download created: id={}, title={}", id, tracked.title);
+        info!(
+            "Tracked download created: id={}, title={}",
+            id, tracked.title
+        );
 
         Ok(id)
     }
@@ -107,21 +112,16 @@ impl TrackedDownloadService {
             client_name_map.insert(client_model.id, client_model.name.clone());
 
             match create_client_from_model(client_model) {
-                Ok(client) => {
-                    match client.get_downloads().await {
-                        Ok(downloads) => {
-                            for dl in downloads {
-                                client_status_map.insert(
-                                    (client_model.id, dl.id.clone()),
-                                    dl
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            debug!("Failed to get downloads from {}: {}", client_model.name, e);
+                Ok(client) => match client.get_downloads().await {
+                    Ok(downloads) => {
+                        for dl in downloads {
+                            client_status_map.insert((client_model.id, dl.id.clone()), dl);
                         }
                     }
-                }
+                    Err(e) => {
+                        debug!("Failed to get downloads from {}: {}", client_model.name, e);
+                    }
+                },
                 Err(e) => {
                     debug!("Failed to create client {}: {}", client_model.name, e);
                 }
@@ -135,10 +135,12 @@ impl TrackedDownloadService {
             // Parse stored JSON
             let episode_ids: Vec<i64> = serde_json::from_str(&td.episode_ids).unwrap_or_default();
             let quality: QualityModel = serde_json::from_str(&td.quality).unwrap_or_default();
-            let status_messages: Vec<StatusMessage> = serde_json::from_str(&td.status_messages).unwrap_or_default();
+            let status_messages: Vec<StatusMessage> =
+                serde_json::from_str(&td.status_messages).unwrap_or_default();
 
             // Get live status from download client
-            let live_status = client_status_map.get(&(td.download_client_id, td.download_id.clone()));
+            let live_status =
+                client_status_map.get(&(td.download_client_id, td.download_id.clone()));
 
             // Determine queue status and state
             let (queue_status, tracked_state, size_left, timeleft, estimated_completion) =
@@ -170,18 +172,26 @@ impl TrackedDownloadService {
                         format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
                     });
 
-                    let estimated = live.eta.map(|secs| {
-                        Utc::now() + chrono::Duration::seconds(secs)
-                    });
+                    let estimated = live
+                        .eta
+                        .map(|secs| Utc::now() + chrono::Duration::seconds(secs));
 
-                    (queue_status, tracked_state, live.size_left, timeleft, estimated)
+                    (
+                        queue_status,
+                        tracked_state,
+                        live.size_left,
+                        timeleft,
+                        estimated,
+                    )
                 } else {
                     // Download not found in client - might be removed or client unavailable
-                    (QueueStatus::DownloadClientUnavailable,
-                     TrackedDownloadState::from_i32(td.status),
-                     td.size,
-                     None,
-                     None)
+                    (
+                        QueueStatus::DownloadClientUnavailable,
+                        TrackedDownloadState::from_i32(td.status),
+                        td.size,
+                        None,
+                        None,
+                    )
                 };
 
             // Get first episode info for display
@@ -218,7 +228,8 @@ impl TrackedDownloadService {
                 _ => Protocol::Unknown,
             };
 
-            let client_name = client_name_map.get(&td.download_client_id)
+            let client_name = client_name_map
+                .get(&td.download_client_id)
                 .cloned()
                 .unwrap_or_else(|| "Unknown".to_string());
 
@@ -273,8 +284,10 @@ impl TrackedDownloadService {
             let client_model = match clients.iter().find(|c| c.id == td.download_client_id) {
                 Some(c) => c,
                 None => {
-                    warn!("Download client {} not found for tracked download {}",
-                          td.download_client_id, td.id);
+                    warn!(
+                        "Download client {} not found for tracked download {}",
+                        td.download_client_id, td.id
+                    );
                     continue;
                 }
             };
@@ -296,14 +309,18 @@ impl TrackedDownloadService {
                 Ok(Some(status)) => status,
                 Ok(None) => {
                     // Download not found - might have been removed externally
-                    warn!("Download {} not found in client {}", td.download_id, client_model.name);
+                    warn!(
+                        "Download {} not found in client {}",
+                        td.download_id, client_model.name
+                    );
                     // Mark as failed
                     repo.update_status(
                         td.id,
                         TrackedDownloadState::Failed as i32,
                         "[]",
-                        Some("Download not found in client")
-                    ).await?;
+                        Some("Download not found in client"),
+                    )
+                    .await?;
                     continue;
                 }
                 Err(e) => {
@@ -332,8 +349,9 @@ impl TrackedDownloadService {
                             td.id,
                             TrackedDownloadState::ImportPending as i32,
                             "[]",
-                            None
-                        ).await?;
+                            None,
+                        )
+                        .await?;
 
                         // TODO: Trigger import process
                         // This would:
@@ -346,14 +364,18 @@ impl TrackedDownloadService {
                 }
                 DownloadState::Failed => {
                     if current_state != TrackedDownloadState::Failed {
-                        error!("Download failed: {} - {:?}", td.title, live_status.error_message);
+                        error!(
+                            "Download failed: {} - {:?}",
+                            td.title, live_status.error_message
+                        );
 
                         repo.update_status(
                             td.id,
                             TrackedDownloadState::Failed as i32,
                             "[]",
-                            live_status.error_message.as_deref()
-                        ).await?;
+                            live_status.error_message.as_deref(),
+                        )
+                        .await?;
                     }
                 }
                 _ => {
@@ -366,17 +388,14 @@ impl TrackedDownloadService {
     }
 
     /// Remove a download from queue
-    pub async fn remove(
-        &self,
-        id: i64,
-        remove_from_client: bool,
-        blocklist: bool,
-    ) -> Result<()> {
+    pub async fn remove(&self, id: i64, remove_from_client: bool, blocklist: bool) -> Result<()> {
         let repo = TrackedDownloadRepository::new(self.db.clone());
         let client_repo = DownloadClientRepository::new(self.db.clone());
 
         // Get the tracked download
-        let tracked = repo.get_by_id(id).await?
+        let tracked = repo
+            .get_by_id(id)
+            .await?
             .context("Tracked download not found")?;
 
         // Remove from download client if requested
@@ -405,11 +424,7 @@ impl TrackedDownloadService {
     }
 
     /// Grab a release and send to download client
-    pub async fn grab_release(
-        &self,
-        release: &ReleaseInfo,
-        episode_ids: Vec<i64>,
-    ) -> Result<i64> {
+    pub async fn grab_release(&self, release: &ReleaseInfo, episode_ids: Vec<i64>) -> Result<i64> {
         let client_repo = DownloadClientRepository::new(self.db.clone());
 
         // Get enabled download clients for this protocol
@@ -422,7 +437,8 @@ impl TrackedDownloadService {
         };
 
         // Find the best client for this protocol (highest priority = lowest number)
-        let client_model = clients.iter()
+        let client_model = clients
+            .iter()
             .filter(|c| c.enable && c.protocol == protocol_num)
             .min_by_key(|c| c.priority)
             .context("No enabled download client for this protocol")?;
@@ -450,13 +466,15 @@ impl TrackedDownloadService {
         };
 
         // Track the download
-        let tracked_id = self.track_download(
-            download_id,
-            client_model.id,
-            release,
-            episode_ids,
-            false, // TODO: Determine if upgrade
-        ).await?;
+        let tracked_id = self
+            .track_download(
+                download_id,
+                client_model.id,
+                release,
+                episode_ids,
+                false, // TODO: Determine if upgrade
+            )
+            .await?;
 
         Ok(tracked_id)
     }
