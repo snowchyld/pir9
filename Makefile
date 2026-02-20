@@ -4,8 +4,10 @@
 # Registry configuration
 REGISTRY ?= reg.pir9.org:2443
 IMAGE_NAME ?= pir9
-IMAGE_TAG ?= latest
+VERSION := $(shell grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+IMAGE_TAG ?= $(VERSION)
 FULL_IMAGE = $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
+LATEST_IMAGE = $(REGISTRY)/$(IMAGE_NAME):latest
 
 # Default target: build, push to registry, and restart
 .DEFAULT_GOAL := release-restart
@@ -39,10 +41,10 @@ help:
 	@echo "  make build-all      - Full rebuild (no cache)"
 	@echo ""
 	@echo "Registry & Deployment:"
-	@echo "  make release        - Build and push to registry"
-	@echo "  make release-restart - Build, push, and restart local containers"
-	@echo "  make push           - Push image to registry ($(FULL_IMAGE))"
-	@echo "  make pull           - Pull image from registry"
+	@echo "  make release        - Build and push v$(VERSION) to registry"
+	@echo "  make release-restart - Build, push v$(VERSION), and restart local"
+	@echo "  make push           - Push $(FULL_IMAGE) + :latest"
+	@echo "  make pull           - Pull :latest from registry"
 	@echo ""
 	@echo "Development Builds:"
 	@echo "  make dev-api        - Build Rust API locally (release)"
@@ -65,8 +67,7 @@ help:
 	@echo ""
 	@echo "Configuration:"
 	@echo "  REGISTRY=$(REGISTRY)"
-	@echo "  IMAGE_NAME=$(IMAGE_NAME)"
-	@echo "  IMAGE_TAG=$(IMAGE_TAG)"
+	@echo "  IMAGE=$(FULL_IMAGE) → :latest"
 
 # =============================================================================
 # Docker Operations
@@ -213,37 +214,28 @@ check:
 # Registry Operations
 # =============================================================================
 
-# Build and tag for registry
+# Build and tag for registry (version + latest)
 docker-build:
 	@echo "Building Docker image: $(FULL_IMAGE)"
 	docker build -t $(FULL_IMAGE) -f Dockerfile .
-	docker tag $(FULL_IMAGE) $(REGISTRY)/$(IMAGE_NAME):latest
+	docker tag $(FULL_IMAGE) $(LATEST_IMAGE)
 
-# Push to registry
+# Push to registry (version + latest)
 push:
 	@echo "Pushing to registry: $(FULL_IMAGE)"
 	docker push $(FULL_IMAGE)
-	@echo "Image pushed successfully"
-	@echo ""
-	@echo "Pull on Synology with:"
-	@echo "  docker pull $(FULL_IMAGE)"
+	docker push $(LATEST_IMAGE)
+	@echo "Image pushed: $(FULL_IMAGE) + :latest"
 
-# Pull from registry
+# Pull from registry (latest)
 pull:
-	@echo "Pulling from registry: $(FULL_IMAGE)"
-	docker pull $(FULL_IMAGE)
+	@echo "Pulling from registry: $(LATEST_IMAGE)"
+	docker pull $(LATEST_IMAGE)
 
 # Full release: build and push
 release: docker-build push
 	@echo ""
-	@echo "Release complete: $(FULL_IMAGE)"
-	@echo ""
-	@echo "Next steps:"
-	@echo "  make release-restart    # Restart local containers with new image"
-	@echo ""
-	@echo "On Synology workers:"
-	@echo "  docker compose -f docker-compose.synology-worker.yml pull"
-	@echo "  docker compose -f docker-compose.synology-worker.yml up -d"
+	@echo "Release complete: $(FULL_IMAGE) (also tagged :latest)"
 
 # Full release + restart local containers
 release-restart: dev-frontend release
@@ -255,9 +247,7 @@ release-restart: dev-frontend release
 	@echo ""
 	@echo "Local containers restarted. Check logs with: make logs"
 
-# Build with specific tag
+# Build with specific tag override
 release-tag:
 	@if [ -z "$(TAG)" ]; then echo "Usage: make release-tag TAG=v1.0.0"; exit 1; fi
 	$(MAKE) release IMAGE_TAG=$(TAG)
-	docker tag $(REGISTRY)/$(IMAGE_NAME):$(TAG) $(REGISTRY)/$(IMAGE_NAME):latest
-	docker push $(REGISTRY)/$(IMAGE_NAME):latest
