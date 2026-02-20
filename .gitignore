@@ -1,3 +1,5 @@
+test-results/
+node_modules/
 # Rust
 target/
 Cargo.lock
