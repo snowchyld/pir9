@@ -364,9 +364,49 @@ pub fn parse_quality(title: &str) -> QualityModel {
     }
 }
 
+/// Replace common English word-numbers (zero–twenty) with their digit equivalents.
+/// Operates on whitespace-delimited tokens so "three" → "3" but won't mangle substrings.
+fn replace_word_numbers(s: &str) -> String {
+    const REPLACEMENTS: &[(&str, &str)] = &[
+        ("zero", "0"),
+        ("one", "1"),
+        ("two", "2"),
+        ("three", "3"),
+        ("four", "4"),
+        ("five", "5"),
+        ("six", "6"),
+        ("seven", "7"),
+        ("eight", "8"),
+        ("nine", "9"),
+        ("ten", "10"),
+        ("eleven", "11"),
+        ("twelve", "12"),
+        ("thirteen", "13"),
+        ("fourteen", "14"),
+        ("fifteen", "15"),
+        ("sixteen", "16"),
+        ("seventeen", "17"),
+        ("eighteen", "18"),
+        ("nineteen", "19"),
+        ("twenty", "20"),
+    ];
+    s.split_whitespace()
+        .map(|token| {
+            for (word, digit) in REPLACEMENTS {
+                if token == *word {
+                    return (*digit).to_string();
+                }
+            }
+            token.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Normalize a series title for matching (lowercase, remove special chars)
 pub fn normalize_title(title: &str) -> String {
     let cleaned = clean_title(title).to_lowercase();
+    let cleaned = replace_word_numbers(&cleaned);
 
     cleaned
         .replace(" the ", " ")

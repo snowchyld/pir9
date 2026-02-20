@@ -412,6 +412,7 @@ export interface QueueItem {
   episode?: QueueItemEpisode;
   series?: QueueItemSeries;
   movie?: QueueItemMovie;
+  outputPath?: string;
 }
 
 export interface QueueResponse {

@@ -500,7 +500,7 @@ export class QueuePage extends BaseComponent {
           <tr>
             ${safeHtml(th('Status', 'status'))}
             ${safeHtml(th('Title', 'title'))}
-            ${safeHtml(th('Episode', 'episode'))}
+            ${safeHtml(th(this.activeTab === 'movies' ? 'File' : 'Episode', 'episode'))}
             ${safeHtml(th('Quality', 'quality'))}
             ${safeHtml(th('Protocol', 'protocol'))}
             ${safeHtml(th('Progress', 'progress'))}
@@ -535,7 +535,9 @@ export class QueuePage extends BaseComponent {
       : `/series/${item.series?.titleSlug ?? ''}`;
     const linkSlug = isMovie ? (item.movie?.titleSlug ?? '') : (item.series?.titleSlug ?? '');
     const episodeLabel = isMovie
-      ? '-'
+      ? (item.outputPath
+          ? item.outputPath.split('/').pop() ?? item.title
+          : item.title)
       : item.episode
         ? `S${String(item.episode.seasonNumber).padStart(2, '0')}E${String(item.episode.episodeNumber).padStart(2, '0')}${item.episode.title ? ` - ${item.episode.title}` : ''}`
         : '-';
@@ -556,7 +558,7 @@ export class QueuePage extends BaseComponent {
               : `<span title="${escapeHtml(displayTitle)}">${escapeHtml(this.truncate(displayTitle, 32))}</span>`
           }
         </td>
-        <td class="episode-cell" title="${escapeHtml(episodeLabel)}">
+        <td class="episode-cell" title="${isMovie ? `Source: ${escapeHtml(item.title)}` : escapeHtml(episodeLabel)}">
           <div>${escapeHtml(this.truncate(episodeLabel, 64))}</div>
         </td>
         <td>${escapeHtml(item.quality?.quality?.name ?? '-')}</td>
