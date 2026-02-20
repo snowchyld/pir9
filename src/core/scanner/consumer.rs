@@ -465,9 +465,9 @@ impl ScanResultConsumer {
         errors: Vec<String>,
     ) {
         info!(
-            "Download scan result: job_id={}, worker={}, files={}, errors={}",
-            job_id,
+            "Download scan result from worker {}: job_id={}, {} files scanned, {} errors",
             worker_id,
+            job_id,
             files_found.len(),
             errors.len()
         );
@@ -552,9 +552,9 @@ impl ScanResultConsumer {
             {
                 Ok(Some(s)) => s,
                 _ => {
-                    debug!(
-                        "Download import: no series match for '{}'",
-                        filename
+                    info!(
+                        "[worker:{}] no series match for '{}'",
+                        worker_id, filename
                     );
                     continue;
                 }
@@ -568,11 +568,22 @@ impl ScanResultConsumer {
             )
             .await
             {
-                Ok(eps) if !eps.is_empty() => eps,
+                Ok(eps) if !eps.is_empty() => {
+                    let ep_list: String = eps
+                        .iter()
+                        .map(|e| format!("S{:02}E{:02}", e.season_number, e.episode_number))
+                        .collect::<Vec<_>>()
+                        .join("+");
+                    info!(
+                        "[worker:{}] '{}' → '{}' {} (parsed {:?})",
+                        worker_id, filename, series.title, ep_list, parsed_eps
+                    );
+                    eps
+                }
                 _ => {
-                    debug!(
-                        "Download import: no episode match for '{}'",
-                        filename
+                    info!(
+                        "[worker:{}] '{}' → '{}' — no episode match (parsed {:?})",
+                        worker_id, filename, series.title, parsed_eps
                     );
                     continue;
                 }
@@ -622,23 +633,30 @@ impl ScanResultConsumer {
                 },
             );
 
-            info!(
-                "Download import: planned {} -> {} ({})",
+            debug!(
+                "[worker:{}] planned: {} → {}",
+                worker_id,
                 file.path.display(),
                 import_specs.last().unwrap().dest_path.display(),
-                episodes
-                    .iter()
-                    .map(|e| format!("S{:02}E{:02}", e.season_number, e.episode_number))
-                    .collect::<Vec<_>>()
-                    .join(", ")
             );
         }
 
+        let matched_count = import_specs.len();
+        let skipped_count = files_found.len() - matched_count;
+
         if import_specs.is_empty() {
-            info!("Download import: no files could be matched to episodes");
+            info!(
+                "[worker:{}] '{}': matching complete — 0/{} files matched",
+                worker_id, download_title, files_found.len()
+            );
             self.mark_job_result_received(job_id).await;
             return;
         }
+
+        info!(
+            "[worker:{}] '{}': matching complete — {}/{} files matched, {} skipped",
+            worker_id, download_title, matched_count, files_found.len(), skipped_count
+        );
 
         // Generate a new job_id for the import files request
         let import_job_id = uuid::Uuid::new_v4().to_string();
@@ -659,9 +677,8 @@ impl ScanResultConsumer {
 
         // Phase 3: Send ImportFilesRequest to worker
         info!(
-            "Download import: dispatching {} file moves to worker (import_job_id={})",
-            import_specs.len(),
-            import_job_id
+            "[worker:{}] '{}': dispatching {} file moves (import_job_id={})",
+            worker_id, download_title, import_specs.len(), import_job_id
         );
 
         self.event_bus
@@ -687,8 +704,8 @@ impl ScanResultConsumer {
         let succeeded = results.iter().filter(|r| r.success).count();
         let failed = results.iter().filter(|r| !r.success).count();
         info!(
-            "Import files result: job_id={}, worker={}, succeeded={}, failed={}",
-            job_id, worker_id, succeeded, failed
+            "[worker:{}] File moves complete: job_id={}, {} succeeded, {} failed",
+            worker_id, job_id, succeeded, failed
         );
 
         // Look up pending import state
@@ -865,8 +882,8 @@ impl ScanResultConsumer {
         .await;
 
         info!(
-            "Download import complete for '{}': {} files, {} episodes",
-            pending.download_title, total_imported, total_episodes_linked
+            "[worker:{}] Import complete '{}': {} files imported, {} episodes linked",
+            worker_id, pending.download_title, total_imported, total_episodes_linked
         );
     }
 
