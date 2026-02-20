@@ -10,11 +10,15 @@ use tracing::{info, warn, error};
 use crate::core::datastore::Database;
 use crate::core::datastore::repositories::{
     IndexerRepository, DownloadClientRepository, SeriesRepository, RootFolderRepository,
+    EpisodeRepository, QualityProfileRepository, TrackedDownloadRepository,
 };
 use crate::core::indexers::rss::RssSyncService;
 use crate::core::download::clients::create_client_from_model as create_download_client;
 use crate::core::download::import::ImportService;
 use crate::core::indexers::create_client_from_model as create_indexer_client;
+use crate::core::parser::{parse_title, best_series_match};
+use crate::core::profiles::QualityProfileItem;
+use crate::core::queue::service::TrackedDownloadService;
 
 /// Job scheduler for managing background tasks
 #[derive(Debug, Clone)]
@@ -223,7 +227,7 @@ async fn execute_job_command(
 // Job Implementations
 // ============================================================================
 
-/// RSS Sync: Fetch RSS feeds from all enabled indexers and process new releases
+/// RSS Sync: Fetch RSS feeds from all enabled indexers and auto-grab wanted releases
 async fn execute_rss_sync(db: &Database) -> Result<()> {
     info!("Executing RSS sync...");
 
@@ -244,12 +248,139 @@ async fn execute_rss_sync(db: &Database) -> Result<()> {
     let releases = rss_service.sync().await?;
 
     info!("RSS sync found {} releases", releases.len());
+    if releases.is_empty() {
+        return Ok(());
+    }
 
-    // TODO: Process releases against wanted episodes
-    // - Match releases to series/episodes
-    // - Check quality profiles
-    // - Add approved releases to download queue
+    // Load all monitored series and their quality profiles
+    let series_repo = SeriesRepository::new(db.clone());
+    let episode_repo = EpisodeRepository::new(db.clone());
+    let quality_repo = QualityProfileRepository::new(db.clone());
+    let tracked_repo = TrackedDownloadRepository::new(db.clone());
+    let tracked_service = TrackedDownloadService::new(db.clone());
 
+    let all_series = series_repo.get_all().await?;
+    let monitored_series: Vec<_> = all_series.into_iter().filter(|s| s.monitored).collect();
+    if monitored_series.is_empty() {
+        info!("No monitored series, skipping release matching");
+        return Ok(());
+    }
+
+    // Pre-load quality profiles into a map for fast lookup
+    let all_profiles = quality_repo.get_all().await?;
+    let profiles: std::collections::HashMap<i64, _> = all_profiles
+        .into_iter()
+        .map(|p| (p.id, p))
+        .collect();
+
+    // Get currently downloading episode IDs to avoid duplicate grabs
+    let active_downloads = tracked_repo.get_all_active().await.unwrap_or_default();
+    let downloading_episode_ids: std::collections::HashSet<i64> = active_downloads
+        .iter()
+        .flat_map(|d| {
+            serde_json::from_str::<Vec<i64>>(&d.episode_ids).unwrap_or_default()
+        })
+        .collect();
+
+    let mut grabbed = 0u32;
+    let mut rejected = 0u32;
+
+    for mut release in releases {
+        // 1. Parse the release title
+        let parsed = match parse_title(&release.title) {
+            Some(p) if p.season_number.is_some() && !p.episode_numbers.is_empty() => p,
+            _ => {
+                rejected += 1;
+                continue;
+            }
+        };
+
+        // 2. Match to a monitored series
+        let series_idx = match best_series_match(&parsed, &monitored_series) {
+            Some(idx) => idx,
+            None => {
+                rejected += 1;
+                continue;
+            }
+        };
+        let series = &monitored_series[series_idx];
+
+        // 3. Get the quality profile for this series
+        let profile = match profiles.get(&series.quality_profile_id) {
+            Some(p) => p,
+            None => {
+                warn!("RSS: quality profile {} not found for series '{}'",
+                      series.quality_profile_id, series.title);
+                rejected += 1;
+                continue;
+            }
+        };
+
+        // Parse profile items from JSON
+        let profile_items: Vec<QualityProfileItem> =
+            serde_json::from_str(&profile.items).unwrap_or_default();
+
+        // 4. Check if the release quality is allowed by the profile
+        let release_weight = release.quality.quality.weight();
+        let is_quality_allowed = profile_items.iter().any(|item| {
+            item.allowed && (item.quality.id == release_weight
+                || item.items.iter().any(|q| q.id == release_weight))
+        });
+
+        if !is_quality_allowed {
+            rejected += 1;
+            continue;
+        }
+
+        // 5. Check quality meets cutoff (cutoff is stored as quality weight/ID)
+        if release_weight < profile.cutoff {
+            rejected += 1;
+            continue;
+        }
+
+        // 6. Find matching wanted episodes
+        let season = parsed.season_number.unwrap();
+        let mut episode_ids = Vec::new();
+
+        for &ep_num in &parsed.episode_numbers {
+            if let Ok(Some(ep)) = episode_repo.get_by_series_season_episode(series.id, season, ep_num).await {
+                // Episode must be monitored, missing, and already aired
+                if ep.monitored
+                    && !ep.has_file
+                    && ep.air_date_utc.is_some_and(|d| d < chrono::Utc::now())
+                    && !downloading_episode_ids.contains(&ep.id)
+                {
+                    episode_ids.push(ep.id);
+                }
+            }
+        }
+
+        if episode_ids.is_empty() {
+            rejected += 1;
+            continue;
+        }
+
+        // 7. Grab the release
+        release.series_id = Some(series.id);
+        info!("RSS auto-grab: '{}' → {} S{:02}E{} ({:?})",
+              release.title, series.title, season,
+              parsed.episode_numbers.iter().map(|e| format!("{:02}", e)).collect::<Vec<_>>().join("E"),
+              release.quality.quality);
+
+        match tracked_service.grab_release(&release, episode_ids).await {
+            Ok(tracked_id) => {
+                grabbed += 1;
+                info!("Grabbed successfully (tracked_id={})", tracked_id);
+            }
+            Err(e) => {
+                warn!("Failed to grab '{}': {}", release.title, e);
+                rejected += 1;
+            }
+        }
+    }
+
+    info!("RSS sync complete: {} grabbed, {} skipped out of {} releases",
+          grabbed, rejected, grabbed + rejected);
     Ok(())
 }
 
