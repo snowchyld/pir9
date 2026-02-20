@@ -19,4 +19,5 @@ pub mod queue;
 pub mod scanner;
 pub mod scheduler;
 pub mod tv;
+pub mod tvmaze;
 pub mod worker;

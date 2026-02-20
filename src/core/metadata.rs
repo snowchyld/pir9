@@ -9,14 +9,16 @@ use serde::Deserialize;
 use tracing::info;
 
 use crate::core::imdb::ImdbClient;
+use crate::core::tvmaze::TvMazeClient;
 
 /// Base URL for Skyhook metadata service
 const SKYHOOK_BASE_URL: &str = "http://skyhook.sonarr.tv/v1/tvdb";
 
-/// HTTP client for fetching series metadata from IMDB + Skyhook
+/// HTTP client for fetching series metadata from IMDB + Skyhook + TVMaze
 #[derive(Clone)]
 pub struct MetadataService {
     imdb_client: ImdbClient,
+    tvmaze_client: TvMazeClient,
     http_client: reqwest::Client,
 }
 
@@ -29,7 +31,7 @@ impl std::fmt::Debug for MetadataService {
 }
 
 impl MetadataService {
-    pub fn new(imdb_client: ImdbClient) -> Self {
+    pub fn new(imdb_client: ImdbClient, tvmaze_client: TvMazeClient) -> Self {
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .user_agent(format!("pir9/{}", env!("CARGO_PKG_VERSION")))
@@ -37,6 +39,7 @@ impl MetadataService {
             .expect("Failed to create HTTP client");
         Self {
             imdb_client,
+            tvmaze_client,
             http_client,
         }
     }
@@ -54,7 +57,7 @@ impl MetadataService {
         let skyhook_fut = self.fetch_from_skyhook(tvdb_id);
 
         // If IMDB is enabled and we have an imdb_id, fetch in parallel
-        if self.imdb_client.is_enabled() {
+        let mut result = if self.imdb_client.is_enabled() {
             if let Some(imdb_id) = imdb_id {
                 let imdb_fut = self.imdb_client.get_series(imdb_id);
                 let (skyhook_result, imdb_result) = tokio::join!(skyhook_fut, imdb_fut);
@@ -72,13 +75,22 @@ impl MetadataService {
                     );
                 }
 
-                return Ok(Self::merge_metadata(skyhook, imdb_series));
+                Self::merge_metadata(skyhook, imdb_series)
+            } else {
+                let skyhook = skyhook_fut.await?;
+                Self::merge_metadata(skyhook, None)
             }
+        } else {
+            let skyhook = skyhook_fut.await?;
+            Self::merge_metadata(skyhook, None)
+        };
+
+        // TVMaze fallback: fill in network when Skyhook has none
+        if result.network.is_none() {
+            result.network = self.tvmaze_client.get_network_name(tvdb_id, imdb_id).await;
         }
 
-        // Skyhook only
-        let skyhook = skyhook_fut.await?;
-        Ok(Self::merge_metadata(skyhook, None))
+        Ok(result)
     }
 
     /// Enrich local episodes with IMDB ratings data.

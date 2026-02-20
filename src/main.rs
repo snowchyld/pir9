@@ -155,7 +155,9 @@ async fn run_server_mode(args: &Args) -> Result<()> {
         JobScheduler::new(database.clone()).context("Failed to initialize job scheduler")?;
     {
         let imdb_client = crate::core::imdb::ImdbClient::from_env();
-        let metadata_service = crate::core::metadata::MetadataService::new(imdb_client);
+        let tvmaze_client = crate::core::tvmaze::TvMazeClient::new();
+        let metadata_service =
+            crate::core::metadata::MetadataService::new(imdb_client, tvmaze_client);
         scheduler.set_metadata_service(metadata_service);
         scheduler.set_media_config(config.media.clone());
     }

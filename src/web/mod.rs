@@ -52,7 +52,8 @@ impl AppState {
         scheduler: JobScheduler,
     ) -> anyhow::Result<Arc<Self>> {
         let imdb_client = ImdbClient::from_env();
-        let metadata_service = MetadataService::new(imdb_client.clone());
+        let tvmaze_client = crate::core::tvmaze::TvMazeClient::new();
+        let metadata_service = MetadataService::new(imdb_client.clone(), tvmaze_client);
         Ok(Arc::new(Self {
             config: parking_lot::RwLock::new(config),
             db,
@@ -89,7 +90,8 @@ impl AppState {
         info!("Redis event bus initialized");
 
         let imdb_client = ImdbClient::from_env();
-        let metadata_service = MetadataService::new(imdb_client.clone());
+        let tvmaze_client = crate::core::tvmaze::TvMazeClient::new();
+        let metadata_service = MetadataService::new(imdb_client.clone(), tvmaze_client);
         Ok(Arc::new(Self {
             config: parking_lot::RwLock::new(config),
             db,
