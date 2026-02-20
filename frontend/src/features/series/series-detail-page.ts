@@ -36,6 +36,13 @@ export class SeriesDetailPage extends BaseComponent {
   private titleSlug = signal<string | null>(null);
   private expandedSeasons = signal<Set<number>>(new Set());
 
+  private handleDocumentClick = (event: MouseEvent): void => {
+    const dropdown = this.querySelector('.search-dropdown');
+    if (dropdown && !dropdown.contains(event.target as Node)) {
+      this.closeSearchMenu();
+    }
+  };
+
   // Query state - will be created lazily when we have a series ID
   private seriesQuery: ReturnType<typeof createQuery<Series | null>> | null = null;
   private episodesQuery: ReturnType<typeof createQuery<Episode[]>> | null = null;
@@ -170,6 +177,11 @@ export class SeriesDetailPage extends BaseComponent {
       this.titleSlug.set(slug);
       this.lookupSeriesId(slug);
     }
+    document.addEventListener('click', this.handleDocumentClick);
+  }
+
+  protected onDestroy(): void {
+    document.removeEventListener('click', this.handleDocumentClick);
   }
 
   protected template(): string {
@@ -187,6 +199,13 @@ export class SeriesDetailPage extends BaseComponent {
     }
 
     const seasons = this.groupEpisodesBySeason(episodes, series);
+    const searchSeasonItems = [...seasons]
+      .sort((a, b) => a.seasonNumber - b.seasonNumber)
+      .map((s) => {
+        const label = s.seasonNumber === 0 ? 'Specials' : `Season ${s.seasonNumber}`;
+        return `<button class="search-menu-item" onclick="event.stopPropagation(); this.closest('series-detail-page').openSeasonSearch(${s.seasonNumber})">${escapeHtml(label)}</button>`;
+      })
+      .join('');
 
     // Build episodeId → QueueItem map for download progress
     const queueMap = new Map<number, QueueItem>();
@@ -256,13 +275,29 @@ export class SeriesDetailPage extends BaseComponent {
             </div>
 
             <div class="series-actions">
-              <button class="action-btn primary" onclick="this.closest('series-detail-page').handleSearchSeries()">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="11" cy="11" r="8"></circle>
-                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                </svg>
-                Search
-              </button>
+              <div class="search-dropdown">
+                <button class="action-btn primary" onclick="event.stopPropagation(); this.closest('series-detail-page').toggleSearchMenu()">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                  </svg>
+                  Search
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </button>
+                <div class="search-menu">
+                  <div class="search-menu-label">Interactive Search</div>
+                  <button class="search-menu-item" onclick="event.stopPropagation(); this.closest('series-detail-page').openSeriesSearch()">
+                    All Seasons
+                  </button>
+                  ${safeHtml(searchSeasonItems)}
+                  <div class="search-menu-divider"></div>
+                  <button class="search-menu-item" onclick="event.stopPropagation(); this.closest('series-detail-page').handleSearchSeries()">
+                    Automatic Search
+                  </button>
+                </div>
+              </div>
               <button class="action-btn" onclick="this.closest('series-detail-page').handleRefreshMetadata()" title="Re-fetch episode list from TVDB/Skyhook">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M21 2v6h-6"></path>
@@ -694,6 +729,62 @@ export class SeriesDetailPage extends BaseComponent {
           color: var(--color-white);
           background-color: var(--color-success);
         }
+
+        .search-dropdown {
+          position: relative;
+          display: inline-block;
+        }
+
+        .search-menu {
+          display: none;
+          position: absolute;
+          top: 100%;
+          left: 0;
+          margin-top: 0.25rem;
+          min-width: 200px;
+          max-height: 400px;
+          overflow-y: auto;
+          background-color: var(--bg-popover, var(--bg-card));
+          border: 1px solid var(--border-color);
+          border-radius: 0.375rem;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+          z-index: 50;
+        }
+
+        .search-menu.visible {
+          display: block;
+        }
+
+        .search-menu-label {
+          padding: 0.5rem 0.75rem 0.25rem;
+          font-size: 0.7rem;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: var(--text-color-muted);
+        }
+
+        .search-menu-item {
+          display: block;
+          width: 100%;
+          padding: 0.5rem 0.75rem;
+          background: transparent;
+          border: none;
+          color: var(--text-color);
+          font-size: 0.875rem;
+          text-align: left;
+          cursor: pointer;
+        }
+
+        .search-menu-item:hover {
+          background-color: var(--bg-table-row-hover);
+        }
+
+        .search-menu-divider {
+          height: 1px;
+          margin: 0.25rem 0;
+          background-color: var(--border-color);
+        }
       </style>
     `;
   }
@@ -976,7 +1067,42 @@ export class SeriesDetailPage extends BaseComponent {
     }
   }
 
+  toggleSearchMenu(): void {
+    const menu = this.querySelector('.search-menu') as HTMLElement | null;
+    if (menu) {
+      menu.classList.toggle('visible');
+    }
+  }
+
+  closeSearchMenu(): void {
+    const menu = this.querySelector('.search-menu') as HTMLElement | null;
+    if (menu) {
+      menu.classList.remove('visible');
+    }
+  }
+
+  openSeriesSearch(): void {
+    this.closeSearchMenu();
+    const series = this.seriesQuery?.data.value;
+    if (!series) return;
+    const modal = this.querySelector('release-search-modal') as ReleaseSearchModal | null;
+    if (modal) {
+      modal.open({ seriesId: series.id, seriesTitle: series.title });
+    }
+  }
+
+  openSeasonSearch(seasonNumber: number): void {
+    this.closeSearchMenu();
+    const series = this.seriesQuery?.data.value;
+    if (!series) return;
+    const modal = this.querySelector('release-search-modal') as ReleaseSearchModal | null;
+    if (modal) {
+      modal.open({ seriesId: series.id, seriesTitle: series.title, seasonNumber });
+    }
+  }
+
   handleSearchSeries(): void {
+    this.closeSearchMenu();
     const id = this.seriesId.value;
     if (id) {
       this.searchMutation.mutate({ seriesId: id });
