@@ -1,7 +1,7 @@
 # pir9 Mental Model
 
 > Living document — updated as the codebase evolves.
-> **Version**: 0.32.0 | **Last updated**: 2026-02-16
+> **Version**: 0.36.1 | **Last updated**: 2026-02-16
 
 ## 1. What Is pir9?
 
@@ -263,7 +263,7 @@ Character-by-character template scanner (no regex). O(n) single-pass.
 
 ### 6.10 Scanner (`core/scanner/`)
 
-- `mod.rs` — Core scanning logic (directory walk, video extension filter)
+- `mod.rs` — Core scanning logic (directory walk, video extension filter). **Canonical `VIDEO_EXTENSIONS` constant** (16 formats: mkv, mp4, avi, wmv, m4v, ts, webm, mov, flv, mpg, mpeg, vob, ogm, divx, m2ts, mts) — all other modules reference this single list
 - `jobs.rs` — JobTrackerService (timeout, retries)
 - `consumer.rs` — ScanResultConsumer (imports results from workers)
 - `registry.rs` — WorkerRegistryService (tracks online workers, heartbeats)

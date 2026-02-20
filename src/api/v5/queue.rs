@@ -1288,6 +1288,17 @@ async fn import_queue_item(
         tokio::spawn(async move {
             // scan_movie_folder finds the largest video file in the output path
             if let Some(mut movie_file) = super::movies::scan_movie_folder(&output_path, movie_id) {
+                // Check if this file is already tracked (prevent duplicate imports)
+                if let Ok(existing_files) = movie_file_repo.get_by_movie_id(movie_id).await {
+                    if existing_files.iter().any(|f| f.path == movie_file.path) {
+                        tracing::info!(
+                            "Movie import: file already tracked for '{}': {}",
+                            movie_title, movie_file.path
+                        );
+                        return;
+                    }
+                }
+
                 // Media analysis: probe with FFmpeg + BLAKE3 hash (same as folder import)
                 let file_path = std::path::Path::new(&movie_file.path);
                 if let Ok(info) = crate::core::mediafiles::MediaAnalyzer::analyze(file_path).await {

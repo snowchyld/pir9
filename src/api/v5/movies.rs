@@ -1374,6 +1374,22 @@ async fn import_movies(
 
         // Scan folder for video file
         if let Some(mut movie_file) = scan_movie_folder(&full_path, movie_id) {
+            // Check if this file is already tracked (prevent duplicate imports)
+            if let Ok(existing_files) = file_repo.get_by_movie_id(movie_id).await {
+                if existing_files.iter().any(|f| f.path == movie_file.path) {
+                    tracing::info!(
+                        "Movie import: file already tracked for movie {}: {}",
+                        movie_id, movie_file.path
+                    );
+                    if let Ok(Some(created)) = repo.get_by_id(movie_id).await {
+                        let mut response = MovieResponse::from(created);
+                        enrich_movie_response(&mut response, &state.db).await;
+                        results.push(response);
+                    }
+                    continue;
+                }
+            }
+
             let file_path = std::path::Path::new(&movie_file.path);
 
             // Real media analysis via FFmpeg probe

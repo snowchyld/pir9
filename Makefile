@@ -2,7 +2,7 @@
 # Simplifies Docker operations for development and deployment
 
 # Registry configuration
-REGISTRY ?= reg.pir9.org:2443
+REGISTRY ?= nas.drew.red:2443
 IMAGE_NAME ?= pir9
 VERSION := $(shell grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
 IMAGE_TAG ?= $(VERSION)

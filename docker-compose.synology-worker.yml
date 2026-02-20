@@ -6,7 +6,7 @@ services:
     image: reg.pir9.org:2443/pir9:latest
     container_name: pir9-worker
     restart: unless-stopped
-    command: ["--mode", "worker", "--redis-url", "redis://10.0.0.13:6311", "--worker-path", "/volume1/Shows"]
+    command: ["--mode", "worker", "--redis-url", "redis://10.0.0.13:6311", "--worker-path", "/volume1/Movies", "--worker-path", "/volume1/Shows"]
     volumes:
       - /volume1/Shows:/volume1/Shows:ro
     environment:
