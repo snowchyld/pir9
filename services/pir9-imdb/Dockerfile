@@ -1,34 +1,60 @@
-# Build stage
-FROM rust:1.93-bookworm AS builder
+# syntax=docker/dockerfile:1
+# Dockerfile for pir9-imdb service
+# Multi-stage build with cargo-chef for optimal dependency caching
+
+# ============================================================================
+# Stage 1: Install cargo-chef
+# ============================================================================
+FROM rust:1.93-bookworm AS chef
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo install cargo-chef
 
 WORKDIR /app
 
-# Copy manifests
+# ============================================================================
+# Stage 2: Analyze dependencies and create recipe
+# ============================================================================
+FROM chef AS planner
+
 COPY Cargo.toml Cargo.lock* ./
+COPY src ./src
 
-# Create dummy src for caching dependencies
-RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Build dependencies only
-RUN cargo build --release && rm -rf src
+# ============================================================================
+# Stage 3: Build dependencies (cached until Cargo.toml/lock change)
+# ============================================================================
+FROM chef AS builder
 
-# Copy actual source
+# Cook dependencies from recipe (this layer is cached)
+COPY --from=planner /app/recipe.json recipe.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo chef cook --release --recipe-path recipe.json
+
+# Copy source and build application
+COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
 COPY migrations ./migrations
 
-# Build the application
-RUN touch src/main.rs && cargo build --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --release
 
-# Runtime stage
+# ============================================================================
+# Stage 4: Minimal runtime image
+# ============================================================================
 FROM debian:bookworm-slim
 
+WORKDIR /app
+
+# Install runtime dependencies (no libssl needed — using rustls)
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    libssl3 \
     curl \
     && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
 
 # Copy binary
 COPY --from=builder /app/target/release/pir9-imdb /app/pir9-imdb

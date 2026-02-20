@@ -143,10 +143,10 @@ async fn create_movie(
     let genres_json = serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string());
     let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
 
-    // Use images from request; if empty, try to fetch from TMDB
+    // Use images from request; if empty, try to fetch from Radarr metadata API
     let images = if options.images.is_empty() {
         if let Some(ref imdb_id) = options.imdb_id {
-            fetch_tmdb_images(&state.tmdb_client, imdb_id).await
+            fetch_radarr_images(imdb_id).await
         } else {
             vec![]
         }
@@ -278,7 +278,7 @@ async fn delete_movie(
     Ok(())
 }
 
-/// Lookup movies from pir9-imdb service, enriched with TMDB images
+/// Lookup movies from pir9-imdb service, enriched with Radarr metadata images
 async fn lookup_movie(
     State(state): State<Arc<AppState>>,
     Query(query): Query<LookupQuery>,
@@ -286,38 +286,18 @@ async fn lookup_movie(
     let results = state.imdb_client.search_movies(&query.term, 25).await
         .map_err(|e| ApiError::Internal(format!("Failed to search movies: {}", e)))?;
 
-    // Fire TMDB lookups in parallel for all results that have IMDB IDs
-    let tmdb_futures: Vec<_> = results.iter().map(|m| {
-        let tmdb = state.tmdb_client.clone();
+    // Fire Radarr metadata lookups in parallel for all results (same pattern as series Skyhook)
+    let radarr_futures: Vec<_> = results.iter().map(|m| {
         let imdb_id = m.imdb_id.clone();
-        async move { tmdb.find_movie_by_imdb_id(&imdb_id).await.ok().flatten() }
+        async move { fetch_radarr_metadata(&imdb_id).await }
     }).collect();
 
-    let tmdb_results = futures::future::join_all(tmdb_futures).await;
+    let radarr_results = futures::future::join_all(radarr_futures).await;
 
     let lookup_results: Vec<MovieLookupResult> = results.into_iter()
-        .zip(tmdb_results)
-        .map(|(m, tmdb)| {
-            let (tmdb_id, images) = if let Some(ref t) = tmdb {
-                let mut imgs = Vec::new();
-                if let Some(ref poster) = t.poster_url {
-                    imgs.push(MovieImage {
-                        cover_type: "poster".to_string(),
-                        url: poster.clone(),
-                        remote_url: Some(poster.clone()),
-                    });
-                }
-                if let Some(ref fanart) = t.fanart_url {
-                    imgs.push(MovieImage {
-                        cover_type: "fanart".to_string(),
-                        url: fanart.clone(),
-                        remote_url: Some(fanart.clone()),
-                    });
-                }
-                (t.tmdb_id, imgs)
-            } else {
-                (0, vec![])
-            };
+        .zip(radarr_results)
+        .map(|(m, radarr)| {
+            let (tmdb_id, images) = radarr.unwrap_or((0, vec![]));
 
             MovieLookupResult {
                 tmdb_id,
@@ -343,32 +323,74 @@ async fn lookup_movie(
 
 // Helper functions
 
-/// Fetch poster and fanart images from TMDB for a given IMDB ID
-async fn fetch_tmdb_images(
-    tmdb_client: &crate::core::tmdb::TmdbClient,
-    imdb_id: &str,
-) -> Vec<MovieImage> {
-    match tmdb_client.find_movie_by_imdb_id(imdb_id).await {
-        Ok(Some(tmdb)) => {
-            let mut images = Vec::new();
-            if let Some(ref poster) = tmdb.poster_url {
-                images.push(MovieImage {
-                    cover_type: "poster".to_string(),
-                    url: poster.clone(),
-                    remote_url: Some(poster.clone()),
-                });
-            }
-            if let Some(ref fanart) = tmdb.fanart_url {
-                images.push(MovieImage {
-                    cover_type: "fanart".to_string(),
-                    url: fanart.clone(),
-                    remote_url: Some(fanart.clone()),
-                });
-            }
-            images
-        }
-        _ => vec![],
+// Radarr metadata API response types
+#[derive(serde::Deserialize)]
+#[allow(non_snake_case)]
+struct RadarrImage {
+    CoverType: String,
+    Url: String,
+}
+
+#[derive(serde::Deserialize)]
+#[allow(non_snake_case)]
+struct RadarrMovie {
+    TmdbId: Option<i64>,
+    Images: Vec<RadarrImage>,
+}
+
+/// Fetch movie metadata from Radarr's public metadata proxy (no API key required).
+/// Returns (tmdb_id, images) or None on any error (graceful degradation).
+pub async fn fetch_radarr_metadata(imdb_id: &str) -> Option<(i64, Vec<MovieImage>)> {
+    let url = format!("https://api.radarr.video/v1/movie/imdb/{}", imdb_id);
+    let client = reqwest::Client::new();
+
+    let resp = client.get(&url)
+        .header("User-Agent", format!("pir9/{}", env!("CARGO_PKG_VERSION")))
+        .send().await.ok()?;
+
+    if !resp.status().is_success() {
+        tracing::warn!("Radarr API returned {} for {}", resp.status(), imdb_id);
+        return None;
     }
+
+    let radarr_list: Vec<RadarrMovie> = match resp.json().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("Failed to parse Radarr response for {}: {}", imdb_id, e);
+            return None;
+        }
+    };
+
+    let radarr = match radarr_list.into_iter().next() {
+        Some(r) => r,
+        None => {
+            tracing::warn!("Radarr returned empty array for {}", imdb_id);
+            return None;
+        }
+    };
+
+    let tmdb_id = radarr.TmdbId.unwrap_or(0);
+    let images: Vec<MovieImage> = radarr.Images.into_iter().filter_map(|img| {
+        let cover_type = match img.CoverType.as_str() {
+            "Poster" => "poster",
+            "Fanart" => "fanart",
+            _ => return None,
+        };
+        Some(MovieImage {
+            cover_type: cover_type.to_string(),
+            url: img.Url.clone(),
+            remote_url: Some(img.Url),
+        })
+    }).collect();
+
+    Some((tmdb_id, images))
+}
+
+/// Fetch poster and fanart images from Radarr metadata API for a given IMDB ID
+pub async fn fetch_radarr_images(imdb_id: &str) -> Vec<MovieImage> {
+    fetch_radarr_metadata(imdb_id).await
+        .map(|(_, images)| images)
+        .unwrap_or_default()
 }
 
 fn clean_title(title: &str) -> String {
@@ -797,12 +819,12 @@ async fn import_movies(
         let genres_json = serde_json::to_string(&resolved_genres).unwrap_or_else(|_| "[]".to_string());
         let tags_json = serde_json::to_string(&import_req.tags.unwrap_or_default()).unwrap_or_else(|_| "[]".to_string());
 
-        // Use images from request; if empty, try to fetch from TMDB
+        // Use images from request; if empty, try to fetch from Radarr metadata API
         let images = match import_req.images {
             Some(ref imgs) if !imgs.is_empty() => imgs.clone(),
             _ => {
                 if let Some(ref id) = resolved_imdb_id {
-                    fetch_tmdb_images(&state.tmdb_client, id).await
+                    fetch_radarr_images(id).await
                 } else {
                     vec![]
                 }

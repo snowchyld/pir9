@@ -134,6 +134,7 @@ impl MetadataService {
     ///
     /// Skyhook search is still needed because it returns tvdb_ids which we use
     /// for episode matching. The IMDB search can supplement results later.
+    #[allow(dead_code)] // API layers use local SkyhookSearchResult types; kept for service-layer callers
     pub async fn search_series(&self, term: &str) -> Result<Vec<SkyhookSearchResult>> {
         let url = format!(
             "{}/search/en/?term={}",
@@ -289,6 +290,7 @@ impl MetadataService {
 /// Full show response from Skyhook API
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // Fields populated via JSON deserialization; not all read yet
 pub struct SkyhookShowResponse {
     pub tvdb_id: i64,
     pub title: String,
@@ -318,6 +320,7 @@ pub struct SkyhookShowResponse {
 /// Search result from Skyhook search API
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // Used by MetadataService::search_series
 pub struct SkyhookSearchResult {
     pub tvdb_id: i64,
     pub title: String,
@@ -340,6 +343,7 @@ pub struct SkyhookSearchResult {
 /// Image metadata from Skyhook
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // Fields populated via JSON deserialization
 pub struct SkyhookImage {
     pub cover_type: String,
     pub url: String,
@@ -348,6 +352,7 @@ pub struct SkyhookImage {
 /// Season metadata from Skyhook
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // Fields populated via JSON deserialization
 pub struct SkyhookSeason {
     pub season_number: i32,
 }
@@ -430,6 +435,7 @@ where
 // ========== Merged Metadata Types ==========
 
 /// Result of merging IMDB + Skyhook metadata for a series
+#[allow(dead_code)] // Fields populated during metadata merging, consumed incrementally as features are wired
 pub struct MergedSeriesMetadata {
     pub tvdb_id: i64,
     pub title: String,

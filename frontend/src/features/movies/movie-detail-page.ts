@@ -6,7 +6,7 @@ import { BaseComponent, customElement, html, escapeHtml } from '../../core/compo
 import { createQuery, invalidateQueries } from '../../core/query';
 import { http, type Movie } from '../../core/http';
 import { navigate } from '../../router';
-import { showSuccess, showError } from '../../stores/app.store';
+import { showSuccess, showError, showInfo } from '../../stores/app.store';
 import { signal } from '../../core/reactive';
 
 @customElement('movie-detail-page')
@@ -181,6 +181,15 @@ export class MovieDetailPage extends BaseComponent {
 
         <!-- Actions -->
         <div class="actions-panel">
+          <button class="action-btn" onclick="this.closest('movie-detail-page').handleRefreshMetadata()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 2v6h-6"></path>
+              <path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path>
+              <path d="M3 22v-6h6"></path>
+              <path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
+            </svg>
+            Refresh Metadata
+          </button>
           <button class="action-btn danger" onclick="this.closest('movie-detail-page').handleDelete()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6"></polyline>
@@ -473,6 +482,24 @@ export class MovieDetailPage extends BaseComponent {
   // Event handlers
   handleBack(): void {
     navigate('/movies');
+  }
+
+  async handleRefreshMetadata(): Promise<void> {
+    const id = this.movieId.value;
+    if (!id) return;
+
+    try {
+      await http.post('/command', { name: 'RefreshMovies', movieId: id });
+      showInfo('Refreshing movie metadata from IMDB...');
+
+      // Refetch after a short delay to show updated data
+      setTimeout(() => {
+        this.movieQuery?.refetch();
+        showSuccess('Movie metadata updated');
+      }, 5000);
+    } catch {
+      showError('Failed to queue metadata refresh');
+    }
   }
 
   async handleDelete(): Promise<void> {

@@ -1,0 +1,30 @@
+# Build artifacts
+target/
+
+# Frontend build deps (dist/ is needed, node_modules is not)
+frontend/node_modules/
+
+# Git
+.git/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Runtime data (mounted as volumes)
+logs/
+data/
+backups/
+cache/
+
+# Screenshots and misc
+*.png
+*.jpg
+
+# Environment files
+.env
+.env.*
+
+# Docker compose (not needed inside build)
+docker-compose*.yml

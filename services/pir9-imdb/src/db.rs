@@ -623,6 +623,356 @@ impl DbRepository {
         Ok(())
     }
 
+    // ── Batch upsert methods (UNNEST-based) ──────────────────────────
+
+    /// Batch upsert series using UNNEST arrays
+    pub async fn upsert_series_batch(&self, batch: &[DbSeries]) -> Result<u64> {
+        if batch.is_empty() {
+            return Ok(0);
+        }
+
+        let mut imdb_ids = Vec::with_capacity(batch.len());
+        let mut titles = Vec::with_capacity(batch.len());
+        let mut original_titles = Vec::with_capacity(batch.len());
+        let mut start_years = Vec::with_capacity(batch.len());
+        let mut end_years = Vec::with_capacity(batch.len());
+        let mut runtime_mins = Vec::with_capacity(batch.len());
+        let mut genres_vec = Vec::with_capacity(batch.len());
+        let mut is_adults = Vec::with_capacity(batch.len());
+        let mut title_types = Vec::with_capacity(batch.len());
+        let mut ratings = Vec::with_capacity(batch.len());
+        let mut votes_vec = Vec::with_capacity(batch.len());
+        let mut synced_ats = Vec::with_capacity(batch.len());
+
+        for s in batch {
+            imdb_ids.push(s.imdb_id);
+            titles.push(s.title.as_str());
+            original_titles.push(s.original_title.as_deref());
+            start_years.push(s.start_year);
+            end_years.push(s.end_year);
+            runtime_mins.push(s.runtime_minutes);
+            genres_vec.push(s.genres.as_deref());
+            is_adults.push(s.is_adult);
+            title_types.push(s.title_type.as_str());
+            ratings.push(s.rating);
+            votes_vec.push(s.votes);
+            synced_ats.push(s.last_synced_at);
+        }
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO imdb_series (imdb_id, title, original_title, start_year, end_year,
+                                     runtime_minutes, genres, is_adult, title_type, rating, votes, last_synced_at)
+            SELECT * FROM UNNEST(
+                $1::bigint[], $2::text[], $3::text[], $4::int[], $5::int[],
+                $6::int[], $7::text[], $8::bool[], $9::text[], $10::float8[], $11::bigint[], $12::timestamptz[]
+            )
+            ON CONFLICT (imdb_id) DO UPDATE SET
+                title = EXCLUDED.title,
+                original_title = EXCLUDED.original_title,
+                start_year = EXCLUDED.start_year,
+                end_year = EXCLUDED.end_year,
+                runtime_minutes = EXCLUDED.runtime_minutes,
+                genres = EXCLUDED.genres,
+                is_adult = EXCLUDED.is_adult,
+                title_type = EXCLUDED.title_type,
+                rating = COALESCE(EXCLUDED.rating, imdb_series.rating),
+                votes = COALESCE(EXCLUDED.votes, imdb_series.votes),
+                last_synced_at = EXCLUDED.last_synced_at
+            "#,
+        )
+        .bind(&imdb_ids)
+        .bind(&titles)
+        .bind(&original_titles)
+        .bind(&start_years)
+        .bind(&end_years)
+        .bind(&runtime_mins)
+        .bind(&genres_vec)
+        .bind(&is_adults)
+        .bind(&title_types)
+        .bind(&ratings)
+        .bind(&votes_vec)
+        .bind(&synced_ats)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Batch upsert movies using UNNEST arrays
+    pub async fn upsert_movie_batch(&self, batch: &[DbMovie]) -> Result<u64> {
+        if batch.is_empty() {
+            return Ok(0);
+        }
+
+        let mut imdb_ids = Vec::with_capacity(batch.len());
+        let mut titles = Vec::with_capacity(batch.len());
+        let mut original_titles = Vec::with_capacity(batch.len());
+        let mut years = Vec::with_capacity(batch.len());
+        let mut runtime_mins = Vec::with_capacity(batch.len());
+        let mut genres_vec = Vec::with_capacity(batch.len());
+        let mut is_adults = Vec::with_capacity(batch.len());
+        let mut ratings = Vec::with_capacity(batch.len());
+        let mut votes_vec = Vec::with_capacity(batch.len());
+        let mut synced_ats = Vec::with_capacity(batch.len());
+
+        for m in batch {
+            imdb_ids.push(m.imdb_id);
+            titles.push(m.title.as_str());
+            original_titles.push(m.original_title.as_deref());
+            years.push(m.year);
+            runtime_mins.push(m.runtime_minutes);
+            genres_vec.push(m.genres.as_deref());
+            is_adults.push(m.is_adult);
+            ratings.push(m.rating);
+            votes_vec.push(m.votes);
+            synced_ats.push(m.last_synced_at);
+        }
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO imdb_movies (imdb_id, title, original_title, year,
+                                     runtime_minutes, genres, is_adult, rating, votes, last_synced_at)
+            SELECT * FROM UNNEST(
+                $1::bigint[], $2::text[], $3::text[], $4::int[],
+                $5::int[], $6::text[], $7::bool[], $8::float8[], $9::bigint[], $10::timestamptz[]
+            )
+            ON CONFLICT (imdb_id) DO UPDATE SET
+                title = EXCLUDED.title,
+                original_title = EXCLUDED.original_title,
+                year = EXCLUDED.year,
+                runtime_minutes = EXCLUDED.runtime_minutes,
+                genres = EXCLUDED.genres,
+                is_adult = EXCLUDED.is_adult,
+                rating = COALESCE(EXCLUDED.rating, imdb_movies.rating),
+                votes = COALESCE(EXCLUDED.votes, imdb_movies.votes),
+                last_synced_at = EXCLUDED.last_synced_at
+            "#,
+        )
+        .bind(&imdb_ids)
+        .bind(&titles)
+        .bind(&original_titles)
+        .bind(&years)
+        .bind(&runtime_mins)
+        .bind(&genres_vec)
+        .bind(&is_adults)
+        .bind(&ratings)
+        .bind(&votes_vec)
+        .bind(&synced_ats)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Batch upsert episodes using UNNEST arrays
+    pub async fn upsert_episode_batch(&self, batch: &[DbEpisode]) -> Result<u64> {
+        if batch.is_empty() {
+            return Ok(0);
+        }
+
+        let mut imdb_ids = Vec::with_capacity(batch.len());
+        let mut parent_ids = Vec::with_capacity(batch.len());
+        let mut season_nums = Vec::with_capacity(batch.len());
+        let mut episode_nums = Vec::with_capacity(batch.len());
+        let mut titles = Vec::with_capacity(batch.len());
+        let mut runtime_mins = Vec::with_capacity(batch.len());
+        let mut ratings = Vec::with_capacity(batch.len());
+        let mut votes_vec = Vec::with_capacity(batch.len());
+        let mut air_dates = Vec::with_capacity(batch.len());
+        let mut synced_ats = Vec::with_capacity(batch.len());
+
+        for e in batch {
+            imdb_ids.push(e.imdb_id);
+            parent_ids.push(e.parent_imdb_id);
+            season_nums.push(e.season_number);
+            episode_nums.push(e.episode_number);
+            titles.push(e.title.as_deref());
+            runtime_mins.push(e.runtime_minutes);
+            ratings.push(e.rating);
+            votes_vec.push(e.votes);
+            air_dates.push(e.air_date);
+            synced_ats.push(e.last_synced_at);
+        }
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO imdb_episodes (imdb_id, parent_imdb_id, season_number, episode_number,
+                                       title, runtime_minutes, rating, votes, air_date, last_synced_at)
+            SELECT * FROM UNNEST(
+                $1::bigint[], $2::bigint[], $3::int[], $4::int[],
+                $5::text[], $6::int[], $7::float8[], $8::bigint[], $9::date[], $10::timestamptz[]
+            )
+            ON CONFLICT (imdb_id) DO UPDATE SET
+                parent_imdb_id = EXCLUDED.parent_imdb_id,
+                season_number = EXCLUDED.season_number,
+                episode_number = EXCLUDED.episode_number,
+                title = COALESCE(EXCLUDED.title, imdb_episodes.title),
+                runtime_minutes = COALESCE(EXCLUDED.runtime_minutes, imdb_episodes.runtime_minutes),
+                rating = COALESCE(EXCLUDED.rating, imdb_episodes.rating),
+                votes = COALESCE(EXCLUDED.votes, imdb_episodes.votes),
+                air_date = COALESCE(EXCLUDED.air_date, imdb_episodes.air_date),
+                last_synced_at = EXCLUDED.last_synced_at
+            "#,
+        )
+        .bind(&imdb_ids)
+        .bind(&parent_ids)
+        .bind(&season_nums)
+        .bind(&episode_nums)
+        .bind(&titles)
+        .bind(&runtime_mins)
+        .bind(&ratings)
+        .bind(&votes_vec)
+        .bind(&air_dates)
+        .bind(&synced_ats)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Batch update ratings for series using UNNEST
+    pub async fn update_series_ratings_batch(
+        &self,
+        ids: &[i64],
+        ratings: &[f64],
+        votes: &[i64],
+    ) -> Result<u64> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        let result = sqlx::query(
+            r#"
+            UPDATE imdb_series s
+            SET rating = v.rating, votes = v.votes, last_synced_at = NOW()
+            FROM (SELECT * FROM UNNEST($1::bigint[], $2::float8[], $3::bigint[]) AS t(id, rating, votes)) v
+            WHERE s.imdb_id = v.id
+            "#,
+        )
+        .bind(ids)
+        .bind(ratings)
+        .bind(votes)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Batch update ratings for movies using UNNEST
+    pub async fn update_movie_ratings_batch(
+        &self,
+        ids: &[i64],
+        ratings: &[f64],
+        votes: &[i64],
+    ) -> Result<u64> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        let result = sqlx::query(
+            r#"
+            UPDATE imdb_movies m
+            SET rating = v.rating, votes = v.votes, last_synced_at = NOW()
+            FROM (SELECT * FROM UNNEST($1::bigint[], $2::float8[], $3::bigint[]) AS t(id, rating, votes)) v
+            WHERE m.imdb_id = v.id
+            "#,
+        )
+        .bind(ids)
+        .bind(ratings)
+        .bind(votes)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    // ── Air date backfill methods ───────────────────────────────────
+
+    /// Get IMDB IDs of series that have episodes without air dates.
+    /// Skips series that were attempted within the last 7 days to avoid
+    /// re-querying TVMaze for shows that aren't in their database.
+    /// Uses tvmaze_checked_at (not last_synced_at, which is set by IMDB sync).
+    /// Orders by votes DESC so popular series (likely in TVMaze) are processed first.
+    pub async fn get_series_needing_air_dates(&self, limit: i64) -> Result<Vec<i64>> {
+        let ids: Vec<i64> = sqlx::query_scalar(
+            r#"
+            SELECT e.parent_imdb_id
+            FROM imdb_episodes e
+            JOIN imdb_series s ON s.imdb_id = e.parent_imdb_id
+            WHERE e.air_date IS NULL
+              AND (e.tvmaze_checked_at IS NULL OR e.tvmaze_checked_at < NOW() - INTERVAL '7 days')
+            GROUP BY e.parent_imdb_id, s.votes
+            ORDER BY s.votes DESC NULLS LAST
+            LIMIT $1
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(ids)
+    }
+
+    /// Mark episodes as attempted so we don't re-query TVMaze for shows
+    /// that aren't in their database on every backfill run.
+    /// Uses tvmaze_checked_at (not last_synced_at, which is set by IMDB sync).
+    pub async fn mark_episodes_attempted(&self, parent_id: i64) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE imdb_episodes
+            SET tvmaze_checked_at = NOW()
+            WHERE parent_imdb_id = $1 AND air_date IS NULL
+            "#,
+        )
+        .bind(parent_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Batch update episode air dates and titles using UNNEST arrays.
+    /// Matches on (parent_imdb_id, season_number, episode_number).
+    pub async fn update_episode_air_dates(
+        &self,
+        parent_id: i64,
+        seasons: &[i32],
+        episodes: &[i32],
+        air_dates: &[chrono::NaiveDate],
+        titles: &[Option<&str>],
+    ) -> Result<u64> {
+        if seasons.is_empty() {
+            return Ok(0);
+        }
+
+        let result = sqlx::query(
+            r#"
+            UPDATE imdb_episodes e
+            SET air_date = v.air_date,
+                title = COALESCE(v.title, e.title),
+                tvmaze_checked_at = NOW()
+            FROM (
+                SELECT *
+                FROM UNNEST($1::int[], $2::int[], $3::date[], $4::text[])
+                    AS t(season, episode, air_date, title)
+            ) v
+            WHERE e.parent_imdb_id = $5
+              AND e.season_number = v.season
+              AND e.episode_number = v.episode
+            "#,
+        )
+        .bind(seasons)
+        .bind(episodes)
+        .bind(air_dates)
+        .bind(titles)
+        .bind(parent_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
     /// Get pool for direct access (used by sync)
     pub fn pool(&self) -> &PgPool {
         &self.pool

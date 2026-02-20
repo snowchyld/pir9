@@ -125,17 +125,17 @@ pub async fn get_series(
             images: vec![
                 ImageResource {
                     cover_type: "poster".to_string(),
-                    url: format!("/MediaCover/{}/poster.jpg", s.id),
+                    url: format!("/MediaCover/Series/{}/poster.jpg", s.id),
                     remote_url: None,
                 },
                 ImageResource {
                     cover_type: "banner".to_string(),
-                    url: format!("/MediaCover/{}/banner.jpg", s.id),
+                    url: format!("/MediaCover/Series/{}/banner.jpg", s.id),
                     remote_url: None,
                 },
                 ImageResource {
                     cover_type: "fanart".to_string(),
-                    url: format!("/MediaCover/{}/fanart.jpg", s.id),
+                    url: format!("/MediaCover/Series/{}/fanart.jpg", s.id),
                     remote_url: None,
                 },
             ],
@@ -214,17 +214,17 @@ pub async fn get_series_by_id(
         images: vec![
             ImageResource {
                 cover_type: "poster".to_string(),
-                url: format!("/MediaCover/{}/poster.jpg", series.id),
+                url: format!("/MediaCover/Series/{}/poster.jpg", series.id),
                 remote_url: None,
             },
             ImageResource {
                 cover_type: "banner".to_string(),
-                url: format!("/MediaCover/{}/banner.jpg", series.id),
+                url: format!("/MediaCover/Series/{}/banner.jpg", series.id),
                 remote_url: None,
             },
             ImageResource {
                 cover_type: "fanart".to_string(),
-                url: format!("/MediaCover/{}/fanart.jpg", series.id),
+                url: format!("/MediaCover/Series/{}/fanart.jpg", series.id),
                 remote_url: None,
             },
         ],

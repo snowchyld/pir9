@@ -113,21 +113,29 @@ pub async fn create_command(
         .map_err(|e| CommandError::Internal(format!("Failed to fetch command: {}", e)))?
         .ok_or(CommandError::NotFound)?;
 
+    // Create a cancellation token for this command
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    state.command_tokens.insert(id, cancel_token.clone());
+
     // Spawn background task to execute the command
     tokio::spawn({
         let db = state.db.clone();
         let event_bus = state.event_bus.clone();
         let hybrid_event_bus = state.hybrid_event_bus.clone();
         let metadata_service = state.metadata_service.clone();
+        let imdb_client = state.imdb_client.clone();
+        let command_tokens = state.command_tokens.clone();
         let cmd_id = id;
         let cmd_name = name.to_string();
         let cmd_body = body.clone();
+        let token = cancel_token;
         async move {
             use crate::core::messaging::Message;
 
             let repo = CommandRepository::new(db.clone());
             if let Err(e) = repo.start_command(cmd_id).await {
                 tracing::error!("Failed to start command {}: {}", cmd_id, e);
+                command_tokens.remove(&cmd_id);
                 return;
             }
 
@@ -142,11 +150,25 @@ pub async fn create_command(
             let options = CommandExecutionOptions {
                 hybrid_event_bus,
                 metadata_service: Some(metadata_service),
+                imdb_client: Some(imdb_client),
+                cancel_token: Some(token),
             };
             let result = execute_command_with_options(&cmd_name, &cmd_body, &db, &event_bus, options).await;
 
-            // Mark as completed or failed
+            // Clean up cancellation token
+            command_tokens.remove(&cmd_id);
+
+            // Mark as completed, cancelled, or failed
             match result {
+                Ok(msg) if msg.starts_with("Cancelled:") => {
+                    let _ = repo.update_status(cmd_id, "cancelled", Some("cancelled")).await;
+                    tracing::info!("Cancelled command: id={}, name={}", cmd_id, cmd_name);
+                    event_bus.publish(Message::CommandCompleted {
+                        command_id: cmd_id,
+                        name: cmd_name.clone(),
+                        message: Some(msg),
+                    }).await;
+                }
                 Ok(msg) => {
                     if let Err(e) = repo.update_status(cmd_id, "completed", Some("successful")).await {
                         tracing::error!("Failed to complete command {}: {}", cmd_id, e);
@@ -193,6 +215,12 @@ pub async fn delete_command(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, CommandError> {
+    // Signal the running command to stop via its cancellation token
+    if let Some((_, token)) = state.command_tokens.remove(&(id as i64)) {
+        token.cancel();
+        tracing::info!("Cancelling running command: id={}", id);
+    }
+
     let repo = CommandRepository::new(state.db.clone());
 
     repo.delete(id as i64).await
@@ -238,6 +266,10 @@ pub struct CommandExecutionOptions {
     pub hybrid_event_bus: Option<crate::core::messaging::HybridEventBus>,
     /// Metadata service for IMDB-first metadata fetching
     pub metadata_service: Option<crate::core::metadata::MetadataService>,
+    /// IMDB client for movie metadata lookups
+    pub imdb_client: Option<crate::core::imdb::ImdbClient>,
+    /// Cancellation token to stop long-running commands
+    pub cancel_token: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl Default for CommandExecutionOptions {
@@ -245,6 +277,8 @@ impl Default for CommandExecutionOptions {
         Self {
             hybrid_event_bus: None,
             metadata_service: None,
+            imdb_client: None,
+            cancel_token: None,
         }
     }
 }
@@ -276,6 +310,7 @@ pub async fn execute_command_with_options(
             tracing::info!("MessagingCleanup: completed");
             Ok("Messaging cleanup completed".to_string())
         }
+        "RefreshMovies" => execute_refresh_movies(body, db, options.imdb_client.as_ref(), options.cancel_token.as_ref()).await,
         "EpisodeSearch" => execute_episode_search(body, db, event_bus).await,
         "SeasonSearch" => execute_season_search(body, db, event_bus).await,
         "SeriesSearch" => execute_series_search(body, db, event_bus).await,
@@ -559,6 +594,202 @@ async fn execute_refresh_series(
     }
 
     Ok(format!("Refreshed {} series ({} errors)", refreshed, errors))
+}
+
+/// Execute RefreshMovies command - backfills IMDB IDs, ratings, and Radarr images for movies
+async fn execute_refresh_movies(
+    body: &serde_json::Value,
+    db: &crate::core::datastore::Database,
+    imdb_client: Option<&crate::core::imdb::ImdbClient>,
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<String, String> {
+    use crate::core::datastore::repositories::MovieRepository;
+    use chrono::Utc;
+
+    let repo = MovieRepository::new(db.clone());
+
+    // Parse movie IDs from body (same pattern as RefreshSeries)
+    let mut movie_ids: Vec<i64> = body
+        .get("movieIds")
+        .or_else(|| body.get("body").and_then(|b| b.get("movieIds")))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+        .unwrap_or_default();
+
+    if movie_ids.is_empty() {
+        if let Some(id) = body
+            .get("movieId")
+            .or_else(|| body.get("body").and_then(|b| b.get("movieId")))
+            .and_then(|v| v.as_i64())
+        {
+            movie_ids.push(id);
+        }
+    }
+
+    // If no IDs provided, refresh ALL movies
+    if movie_ids.is_empty() {
+        tracing::info!("RefreshMovies: no movie IDs provided, refreshing all movies");
+        let all_movies = repo.get_all().await
+            .map_err(|e| format!("Failed to fetch movie list: {}", e))?;
+        movie_ids = all_movies.into_iter().map(|m| m.id).collect();
+
+        if movie_ids.is_empty() {
+            return Ok("No movies to refresh".to_string());
+        }
+        tracing::info!("RefreshMovies: found {} movies to refresh", movie_ids.len());
+    }
+
+    let total = movie_ids.len();
+    tracing::info!("RefreshMovies: refreshing {} movies", total);
+
+    let mut refreshed = 0;
+    let mut imdb_found = 0;
+    let mut images_found = 0;
+    let mut errors = 0;
+
+    for (idx, movie_id) in movie_ids.iter().enumerate() {
+        // Check for cancellation between movies
+        if cancel_token.map_or(false, |t| t.is_cancelled()) {
+            let summary = format!(
+                "Cancelled: refreshed {}/{} movies before stop ({} IMDB IDs, {} images, {} errors)",
+                refreshed, total, imdb_found, images_found, errors
+            );
+            tracing::info!("RefreshMovies: {}", summary);
+            return Ok(summary);
+        }
+
+        let mut movie = match repo.get_by_id(*movie_id).await {
+            Ok(Some(m)) => m,
+            Ok(None) => {
+                tracing::warn!("RefreshMovies: movie {} not found", movie_id);
+                continue;
+            }
+            Err(e) => {
+                tracing::error!("RefreshMovies: failed to fetch movie {}: {}", movie_id, e);
+                errors += 1;
+                continue;
+            }
+        };
+
+        // Step 1: If missing imdb_id, search IMDB by title
+        if movie.imdb_id.is_none() || movie.imdb_id.as_deref() == Some("") {
+            if let Some(client) = imdb_client {
+                if client.is_enabled() {
+                    // Strip year suffix like " (2020)" from title for search
+                    let search_title = if let Some(idx) = movie.title.rfind(" (") {
+                        movie.title[..idx].to_string()
+                    } else {
+                        movie.title.clone()
+                    };
+                    match client.search_movies(&search_title, 10).await {
+                        Ok(results) if !results.is_empty() => {
+                            // Pick best match by year proximity, reject if >2 years off
+                            let best = if movie.year > 0 {
+                                results.iter()
+                                    .filter(|m| m.year.is_some())
+                                    .filter(|m| (m.year.unwrap_or(0) - movie.year).unsigned_abs() <= 2)
+                                    .min_by_key(|m| (m.year.unwrap_or(0) - movie.year).unsigned_abs())
+                            } else {
+                                results.first()
+                            };
+
+                            if let Some(m) = best {
+                                tracing::debug!(
+                                    "RefreshMovies: IMDB match for '{}' ({}): {} [{}]",
+                                    movie.title, movie.year, m.title, m.imdb_id
+                                );
+                                // Use the clean IMDB title (without year suffix)
+                                movie.title = m.title.clone();
+                                movie.clean_title = m.title.to_lowercase()
+                                    .replace(|c: char| !c.is_alphanumeric() && c != ' ', " ")
+                                    .split_whitespace()
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                movie.sort_title = movie.clean_title.clone();
+                                movie.imdb_id = Some(m.imdb_id.clone());
+                                movie.imdb_rating = m.rating.map(|r| r as f32);
+                                movie.imdb_votes = m.votes.map(|v| v as i32);
+                                if let Some(year) = m.year {
+                                    movie.year = year;
+                                }
+                                if m.runtime_minutes.unwrap_or(0) > 0 {
+                                    movie.runtime = m.runtime_minutes.unwrap_or(0);
+                                }
+                                imdb_found += 1;
+                            }
+                        }
+                        Ok(_) => {
+                            tracing::debug!("RefreshMovies: no IMDB results for '{}' (searched: '{}')", movie.title, search_title);
+                        }
+                        Err(e) => {
+                            tracing::warn!("RefreshMovies: IMDB search failed for '{}': {}", movie.title, e);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Step 2: If we have an imdb_id, fetch Radarr metadata for tmdb_id + images
+        if let Some(ref imdb_id) = movie.imdb_id {
+            if let Some((tmdb_id, images)) = super::movies::fetch_radarr_metadata(imdb_id).await {
+                if tmdb_id > 0 && movie.tmdb_id == 0 {
+                    movie.tmdb_id = tmdb_id;
+                }
+                if !images.is_empty() {
+                    let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+                    movie.images = images_json;
+                    images_found += 1;
+                }
+            }
+        }
+
+        movie.last_info_sync = Some(Utc::now());
+
+        // Save updated movie — handle unique constraint conflicts by clearing conflicting fields
+        if let Err(e) = repo.update(&movie).await {
+            let err_str = e.to_string();
+            if err_str.contains("duplicate key") {
+                if err_str.contains("tmdb_id") {
+                    tracing::warn!("RefreshMovies: tmdb_id {} conflict for '{}', retrying without it", movie.tmdb_id, movie.title);
+                    movie.tmdb_id = 0;
+                } else if err_str.contains("imdb_id") {
+                    tracing::warn!("RefreshMovies: imdb_id {:?} conflict for '{}', skipping IMDB update", movie.imdb_id, movie.title);
+                    // Another movie already has this IMDB ID — don't overwrite
+                    errors += 1;
+                    continue;
+                }
+                // Retry with cleared field
+                if let Err(e2) = repo.update(&movie).await {
+                    let err2 = e2.to_string();
+                    if err2.contains("duplicate key") && err2.contains("imdb_id") {
+                        tracing::warn!("RefreshMovies: imdb_id {:?} also conflicts for '{}', skipping", movie.imdb_id, movie.title);
+                    } else {
+                        tracing::error!("RefreshMovies: failed to update movie '{}': {}", movie.title, e2);
+                    }
+                    errors += 1;
+                    continue;
+                }
+            } else {
+                tracing::error!("RefreshMovies: failed to update movie '{}': {}", movie.title, e);
+                errors += 1;
+                continue;
+            }
+        }
+
+        refreshed += 1;
+
+        // Log progress every 50 movies
+        if (idx + 1) % 50 == 0 {
+            tracing::info!("RefreshMovies: progress {}/{} (IMDB: {}, images: {})", idx + 1, total, imdb_found, images_found);
+        }
+    }
+
+    let summary = format!(
+        "Refreshed {} movies: {} IMDB IDs found, {} images updated ({} errors)",
+        refreshed, imdb_found, images_found, errors
+    );
+    tracing::info!("RefreshMovies: {}", summary);
+    Ok(summary)
 }
 
 /// Execute RescanSeries command - scans disk for episode files

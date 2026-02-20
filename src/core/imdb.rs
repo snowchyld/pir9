@@ -106,6 +106,7 @@ impl ImdbClient {
         }
     }
 
+    #[allow(dead_code)] // API surface for future movie enrichment/refresh
     pub async fn get_movie(&self, imdb_id: &str) -> anyhow::Result<Option<ImdbMovie>> {
         if !self.config.enabled {
             return Ok(None);
@@ -186,6 +187,35 @@ impl ImdbClient {
         }
         let url = format!("{}/api/sync/status", self.config.base_url);
         match self.client.get(&url).send().await {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                let body: serde_json::Value = response.json().await.unwrap_or_else(|_| {
+                    serde_json::json!({ "error": "Failed to parse response" })
+                });
+                Ok(ImdbProxyResponse { status, body })
+            }
+            Err(e) => Ok(ImdbProxyResponse {
+                status: 502,
+                body: serde_json::json!({ "error": format!("IMDB service unavailable: {}", e) }),
+            }),
+        }
+    }
+
+    pub async fn backfill_air_dates(&self, limit: u32) -> anyhow::Result<ImdbProxyResponse> {
+        if !self.config.enabled {
+            return Ok(ImdbProxyResponse {
+                status: 503,
+                body: serde_json::json!({ "error": "IMDB service is not enabled" }),
+            });
+        }
+        let url = format!("{}/api/backfill-air-dates", self.config.base_url);
+        match self
+            .client
+            .post(&url)
+            .json(&serde_json::json!({ "limit": limit }))
+            .send()
+            .await
+        {
             Ok(response) => {
                 let status = response.status().as_u16();
                 let body: serde_json::Value = response.json().await.unwrap_or_else(|_| {

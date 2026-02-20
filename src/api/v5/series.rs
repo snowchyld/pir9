@@ -1783,15 +1783,15 @@ impl From<SeriesDbModel> for SeriesResponse {
         let images = vec![
             SeriesImage {
                 cover_type: "poster".to_string(),
-                url: format!("/MediaCover/{}/poster.jpg", s.id),
+                url: format!("/MediaCover/Series/{}/poster.jpg", s.id),
             },
             SeriesImage {
                 cover_type: "fanart".to_string(),
-                url: format!("/MediaCover/{}/fanart.jpg", s.id),
+                url: format!("/MediaCover/Series/{}/fanart.jpg", s.id),
             },
             SeriesImage {
                 cover_type: "banner".to_string(),
-                url: format!("/MediaCover/{}/banner.jpg", s.id),
+                url: format!("/MediaCover/Series/{}/banner.jpg", s.id),
             },
         ];
 

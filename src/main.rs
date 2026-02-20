@@ -260,9 +260,8 @@ fn create_router(state: Arc<AppState>) -> Router {
         .route("/ws", get(web::websocket_handler))
 
         // MediaCover routes - serve/proxy artwork (must be before static files)
-        // Movie route must come first: literal "Movies" matches before {series_id} capture
+        .route("/MediaCover/Series/{series_id}/{filename}", get(media_cover_handler))
         .route("/MediaCover/Movies/{movie_id}/{filename}", get(movie_media_cover_handler))
-        .route("/MediaCover/{series_id}/{filename}", get(media_cover_handler))
 
         // Static files (frontend) with SPA fallback
         // Using fallback_service so explicit routes above take precedence
@@ -277,7 +276,7 @@ fn create_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// Handler for /MediaCover/:series_id/:filename
+/// Handler for /MediaCover/Series/:series_id/:filename
 /// Fetches images from Skyhook and caches them locally
 async fn media_cover_handler(
     State(state): State<Arc<AppState>>,
@@ -308,7 +307,7 @@ async fn media_cover_handler(
     };
 
     // First, check if we have a cached local file
-    let cache_dir = format!("cache/MediaCover/{}", series_id);
+    let cache_dir = format!("cache/MediaCover/Series/{}", series_id);
     let cache_path = format!("{}/{}", cache_dir, filename);
 
     if let Ok(data) = tokio::fs::read(&cache_path).await {
@@ -393,10 +392,10 @@ async fn media_cover_handler(
         images.len(), available_types, cover_type
     );
 
-    let image_url = images
-        .into_iter()
+    let image_url = images.iter()
         .find(|img| img.cover_type.to_lowercase() == cover_type.to_lowercase())
-        .map(|img| img.url);
+        .or_else(|| images.iter().find(|img| img.cover_type.eq_ignore_ascii_case("fanart")))
+        .map(|img| img.url.clone());
 
     let image_url = match image_url {
         Some(url) => {
@@ -445,7 +444,7 @@ async fn media_cover_handler(
 }
 
 /// Handler for /MediaCover/Movies/:movie_id/:filename
-/// Fetches movie images from TMDB and caches them locally
+/// Fetches movie images via Radarr metadata API and caches them locally
 async fn movie_media_cover_handler(
     State(state): State<Arc<AppState>>,
     Path((movie_id, filename)): Path<(i64, String)>,
@@ -523,16 +522,45 @@ async fn movie_media_cover_handler(
         .find(|img| img.cover_type.eq_ignore_ascii_case(cover_type))
         .and_then(|img| img.remote_url);
 
-    // Resolve the image URL: use stored remote_url, or fall back to live TMDB lookup
+    // Resolve the image URL: use stored remote_url, or fall back to Radarr metadata API
     let image_url = if let Some(url) = stored_url {
         Some(url)
     } else if let Some(ref imdb_id) = movie.imdb_id {
-        match state.tmdb_client.find_movie_by_imdb_id(imdb_id).await {
-            Ok(Some(tmdb)) => {
-                match cover_type {
-                    "poster" => tmdb.poster_url,
-                    "fanart" | "backdrop" => tmdb.fanart_url,
-                    _ => tmdb.poster_url,
+        // Call Radarr metadata proxy (mirrors the series Skyhook pattern)
+        let radarr_url = format!("https://api.radarr.video/v1/movie/imdb/{}", imdb_id);
+        let client = reqwest::Client::new();
+        match client.get(&radarr_url)
+            .header("User-Agent", format!("pir9/{}", env!("CARGO_PKG_VERSION")))
+            .send().await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                #[derive(serde::Deserialize)]
+                #[allow(non_snake_case)]
+                struct RadarrImage {
+                    CoverType: String,
+                    Url: String,
+                }
+                #[derive(serde::Deserialize)]
+                #[allow(non_snake_case)]
+                struct RadarrMovie {
+                    Images: Vec<RadarrImage>,
+                }
+
+                match resp.json::<RadarrMovie>().await {
+                    Ok(radarr) => {
+                        let radarr_cover = match cover_type {
+                            "poster" => "Poster",
+                            "fanart" | "backdrop" => "Fanart",
+                            _ => "Poster",
+                        };
+                        radarr.Images.into_iter()
+                            .find(|img| img.CoverType == radarr_cover)
+                            .map(|img| img.Url)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to parse Radarr response for {}: {}", imdb_id, e);
+                        None
+                    }
                 }
             }
             _ => None,
@@ -548,7 +576,7 @@ async fn movie_media_cover_handler(
         }
     };
 
-    // Fetch the image from TMDB CDN
+    // Fetch the image from CDN
     let client = reqwest::Client::new();
     let image_response = match client.get(&image_url).send().await {
         Ok(r) if r.status().is_success() => r,

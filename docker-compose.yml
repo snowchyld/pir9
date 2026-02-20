@@ -62,6 +62,7 @@ services:
       - ./logs:/logs
       - ./backups:/backups
       - ./cache:/app/cache
+      - /volume1/Movies:/volume1/Movies
       - /volume1/Shows:/volume1/Shows
     environment:
       - PUID=${PUID:-1000}

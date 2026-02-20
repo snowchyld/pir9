@@ -1,36 +1,67 @@
-# Build stage
-FROM rust:1.93-slim-bookworm AS builder
+# syntax=docker/dockerfile:1
+# Dockerfile for pir9 (simple single-container build)
+# Multi-stage build with cargo-chef for optimal dependency caching
+
+# ============================================================================
+# Stage 1: Install cargo-chef
+# ============================================================================
+FROM rust:1.93-bookworm AS chef
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo install cargo-chef
 
 WORKDIR /app
 
-# Install dependencies (curl needed for utoipa-swagger-ui build)
+# ============================================================================
+# Stage 2: Analyze dependencies and create recipe
+# ============================================================================
+FROM chef AS planner
+
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY migration ./migration
+COPY src ./src
+
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ============================================================================
+# Stage 3: Build dependencies (cached until Cargo.toml/lock change)
+# ============================================================================
+FROM chef AS builder
+
+# Install build dependencies (curl needed for utoipa-swagger-ui download)
 RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    libsqlite3-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy manifests and build script
+# Cook dependencies from recipe (this layer is cached)
+# migration/ must be present as a path dependency before cook can resolve it
+COPY --from=planner /app/recipe.json recipe.json
+COPY migration ./migration
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo chef cook --release --recipe-path recipe.json
+
+# Copy source and build application
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY migration ./migration
-
-# Copy source code
 COPY src ./src
 COPY migrations ./migrations
 
-# Build release binary with Redis support for distributed scanning
-RUN cargo build --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --release
 
-# Runtime stage
+# ============================================================================
+# Stage 4: Minimal runtime image
+# ============================================================================
 FROM debian:bookworm-slim
 
 WORKDIR /app
 
-# Install runtime dependencies and gosu for proper privilege dropping
+# Install runtime dependencies (no libssl needed — using rustls)
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    libsqlite3-0 \
     gosu \
     wget \
     && rm -rf /var/lib/apt/lists/*

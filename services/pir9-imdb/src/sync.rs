@@ -22,14 +22,17 @@ const PROGRESS_INTERVAL: i64 = 10_000;
 /// Cancel check interval (check every N rows — is_cancelled() is just an atomic read)
 const CANCEL_CHECK_INTERVAL: i64 = 10_000;
 
+/// Batch size for DB upserts (rows per INSERT statement)
+const BATCH_SIZE: usize = 1000;
+
 /// Minimum hours between re-syncing the same dataset
 const SKIP_IF_RECENT_HOURS: i64 = 24;
 
 /// TV title types we care about
 const TV_TITLE_TYPES: &[&str] = &["tvSeries", "tvMiniSeries"];
 
-/// Movie title types we care about
-const MOVIE_TITLE_TYPES: &[&str] = &["movie"];
+/// Movie title types we care about (includes TV movies and direct-to-video)
+const MOVIE_TITLE_TYPES: &[&str] = &["movie", "tvMovie", "video"];
 
 /// Download a dataset file, racing against the cancellation token.
 /// Returns the raw bytes on success, or DatasetResult::Cancelled if the token fires.
@@ -262,6 +265,10 @@ async fn sync_title_basics_inner(
     let mut rows_skipped: i64 = 0;
     let mut last_id: i64 = 0;
 
+    // Batch buffers
+    let mut series_batch: Vec<DbSeries> = Vec::with_capacity(BATCH_SIZE);
+    let mut movie_batch: Vec<DbMovie> = Vec::with_capacity(BATCH_SIZE);
+
     for (line_num, line_result) in reader.lines().enumerate() {
         if line_num == 0 {
             continue; // Skip header
@@ -298,7 +305,7 @@ async fn sync_title_basics_inner(
         }
 
         if is_tv {
-            let series = DbSeries {
+            series_batch.push(DbSeries {
                 imdb_id,
                 title: fields[2].to_string(),
                 original_title: if fields[3] != "\\N" && fields[3] != fields[2] {
@@ -319,13 +326,13 @@ async fn sync_title_basics_inner(
                 rating: None,
                 votes: None,
                 last_synced_at: Utc::now(),
-            };
+            });
 
-            if db.upsert_series(&series).await? {
-                rows_inserted += 1;
+            if series_batch.len() >= BATCH_SIZE {
+                rows_inserted += flush_series(db, &mut series_batch).await? as i64;
             }
         } else {
-            let movie = DbMovie {
+            movie_batch.push(DbMovie {
                 imdb_id,
                 title: fields[2].to_string(),
                 original_title: if fields[3] != "\\N" && fields[3] != fields[2] {
@@ -344,10 +351,10 @@ async fn sync_title_basics_inner(
                 rating: None,
                 votes: None,
                 last_synced_at: Utc::now(),
-            };
+            });
 
-            if db.upsert_movie(&movie).await? {
-                rows_inserted += 1;
+            if movie_batch.len() >= BATCH_SIZE {
+                rows_inserted += flush_movies(db, &mut movie_batch).await? as i64;
             }
         }
 
@@ -355,6 +362,10 @@ async fn sync_title_basics_inner(
         last_id = imdb_id;
 
         if rows_processed % PROGRESS_INTERVAL == 0 {
+            // Flush before checkpoint so last_processed_id is never ahead of DB state
+            rows_inserted += flush_series(db, &mut series_batch).await? as i64;
+            rows_inserted += flush_movies(db, &mut movie_batch).await? as i64;
+
             if rows_skipped > 0 {
                 info!(
                     "title.basics progress: {} rows (skipped {} resumed)",
@@ -370,6 +381,8 @@ async fn sync_title_basics_inner(
 
         // Cooperative cancellation check
         if rows_processed % CANCEL_CHECK_INTERVAL == 0 && token.is_cancelled() {
+            rows_inserted += flush_series(db, &mut series_batch).await? as i64;
+            rows_inserted += flush_movies(db, &mut movie_batch).await? as i64;
             info!(
                 "title.basics cancelled at row {} (last_id={})",
                 rows_processed, last_id
@@ -379,6 +392,10 @@ async fn sync_title_basics_inner(
             return Ok(DatasetResult::Cancelled);
         }
     }
+
+    // Flush remaining
+    rows_inserted += flush_series(db, &mut series_batch).await? as i64;
+    rows_inserted += flush_movies(db, &mut movie_batch).await? as i64;
 
     db.update_sync_progress_with_resume(sync_id, rows_processed, rows_inserted, 0, last_id)
         .await?;
@@ -468,6 +485,8 @@ async fn sync_title_episodes_inner(
     let mut rows_inserted = resume.rows_inserted;
     let mut last_id: i64 = 0;
 
+    let mut episode_batch: Vec<DbEpisode> = Vec::with_capacity(BATCH_SIZE);
+
     for (line_num, line_result) in reader.lines().enumerate() {
         if line_num == 0 {
             continue;
@@ -503,7 +522,7 @@ async fn sync_title_episodes_inner(
             continue;
         }
 
-        let episode = DbEpisode {
+        episode_batch.push(DbEpisode {
             imdb_id: episode_id,
             parent_imdb_id: parent_id,
             season_number: parse_int(fields[2]),
@@ -514,16 +533,17 @@ async fn sync_title_episodes_inner(
             votes: None,
             air_date: None,
             last_synced_at: Utc::now(),
-        };
+        });
 
-        if db.upsert_episode(&episode).await? {
-            rows_inserted += 1;
+        if episode_batch.len() >= BATCH_SIZE {
+            rows_inserted += flush_episodes(db, &mut episode_batch).await? as i64;
         }
 
         rows_processed += 1;
         last_id = episode_id;
 
         if rows_processed % PROGRESS_INTERVAL == 0 {
+            rows_inserted += flush_episodes(db, &mut episode_batch).await? as i64;
             info!("title.episode progress: {} rows", rows_processed);
             db.update_sync_progress_with_resume(
                 sync_id,
@@ -537,6 +557,7 @@ async fn sync_title_episodes_inner(
 
         // Cooperative cancellation check
         if rows_processed % CANCEL_CHECK_INTERVAL == 0 && token.is_cancelled() {
+            rows_inserted += flush_episodes(db, &mut episode_batch).await? as i64;
             info!(
                 "title.episode cancelled at row {} (last_id={})",
                 rows_processed, last_id
@@ -552,6 +573,9 @@ async fn sync_title_episodes_inner(
             return Ok(DatasetResult::Cancelled);
         }
     }
+
+    // Flush remaining
+    rows_inserted += flush_episodes(db, &mut episode_batch).await? as i64;
 
     db.update_sync_progress_with_resume(sync_id, rows_processed, rows_inserted, 0, last_id)
         .await?;
@@ -628,8 +652,13 @@ async fn sync_title_ratings_inner(
 
     // Start counters from previous values when resuming
     let mut rows_processed = resume.rows_processed;
-    let rows_updated = resume.rows_updated;
+    let mut rows_updated = resume.rows_updated;
     let mut last_id: i64 = 0;
+
+    // Batch buffers: (imdb_id, rating, votes)
+    let mut rating_ids: Vec<i64> = Vec::with_capacity(BATCH_SIZE);
+    let mut rating_vals: Vec<f64> = Vec::with_capacity(BATCH_SIZE);
+    let mut rating_votes: Vec<i64> = Vec::with_capacity(BATCH_SIZE);
 
     for (line_num, line_result) in reader.lines().enumerate() {
         if line_num == 0 {
@@ -666,14 +695,19 @@ async fn sync_title_ratings_inner(
             Err(_) => continue,
         };
 
-        // Update ratings (for both series and movies — one will match, one won't)
-        db.update_series_rating(imdb_id, rating, votes).await.ok();
-        db.update_movie_rating(imdb_id, rating, votes).await.ok();
+        rating_ids.push(imdb_id);
+        rating_vals.push(rating);
+        rating_votes.push(votes);
+
+        if rating_ids.len() >= BATCH_SIZE {
+            rows_updated += flush_ratings(db, &mut rating_ids, &mut rating_vals, &mut rating_votes).await?;
+        }
 
         rows_processed += 1;
         last_id = imdb_id;
 
         if rows_processed % (PROGRESS_INTERVAL * 10) == 0 {
+            rows_updated += flush_ratings(db, &mut rating_ids, &mut rating_vals, &mut rating_votes).await?;
             info!("title.ratings progress: {} rows", rows_processed);
             db.update_sync_progress_with_resume(
                 sync_id,
@@ -687,6 +721,7 @@ async fn sync_title_ratings_inner(
 
         // Cooperative cancellation check
         if rows_processed % CANCEL_CHECK_INTERVAL == 0 && token.is_cancelled() {
+            rows_updated += flush_ratings(db, &mut rating_ids, &mut rating_vals, &mut rating_votes).await?;
             info!(
                 "title.ratings cancelled at row {} (last_id={})",
                 rows_processed, last_id
@@ -703,6 +738,9 @@ async fn sync_title_ratings_inner(
         }
     }
 
+    // Flush remaining
+    rows_updated += flush_ratings(db, &mut rating_ids, &mut rating_vals, &mut rating_votes).await?;
+
     db.update_sync_progress_with_resume(sync_id, rows_processed, 0, rows_updated, last_id)
         .await?;
 
@@ -712,6 +750,52 @@ async fn sync_title_ratings_inner(
         rows_updated,
         duration_seconds: 0,
     }))
+}
+
+// ── Batch flush helpers ──────────────────────────────────────────────
+
+async fn flush_series(db: &DbRepository, batch: &mut Vec<DbSeries>) -> Result<u64> {
+    if batch.is_empty() {
+        return Ok(0);
+    }
+    let count = db.upsert_series_batch(batch).await?;
+    batch.clear();
+    Ok(count)
+}
+
+async fn flush_movies(db: &DbRepository, batch: &mut Vec<DbMovie>) -> Result<u64> {
+    if batch.is_empty() {
+        return Ok(0);
+    }
+    let count = db.upsert_movie_batch(batch).await?;
+    batch.clear();
+    Ok(count)
+}
+
+async fn flush_episodes(db: &DbRepository, batch: &mut Vec<DbEpisode>) -> Result<u64> {
+    if batch.is_empty() {
+        return Ok(0);
+    }
+    let count = db.upsert_episode_batch(batch).await?;
+    batch.clear();
+    Ok(count)
+}
+
+async fn flush_ratings(
+    db: &DbRepository,
+    ids: &mut Vec<i64>,
+    ratings: &mut Vec<f64>,
+    votes: &mut Vec<i64>,
+) -> Result<i64> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let series_count = db.update_series_ratings_batch(ids, ratings, votes).await?;
+    let movie_count = db.update_movie_ratings_batch(ids, ratings, votes).await?;
+    ids.clear();
+    ratings.clear();
+    votes.clear();
+    Ok((series_count + movie_count) as i64)
 }
 
 /// Parse an integer from a string, handling IMDB null values

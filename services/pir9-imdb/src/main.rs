@@ -27,11 +27,13 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
-use tracing::{error, info};
+use serde::Serialize;
+use tracing::{error, info, warn};
 
 mod db;
 mod models;
 mod sync;
+mod tvmaze;
 
 use db::DbRepository;
 
@@ -105,6 +107,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/sync", post(start_sync))
         .route("/api/sync/status", get(get_sync_status))
         .route("/api/sync/cancel", post(cancel_sync))
+        .route("/api/backfill-air-dates", post(backfill_air_dates))
         // Middleware
         .layer(TraceLayer::new_for_http())
         .layer(
@@ -380,4 +383,207 @@ async fn cancel_sync(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         )
             .into_response(),
     }
+}
+
+// ============================================================================
+// Air Date Backfill
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackfillRequest {
+    #[serde(default = "default_backfill_limit")]
+    limit: i64,
+}
+
+fn default_backfill_limit() -> i64 {
+    100
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackfillProgress {
+    series_processed: i64,
+    series_total: i64,
+    episodes_updated: u64,
+    series_not_found: i64,
+}
+
+async fn backfill_air_dates(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<BackfillRequest>>,
+) -> impl IntoResponse {
+    let limit = body.map(|b| b.limit).unwrap_or(100);
+
+    let mut handle_guard = state.sync_handle.lock().await;
+
+    // Check if a sync or backfill is already running
+    if let Some(ref handle) = *handle_guard {
+        if !handle.join_handle.is_finished() {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "A sync or backfill is already running",
+                    "status": "running"
+                })),
+            )
+                .into_response();
+        }
+        let _ = state.db.fail_stale_running_syncs().await;
+    }
+
+    // Create cancellation token and spawn the backfill task
+    let token = CancellationToken::new();
+    let db = state.db.clone();
+    let task_token = token.clone();
+
+    let join_handle = tokio::spawn(async move {
+        info!("Starting air date backfill (limit: {})...", limit);
+        match run_backfill(&db, limit, task_token).await {
+            Ok(progress) => {
+                info!(
+                    "Air date backfill completed: {}/{} series, {} episodes updated, {} not found on TVMaze",
+                    progress.series_processed,
+                    progress.series_total,
+                    progress.episodes_updated,
+                    progress.series_not_found
+                );
+            }
+            Err(e) => {
+                error!("Air date backfill failed: {}", e);
+            }
+        }
+    });
+
+    *handle_guard = Some(SyncHandle {
+        cancel_token: token,
+        join_handle,
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "message": format!("Air date backfill started for up to {} series", limit),
+            "status": "running"
+        })),
+    )
+        .into_response()
+}
+
+/// Run the air date backfill task
+async fn run_backfill(
+    db: &db::DbRepository,
+    limit: i64,
+    token: CancellationToken,
+) -> anyhow::Result<BackfillProgress> {
+    let client = reqwest::Client::builder()
+        .user_agent("pir9-IMDB/0.1.0")
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
+    let series_ids = db.get_series_needing_air_dates(limit).await?;
+    let total = series_ids.len() as i64;
+    info!("Found {} series needing air dates", total);
+
+    let mut progress = BackfillProgress {
+        series_processed: 0,
+        series_total: total,
+        episodes_updated: 0,
+        series_not_found: 0,
+    };
+
+    for imdb_id in &series_ids {
+        if token.is_cancelled() {
+            info!("Air date backfill cancelled at {}/{}", progress.series_processed, total);
+            break;
+        }
+
+        match backfill_one_series(&client, db, *imdb_id).await {
+            Ok(Some(updated)) => {
+                progress.episodes_updated += updated;
+            }
+            Ok(None) => {
+                progress.series_not_found += 1;
+            }
+            Err(e) => {
+                warn!("Failed to backfill air dates for tt{:07}: {}", imdb_id, e);
+            }
+        }
+
+        progress.series_processed += 1;
+
+        if progress.series_processed % 10 == 0 {
+            info!(
+                "Backfill progress: {}/{} series, {} episodes updated",
+                progress.series_processed, total, progress.episodes_updated
+            );
+        }
+
+        // Rate limit: ~20 requests per 10 seconds
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    Ok(progress)
+}
+
+/// Backfill air dates for a single series. Returns Some(episodes_updated) or None if not found.
+async fn backfill_one_series(
+    client: &reqwest::Client,
+    db: &db::DbRepository,
+    imdb_id: i64,
+) -> anyhow::Result<Option<u64>> {
+    // Step 1: Look up TVMaze show ID
+    let show_id = match tvmaze::lookup_show(client, imdb_id).await? {
+        Some(id) => id,
+        None => {
+            // Mark as attempted so we don't re-query this series for 7 days
+            db.mark_episodes_attempted(imdb_id).await?;
+            return Ok(None);
+        }
+    };
+
+    // Step 2: Get all episodes from TVMaze
+    let episodes = tvmaze::get_episodes(client, show_id).await?;
+
+    if episodes.is_empty() {
+        return Ok(Some(0));
+    }
+
+    // Step 3: Build arrays for batch update
+    let mut seasons = Vec::with_capacity(episodes.len());
+    let mut episode_nums = Vec::with_capacity(episodes.len());
+    let mut air_dates = Vec::with_capacity(episodes.len());
+    let mut titles: Vec<Option<String>> = Vec::with_capacity(episodes.len());
+
+    for ep in &episodes {
+        let episode_number = match ep.number {
+            Some(n) => n,
+            None => continue, // Skip specials without episode numbers
+        };
+
+        let air_date = match &ep.airdate {
+            Some(d) if !d.is_empty() => match chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d") {
+                Ok(date) => date,
+                Err(_) => continue,
+            },
+            _ => continue,
+        };
+
+        seasons.push(ep.season);
+        episode_nums.push(episode_number);
+        air_dates.push(air_date);
+        titles.push(ep.name.clone());
+    }
+
+    if seasons.is_empty() {
+        return Ok(Some(0));
+    }
+
+    // Step 4: Batch update
+    let title_refs: Vec<Option<&str>> = titles.iter().map(|t| t.as_deref()).collect();
+    let updated = db
+        .update_episode_air_dates(imdb_id, &seasons, &episode_nums, &air_dates, &title_refs)
+        .await?;
+
+    Ok(Some(updated))
 }

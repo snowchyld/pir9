@@ -1,51 +1,67 @@
+# syntax=docker/dockerfile:1
 # Dockerfile for pir9 API server
-# Multi-stage build for minimal final image
+# Multi-stage build with cargo-chef for optimal dependency caching
 
 # ============================================================================
-# Stage 1: Build the Rust application
+# Stage 1: Install cargo-chef
 # ============================================================================
-FROM rust:1.93-bookworm AS builder
+FROM rust:1.93-bookworm AS chef
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo install cargo-chef
 
 WORKDIR /app
 
-# Install build dependencies (curl needed for utoipa-swagger-ui build)
+# ============================================================================
+# Stage 2: Analyze dependencies and create recipe
+# ============================================================================
+FROM chef AS planner
+
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY migration ./migration
+COPY src ./src
+
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ============================================================================
+# Stage 3: Build dependencies (cached until Cargo.toml/lock change)
+# ============================================================================
+FROM chef AS builder
+
+# Install build dependencies (curl needed for utoipa-swagger-ui download)
 RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Cargo files and build script for dependency caching
+# Cook dependencies from recipe (this layer is cached)
+# migration/ must be present as a path dependency before cook can resolve it
+COPY --from=planner /app/recipe.json recipe.json
+COPY migration ./migration
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo chef cook --release --recipe-path recipe.json
+
+# Copy source and build application
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY migration ./migration
-
-# Create a dummy main.rs to build dependencies first (cache layer)
-RUN mkdir src && \
-    echo "fn main() {}" > src/main.rs && \
-    echo "fn main() {}" > src/cli.rs
-
-# Build dependencies only (this layer will be cached)
-RUN cargo build --release && \
-    rm -rf src target/release/.fingerprint/pir9-*
-
-# Copy the actual source code
 COPY src ./src
 COPY migrations ./migrations
 
-# Build the application
-RUN cargo build --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --release
 
 # ============================================================================
-# Stage 2: Create minimal runtime image
+# Stage 4: Minimal runtime image
 # ============================================================================
 FROM debian:bookworm-slim AS runtime
 
 WORKDIR /app
 
-# Install runtime dependencies and gosu for proper privilege dropping
+# Install runtime dependencies (no libssl needed — using rustls)
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    libssl3 \
     gosu \
     curl \
     && rm -rf /var/lib/apt/lists/*

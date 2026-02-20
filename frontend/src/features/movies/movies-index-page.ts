@@ -13,15 +13,19 @@ import {
   setMovieViewMode,
   setMovieSort,
   setMovieFilter,
+  showSuccess,
+  showError,
+  showInfo,
   type ViewMode,
   type MovieSortKey,
 } from '../../stores/app.store';
 import { navigate } from '../../router';
-import type { Movie } from '../../core/http';
+import { http, type Movie } from '../../core/http';
 
 @customElement('movies-index-page')
 export class MoviesIndexPage extends BaseComponent {
   private moviesQuery = useMoviesQuery();
+  private refreshCommandId: number | null = null;
 
   protected onInit(): void {
     this.watch(this.moviesQuery.data);
@@ -126,6 +130,31 @@ export class MoviesIndexPage extends BaseComponent {
                 <polyline points="18 15 12 9 6 15"></polyline>
               </svg>
             </button>
+
+            ${this.refreshCommandId
+              ? html`<button
+                  class="refresh-all-btn stop"
+                  onclick="this.closest('movies-index-page').handleStopRefresh()"
+                  title="Stop refreshing movie metadata"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="6" y="6" width="12" height="12" rx="1"></rect>
+                  </svg>
+                  <span>Stop Refresh</span>
+                </button>`
+              : html`<button
+                  class="refresh-all-btn"
+                  onclick="this.closest('movies-index-page').handleRefreshAll()"
+                  title="Refresh all movie metadata from IMDB"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="23 4 23 10 17 10"></polyline>
+                    <polyline points="1 20 1 14 7 14"></polyline>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                  </svg>
+                  <span>Refresh All</span>
+                </button>`
+            }
 
             <div class="view-modes">
               ${this.renderViewModeButton('posters', 'Posters')}
@@ -246,6 +275,46 @@ export class MoviesIndexPage extends BaseComponent {
         }
 
         .sort-dir-btn svg.rotate-180 { transform: rotate(180deg); }
+
+        .refresh-all-btn {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.5rem 0.875rem;
+          background: var(--btn-primary-bg);
+          color: var(--color-white);
+          border: none;
+          border-radius: 0.5rem;
+          font-size: 0.875rem;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all var(--transition-normal) var(--ease-out-expo);
+        }
+
+        .refresh-all-btn:hover {
+          background: var(--btn-primary-bg-hover);
+          box-shadow: var(--glow-primary);
+          transform: translateY(-1px);
+        }
+
+        .refresh-all-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .refresh-all-btn.loading svg {
+          animation: spin 1s linear infinite;
+        }
+
+        .refresh-all-btn.stop {
+          background: var(--color-danger, #dc3545);
+        }
+
+        .refresh-all-btn.stop:hover {
+          background: var(--color-danger-hover, #c82333);
+          box-shadow: 0 0 12px rgba(220, 53, 69, 0.4);
+        }
 
         .view-modes {
           display: flex;
@@ -664,6 +733,36 @@ export class MoviesIndexPage extends BaseComponent {
 
   handleAddMovie(): void {
     navigate('/add/movies');
+  }
+
+  async handleRefreshAll(): Promise<void> {
+    try {
+      const result = await http.post<{ id: number }>('/command', { name: 'RefreshMovies' });
+      this.refreshCommandId = result.id;
+      this.requestUpdate();
+
+      showInfo('Refreshing all movie metadata...', 'Refresh Started');
+    } catch (error) {
+      console.error('[MoviesIndex] Failed to refresh all movies:', error);
+      showError('Failed to start refresh command', 'Refresh Failed');
+    }
+  }
+
+  async handleStopRefresh(): Promise<void> {
+    if (!this.refreshCommandId) return;
+
+    try {
+      await http.delete(`/command/${this.refreshCommandId}`);
+      showInfo('Stopping movie refresh...', 'Refresh Stopping');
+    } catch (error) {
+      console.error('[MoviesIndex] Failed to stop refresh:', error);
+      showError('Failed to stop refresh command', 'Stop Failed');
+    } finally {
+      this.refreshCommandId = null;
+      this.requestUpdate();
+      // Refetch to show whatever was updated so far
+      this.moviesQuery.refetch();
+    }
   }
 
   handleRetry(): void {

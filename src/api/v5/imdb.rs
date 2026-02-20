@@ -28,6 +28,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/sync", post(start_sync))
         .route("/sync/status", get(get_sync_status))
         .route("/sync/cancel-stale", post(cancel_stale_syncs))
+        .route("/backfill-air-dates", post(backfill_air_dates))
         .route("/stats", get(get_stats))
         // Link to local series
         .route("/link/{imdb_id}", post(link_to_series))
@@ -157,6 +158,39 @@ async fn cancel_stale_syncs(State(state): State<Arc<AppState>>) -> impl IntoResp
                 .into_response()
         }
     }
+}
+
+/// Backfill episode air dates via TVMaze - proxied to pir9-imdb service
+async fn backfill_air_dates(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<BackfillAirDatesRequest>>,
+) -> impl IntoResponse {
+    let limit = body.map(|b| b.limit).unwrap_or(100);
+    match state.imdb_client.backfill_air_dates(limit).await {
+        Ok(resp) => {
+            let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            (status, Json(resp.body)).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to start air date backfill: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackfillAirDatesRequest {
+    #[serde(default = "default_backfill_limit")]
+    limit: u32,
+}
+
+fn default_backfill_limit() -> u32 {
+    100
 }
 
 /// Get IMDB stats - proxied to pir9-imdb service

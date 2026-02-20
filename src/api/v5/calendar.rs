@@ -96,7 +96,7 @@ pub async fn get_calendar(
         .unwrap_or_else(|| now + Duration::days(28));
 
     let include_unmonitored = query.unmonitored.unwrap_or(false) || query.include_unmonitored.unwrap_or(false);
-    let include_series = query.include_series.unwrap_or(false);
+    let include_series = query.include_series.unwrap_or(true);
     let include_specials = true;
 
     let episode_repo = EpisodeRepository::new(state.db.clone());
@@ -131,6 +131,7 @@ pub async fn get_calendar(
             series.map(|s| serde_json::json!({
                 "id": s.id,
                 "title": s.title,
+                "titleSlug": s.title_slug,
                 "path": s.path,
                 "tvdbId": s.tvdb_id,
                 "status": s.status,
