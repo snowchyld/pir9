@@ -115,6 +115,15 @@ impl JobScheduler {
                 last_execution: None,
                 next_execution: None,
             },
+            ScheduledJob {
+                id: 10,
+                name: "ReconcileDownloads".to_string(),
+                interval_minutes: 5, // Every 5 minutes — discover externally-added downloads
+                command: JobCommand::ReconcileDownloads,
+                enabled: true,
+                last_execution: None,
+                next_execution: None,
+            },
         ];
 
         let mut jobs = self.jobs.write().await;
@@ -240,6 +249,9 @@ async fn execute_job_command(
         }
         JobCommand::ProcessDownloadQueue => {
             execute_process_download_queue(db).await?;
+        }
+        JobCommand::ReconcileDownloads => {
+            execute_reconcile_downloads(db).await?;
         }
         JobCommand::Custom { name, action: _ } => {
             info!("Executing custom job: {}", name);
@@ -539,6 +551,25 @@ async fn execute_process_download_queue(db: &Database) -> Result<()> {
     Ok(())
 }
 
+/// Reconcile Downloads: Discover externally-added downloads in download clients and match
+/// them to tracked series/movies so they appear in the activity queue
+async fn execute_reconcile_downloads(db: &Database) -> Result<()> {
+    let service = crate::core::queue::TrackedDownloadService::new(db.clone());
+
+    match service.reconcile_downloads().await {
+        Ok(count) => {
+            if count > 0 {
+                info!("Reconciled {} new download(s) from download clients", count);
+            }
+        }
+        Err(e) => {
+            warn!("Failed to reconcile downloads: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
 /// Downloaded Episodes Scan: Check download clients for completed downloads and import them
 async fn execute_downloaded_episodes_scan(
     db: &Database,
@@ -775,6 +806,8 @@ pub enum JobCommand {
     Backup,
     /// Process download queue (update statuses, trigger imports)
     ProcessDownloadQueue,
+    /// Reconcile external downloads with tracked series/movies
+    ReconcileDownloads,
     Custom {
         name: String,
         action: String,

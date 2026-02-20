@@ -277,14 +277,15 @@ impl TrackedDownloadService {
                 client_status_map.get(&(td.download_client_id, td.download_id.clone()));
 
             // If the client was successfully polled but the download is gone,
-            // clean up the stale tracked_download record
+            // mark as DownloadClientUnavailable but DON'T delete — the download
+            // may have finished seeding and been removed from the client while
+            // files still need importing. Only truly stale records (Imported or
+            // old enough) should be cleaned up by the reconciliation job.
             if live_status.is_none() && polled_clients.contains(&td.download_client_id) {
-                info!(
-                    "Cleaning up stale tracked download {}: '{}' no longer in download client",
-                    td.id, td.title
+                debug!(
+                    "Tracked download {} '{}' (status={}) not found in download client (client_id={})",
+                    td.id, td.title, td.status, td.download_client_id
                 );
-                let _ = repo.delete(td.id).await;
-                continue;
             }
 
             // Determine queue status and state
@@ -394,13 +395,20 @@ impl TrackedDownloadService {
                 fallback
             };
 
-            // Get episode has file status
-            let episode_has_file = if resolved_episode_id > 0 {
-                if let Ok(Some(ep)) = episode_repo.get_by_id(resolved_episode_id).await {
-                    ep.has_file
-                } else {
-                    false
+            // Check if ALL tracked episodes have files — for multi-episode/season
+            // packs, a single imported episode shouldn't hide the entire download
+            let episode_has_file = if !episode_ids.is_empty() {
+                let mut all_have_files = true;
+                for &ep_id in &episode_ids {
+                    match episode_repo.get_by_id(ep_id).await {
+                        Ok(Some(ep)) if ep.has_file => {}
+                        _ => {
+                            all_have_files = false;
+                            break;
+                        }
+                    }
                 }
+                all_have_files
             } else {
                 false
             };

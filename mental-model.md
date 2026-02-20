@@ -1,7 +1,7 @@
 # pir9 Mental Model
 
 > Living document — updated as the codebase evolves.
-> **Version**: 0.41.0 | **Last updated**: 2026-02-17
+> **Version**: 0.42.0 | **Last updated**: 2026-02-17
 
 ## 1. What Is pir9?
 
@@ -235,8 +235,10 @@ Downloading → ImportBlocked → ImportPending → Importing → Imported
 **`TrackedDownloadService.get_queue()`** returns `QueueResult`:
 - `items`: Vec of tracked QueueItems with merged live download status
 - `client_downloads`: HashMap<client_id, Vec<DownloadStatus>> — raw polled data reused by callers to avoid double-polling
+- `episode_has_file` checks ALL tracked episode IDs (v0.42.0) — previously only checked the first episode, which hid multi-episode/season-pack downloads from the queue when one episode was already imported
+- Orphaned tracked downloads (torrent removed from client) show as `DownloadClientUnavailable` instead of being deleted — lets import-pending items persist for manual intervention
 
-**`reconcile_downloads()`**: Matches untracked downloads to series first, then movies as fallback using `normalize_title()` substring matching.
+**`reconcile_downloads()`** (scheduled every 5min, v0.42.0): Matches untracked downloads to series first, then movies as fallback using `normalize_title()` substring matching. Also runs `cleanup_imported_downloads()` to purge fully-imported tracked records.
 
 **Anime detection**: `queue.rs` enrichment pass checks `series.series_type == 2` and overrides `content_type` to "anime".
 
@@ -370,6 +372,7 @@ pir9-cli --url http://localhost:8989 --api-key KEY <command>
 | HealthCheck | 5 min | Test all clients/indexers/disk space |
 | Housekeeping | 24 hrs | Cleanup old commands, VACUUM ANALYZE |
 | Backup | Weekly | `pg_dump` → `/config/Backups/` (keep last 7) |
+| ReconcileDownloads | 5 min | Match untracked client downloads to series/movies |
 | DownloadedEpisodesScan | On-demand | Import completed files |
 
 ### RSS Sync Pipeline (the core automation)
