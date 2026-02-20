@@ -48,8 +48,8 @@ certs/
 # Runtime cache
 cache/
 
-# Claude Code
-.claude/
+# Claude Code (track hooks, skills, settings.json — keep local settings private)
+.claude/settings.local.json
 
 # Playwright MCP
 .playwright-mcp/

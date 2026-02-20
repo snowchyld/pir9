@@ -1186,22 +1186,121 @@ impl EpisodeRepository {
     }
 
     /// Get episodes with files below quality cutoff
+    ///
+    /// Joins episodes → episode_files → series → quality_profiles, then filters
+    /// in Rust where the file's quality weight is below the profile's cutoff weight.
+    /// Rust-side filtering is necessary because quality profiles store items as nested
+    /// JSON that SQL cannot easily walk.
     pub async fn get_cutoff_unmet(
         &self,
-        _page: i32,
-        _page_size: i32,
-        _sort_key: &str,
-        _sort_direction: &str,
+        page: i32,
+        page_size: i32,
+        sort_key: &str,
+        sort_direction: &str,
     ) -> Result<(Vec<super::models::EpisodeDbModel>, i64)> {
-        let pool = self.db.pool();
-        // For now, we return episodes that have files but we could add quality comparison later
-        // This would require joining with episode_files and quality_profiles
-        let where_clause = "has_file = true AND monitored = true";
-        let count_query = format!("SELECT COUNT(*) FROM episodes WHERE {}", where_clause);
-        let _total: (i64,) = sqlx::query_as(&count_query).fetch_one(pool).await?;
+        use crate::core::profiles::qualities::QualityModel;
+        use std::collections::HashMap;
 
-        // For now, return empty - full implementation requires quality profile comparison
-        Ok((vec![], 0))
+        let pool = self.db.pool();
+
+        // Step 1: Load all quality profiles into a cutoff map (profile_id → cutoff weight)
+        let profiles = sqlx::query_as::<_, super::models::QualityProfileDbModel>(
+            "SELECT * FROM quality_profiles",
+        )
+        .fetch_all(pool)
+        .await?;
+
+        let cutoff_map: HashMap<i64, i32> =
+            profiles.into_iter().map(|p| (p.id, p.cutoff)).collect();
+
+        // Step 2: Load all episode files into a quality map (file_id → quality weight)
+        let episode_files =
+            sqlx::query_as::<_, super::models::EpisodeFileDbModel>("SELECT * FROM episode_files")
+                .fetch_all(pool)
+                .await?;
+
+        let file_quality_map: HashMap<i64, i32> = episode_files
+            .into_iter()
+            .map(|ef| {
+                let weight = serde_json::from_str::<QualityModel>(&ef.quality)
+                    .map(|qm| qm.quality.weight())
+                    .unwrap_or(0);
+                (ef.id, weight)
+            })
+            .collect();
+
+        // Step 3: Load series → quality_profile_id mapping
+        let series_rows = sqlx::query_as::<_, super::models::SeriesDbModel>("SELECT * FROM series")
+            .fetch_all(pool)
+            .await?;
+
+        let series_profile_map: HashMap<i64, i64> = series_rows
+            .into_iter()
+            .map(|s| (s.id, s.quality_profile_id))
+            .collect();
+
+        // Step 4: Fetch all monitored episodes with files
+        let episodes = sqlx::query_as::<_, super::models::EpisodeDbModel>(
+            "SELECT * FROM episodes WHERE monitored = true AND has_file = true AND episode_file_id IS NOT NULL"
+        )
+        .fetch_all(pool)
+        .await?;
+
+        // Step 5: Filter — keep episodes where file quality < profile cutoff
+        let mut cutoff_unmet: Vec<super::models::EpisodeDbModel> = episodes
+            .into_iter()
+            .filter(|ep| {
+                let file_id = match ep.episode_file_id {
+                    Some(id) => id,
+                    None => return false,
+                };
+                let file_weight = file_quality_map.get(&file_id).copied().unwrap_or(0);
+                let profile_id = series_profile_map.get(&ep.series_id).copied().unwrap_or(0);
+                let cutoff = cutoff_map.get(&profile_id).copied().unwrap_or(0);
+                file_weight < cutoff
+            })
+            .collect();
+
+        let total = cutoff_unmet.len() as i64;
+
+        // Sort
+        let desc = sort_direction.eq_ignore_ascii_case("desc");
+        match sort_key {
+            "airDateUtc" => cutoff_unmet.sort_by(|a, b| {
+                let cmp = a.air_date_utc.cmp(&b.air_date_utc);
+                if desc {
+                    cmp.reverse()
+                } else {
+                    cmp
+                }
+            }),
+            "seriesId" => cutoff_unmet.sort_by(|a, b| {
+                let cmp = a.series_id.cmp(&b.series_id);
+                if desc {
+                    cmp.reverse()
+                } else {
+                    cmp
+                }
+            }),
+            _ => cutoff_unmet.sort_by(|a, b| {
+                let cmp = a.air_date_utc.cmp(&b.air_date_utc);
+                if desc {
+                    cmp.reverse()
+                } else {
+                    cmp
+                }
+            }),
+        }
+
+        // Paginate
+        let offset = ((page.max(1) - 1) * page_size) as usize;
+        let paginated: Vec<super::models::EpisodeDbModel> = cutoff_unmet
+            .into_iter()
+            .skip(offset)
+            .take(page_size as usize)
+            .collect();
+
+        Ok((paginated, total))
     }
 }
 

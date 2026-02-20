@@ -376,6 +376,7 @@ export interface QueueItemEpisode {
 export interface QueueItemSeries {
   id: number;
   title: string;
+  titleSlug: string;
 }
 
 export interface QueueItem {
@@ -408,6 +409,7 @@ export interface QueueResponse {
 export interface HistoryRecord {
   id: number;
   seriesId: number;
+  seriesTitleSlug?: string;
   episodeId: number;
   eventType: string;
   sourceTitle: string;

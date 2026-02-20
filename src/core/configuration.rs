@@ -390,6 +390,28 @@ impl AppConfig {
 
         Ok(())
     }
+
+    /// Find the config file path using the same search order as load()
+    pub fn config_file_path() -> PathBuf {
+        let candidates = [
+            PathBuf::from("/config/config.toml"),
+            PathBuf::from("/config/pir9.toml"),
+            PathBuf::from("config/config.toml"),
+        ];
+
+        for path in &candidates {
+            if path.exists() {
+                return path.clone();
+            }
+        }
+
+        // Fall back to default location
+        if PathBuf::from("/config").exists() {
+            PathBuf::from("/config/config.toml")
+        } else {
+            PathBuf::from("config/config.toml")
+        }
+    }
 }
 
 fn generate_secret_key() -> String {

@@ -319,9 +319,11 @@ export class HistoryPage extends BaseComponent {
           </div>
         </td>
         <td>
-          <a class="title-link" href="/series/${record.seriesId}" onclick="event.preventDefault(); this.closest('history-page').handleSeriesClick(${record.seriesId})">
-            ${escapeHtml(record.sourceTitle)}
-          </a>
+          ${
+            record.seriesTitleSlug
+              ? `<a class="title-link" href="/series/${escapeHtml(record.seriesTitleSlug)}" onclick="event.preventDefault(); this.closest('history-page').handleSeriesClick('${escapeHtml(record.seriesTitleSlug)}')">${escapeHtml(record.sourceTitle)}</a>`
+              : escapeHtml(record.sourceTitle)
+          }
         </td>
         <td>
           <span class="quality-badge">${escapeHtml(quality)}</span>
@@ -439,8 +441,8 @@ export class HistoryPage extends BaseComponent {
     this.historyQuery.refetch();
   }
 
-  handleSeriesClick(seriesId: number): void {
-    navigate(`/series/${seriesId}`);
+  handleSeriesClick(titleSlug: string): void {
+    navigate(`/series/${titleSlug}`);
   }
 
   goToPage(page: number): void {

@@ -52,7 +52,7 @@ async fn get_host_config(State(state): State<Arc<AppState>>) -> Json<HostConfigR
 }
 
 async fn update_host_config(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Json(mut config): Json<HostConfigResource>,
 ) -> Json<HostConfigResource> {
     // Hash the password if provided
@@ -62,18 +62,27 @@ async fn update_host_config(
         }
     }
 
-    // Store the updated config
+    // Store the updated config in memory
     {
         let mut stored_config = CONFIG_STATE.write().await;
         *stored_config = config.clone();
     }
 
+    // Persist relevant fields to the config file (read-modify-write)
+    let config_path = crate::core::configuration::AppConfig::config_file_path();
+    let mut app_config = state.config.clone();
+    app_config.server.port = config.port;
+    if !config.bind_address.is_empty() && config.bind_address != "*" {
+        app_config.server.bind_address = config.bind_address.clone();
+    }
+    app_config.server.enable_ssl = config.enable_ssl;
+    if let Err(e) = app_config.save(&config_path) {
+        tracing::warn!("Failed to persist config to {:?}: {}", config_path, e);
+    }
+
     // Clear sensitive fields in response
     config.password = None;
     config.password_confirmation = None;
-
-    // TODO: Persist to config file and reload
-    // state.config.save(&PathBuf::from("config/config.toml")).ok();
 
     Json(config)
 }

@@ -383,7 +383,7 @@ export class QueuePage extends BaseComponent {
     const progress = item.size > 0 ? ((item.size - item.sizeleft) / item.size) * 100 : 0;
     const statusIcon = this.getStatusIcon(item.status);
     const seriesTitle = item.series?.title ?? item.title;
-    const hasDbSeries = item.seriesId != null && item.seriesId > 0;
+    const hasDbSeries = item.seriesId != null && item.seriesId > 0 && item.series?.titleSlug;
     const episodeLabel = item.episode
       ? `S${String(item.episode.seasonNumber).padStart(2, '0')}E${String(item.episode.episodeNumber).padStart(2, '0')}${item.episode.title ? ` - ${item.episode.title}` : ''}`
       : '-';
@@ -399,7 +399,7 @@ export class QueuePage extends BaseComponent {
         <td class="title-cell">
           ${
             hasDbSeries
-              ? `<a class="title-link" href="/series/${item.seriesId}" onclick="event.preventDefault(); this.closest('queue-page').handleSeriesClick(${item.seriesId})" title="${escapeHtml(seriesTitle)}">${escapeHtml(this.truncate(seriesTitle, 32))}</a>`
+              ? `<a class="title-link" href="/series/${escapeHtml(item.series!.titleSlug)}" onclick="event.preventDefault(); this.closest('queue-page').handleSeriesClick('${escapeHtml(item.series!.titleSlug)}')" title="${escapeHtml(seriesTitle)}">${escapeHtml(this.truncate(seriesTitle, 32))}</a>`
               : `<span title="${escapeHtml(seriesTitle)}">${escapeHtml(this.truncate(seriesTitle, 32))}</span>`
           }
         </td>
@@ -524,8 +524,8 @@ export class QueuePage extends BaseComponent {
     this.queueQuery.refetch();
   }
 
-  handleSeriesClick(seriesId: number): void {
-    navigate(`/series/${seriesId}`);
+  handleSeriesClick(titleSlug: string): void {
+    navigate(`/series/${titleSlug}`);
   }
 
   handleRemove(id: number): void {
