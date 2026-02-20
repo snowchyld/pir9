@@ -177,6 +177,36 @@ See `TODO-LINT.md` for current lint issues and feature completion status. This t
 - Integration tests: `tests/` directory
 - Test naming: `test_<function>_<scenario>`
 
+## Versioning & Commits
+
+This project uses semver. **Every commit MUST bump the version.**
+
+### Rules
+1. **Read current version** from `Cargo.toml` before committing
+2. **Bump the version** based on the change type:
+   - `fix:` → patch bump (0.8.0 → 0.8.1)
+   - `feat:` → minor bump (0.8.0 → 0.9.0)
+   - Breaking changes → major bump (0.8.0 → 1.0.0)
+3. **Update both Cargo.toml files** if the change touches pir9-imdb:
+   - `Cargo.toml` (main project)
+   - `services/pir9-imdb/Cargo.toml` (IMDB service — keep in sync)
+4. **Stage the version bump** alongside the code changes in the same commit
+5. **Write detailed commit messages** using conventional commits format:
+   - First line: `type: short description` (under 72 chars)
+   - Blank line, then body explaining what changed and why
+   - End with `Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>`
+
+### Current version: 0.8.0
+
+### Commit types
+- `feat:` — new feature or capability
+- `fix:` — bug fix
+- `refactor:` — code restructuring without behavior change
+- `docs:` — documentation only
+- `chore:` — build, CI, tooling, or maintenance
+- `perf:` — performance improvement
+- `test:` — adding or fixing tests
+
 ## Do NOT
 
 - Add new dependencies without checking if existing crates cover the use case
