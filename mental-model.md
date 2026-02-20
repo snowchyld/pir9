@@ -1,7 +1,7 @@
 # pir9 Mental Model
 
 > Living document — updated as the codebase evolves.
-> **Version**: 0.40.0 | **Last updated**: 2026-02-17
+> **Version**: 0.41.0 | **Last updated**: 2026-02-17
 
 ## 1. What Is pir9?
 
@@ -267,10 +267,17 @@ Character-by-character template scanner (no regex). O(n) single-pass.
 
 - `mod.rs` — Core scanning logic (directory walk, video extension filter). **Canonical `VIDEO_EXTENSIONS` constant** (16 formats: mkv, mp4, avi, wmv, m4v, ts, webm, mov, flv, mpg, mpeg, vob, ogm, divx, m2ts, mts) — all other modules reference this single list. Also `scan_movie_directory()` for movie folders (max depth 2, returns largest video file as `ScannedFile`)
 - `jobs.rs` — JobTrackerService (timeout, retries). **NOTE**: Jobs are not currently registered with the tracker — dispatch is fire-and-forget
-- `consumer.rs` — ScanResultConsumer (imports results from workers). Routes results by `ScanType` (series vs movie). Uses worker-enriched `media_info`/`quality`/`file_hash` when present, falls back to local FFmpeg+BLAKE3 otherwise. `create_movie_scan_request()` for movie scans
+- `consumer.rs` — ScanResultConsumer (imports results from workers). Routes results by `ScanType` (series vs movie). Uses worker-enriched `media_info`/`quality`/`file_hash` when present, falls back to local FFmpeg+BLAKE3 otherwise. `create_movie_scan_request()` for movie scans. **v0.41.0**: Also handles `ImportFilesResult` messages for download import Phase 4 (DB insert after worker moves files). `PendingDownloadImport` tracks state between Phases 2→4.
 - `registry.rs` — WorkerRegistryService (tracks online workers, heartbeats)
 
 **Scan dispatch logic** (v0.40.0 — worker-first): When Redis is enabled, ALL scans (series + movies) are dispatched to workers. Workers do file discovery, FFmpeg probe, and BLAKE3 hash locally (fast), then send enriched `ScannedFile` results back. The server only does DB inserts. Local scanning is the fallback when no Redis/workers are configured. `ScannedFile` has optional `media_info`, `quality`, `file_hash` fields (`#[serde(default)]` for backwards compat). `ScanType` enum: `RescanSeries`, `DownloadedEpisodesScan`, `RescanMovie`.
+
+**Worker-owned filesystem** (v0.41.0): Download imports route ALL file I/O through the worker via 4 new `Message` variants (`ImportFilesRequest/Result`, `DeletePathsRequest/Result`). Multi-phase pipeline:
+1. **Phase 1** (Discovery): Worker scans download dir with FFmpeg+BLAKE3
+2. **Phase 2** (Planning): Server matches files→series/episodes, computes dest paths using naming engine
+3. **Phase 3** (Move): Worker moves files — `rename()` is instant on same Btrfs volume, falls back to copy+delete cross-filesystem
+4. **Phase 4** (DB): Server inserts `EpisodeFileDbModel`, links episodes, records history, cleans up download client
+Key types: `ImportFileSpec` (source+dest paths), `ImportFileResult` (success/size/error), `DownloadImportInfo` (passed from command.rs→consumer), `PendingDownloadImport` (bridges Phases 2→4). Standalone functions `match_series_standalone()`, `match_episodes_standalone()`, `compute_destination_path()` extracted from `ImportService` for consumer reuse without filesystem I/O.
 
 ### 6.11 Notifications (`core/notifications/`)
 - **Structure**: `mod.rs`, `providers.rs`, `service.rs`

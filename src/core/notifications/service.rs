@@ -180,7 +180,12 @@ impl NotificationService {
             | Message::ScanResult { .. }
             | Message::WorkerOnline { .. }
             | Message::WorkerOffline { .. }
-            | Message::WorkerHeartbeat { .. } => None,
+            | Message::WorkerHeartbeat { .. }
+            // Worker file I/O events (internal, no notifications)
+            | Message::ImportFilesRequest { .. }
+            | Message::ImportFilesResult { .. }
+            | Message::DeletePathsRequest { .. }
+            | Message::DeletePathsResult { .. } => None,
         }
     }
 

@@ -26,6 +26,36 @@ pub enum ScanType {
     RescanMovie,
 }
 
+// ============================================================================
+// Worker File Operations Types
+// ============================================================================
+
+/// Specification for moving a single file from download dir to library
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportFileSpec {
+    /// Source file path (in download dir)
+    pub source_path: PathBuf,
+    /// Destination file path (in library dir)
+    pub dest_path: PathBuf,
+}
+
+/// Result of importing (moving) a single file
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportFileResult {
+    /// Source path (from the request)
+    pub source_path: PathBuf,
+    /// Destination path (from the request)
+    pub dest_path: PathBuf,
+    /// Whether the move succeeded
+    pub success: bool,
+    /// File size in bytes (after move)
+    pub file_size: i64,
+    /// Error message if move failed
+    pub error: Option<String>,
+}
+
 /// A file discovered during scanning
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -282,5 +312,41 @@ pub enum Message {
         files_found: u64,
         /// Worker uptime in seconds
         uptime_seconds: u64,
+    },
+
+    // Worker file operations (for download import & cleanup)
+    /// Server asks worker to move files from download dir → library
+    ImportFilesRequest {
+        /// Unique job ID for tracking
+        job_id: String,
+        /// Files to move (source → dest pairs)
+        files: Vec<ImportFileSpec>,
+    },
+    /// Worker confirms file moves completed
+    ImportFilesResult {
+        /// Job ID matching the request
+        job_id: String,
+        /// Worker instance ID that performed the moves
+        worker_id: String,
+        /// Per-file results
+        results: Vec<ImportFileResult>,
+    },
+    /// Server asks worker to delete paths from disk
+    DeletePathsRequest {
+        /// Unique job ID for tracking
+        job_id: String,
+        /// Paths to delete
+        paths: Vec<String>,
+        /// Whether to recursively delete directories
+        recursive: bool,
+    },
+    /// Worker confirms deletions completed
+    DeletePathsResult {
+        /// Job ID matching the request
+        job_id: String,
+        /// Worker instance ID
+        worker_id: String,
+        /// Per-path results: (path, success, error message)
+        results: Vec<(String, bool, Option<String>)>,
     },
 }

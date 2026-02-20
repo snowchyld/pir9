@@ -1,15 +1,21 @@
 # Docker Compose for pir9 Worker on Synology NAS
 # Usage: docker compose -f docker-compose.synology-worker.yml up -d
+#
+# The worker handles:
+# - File scanning (FFmpeg probe + BLAKE3 hash) on local disk
+# - File moves from download dir → library (instant rename on same Btrfs volume)
+# - File deletions on request from server
 
 services:
   pir9-worker:
     image: reg.pir9.org:2443/pir9:latest
     container_name: pir9-worker
     restart: unless-stopped
-    command: ["--mode", "worker", "--redis-url", "redis://10.0.0.13:6311", "--worker-path", "/volume1/Movies", "--worker-path", "/volume1/Shows"]
+    command: ["--mode", "worker", "--redis-url", "redis://10.0.0.13:6311", "--worker-path", "/volume1/Movies", "--worker-path", "/volume1/Shows", "--worker-path", "/volume1/downloads"]
     volumes:
-      - /volume1/Shows:/volume1/Shows:ro
-      - /volume1/Movies:/volume1/Movies:ro
+      - /volume1/Shows:/volume1/Shows          # rw: file moves INTO library
+      - /volume1/Movies:/volume1/Movies        # rw: file moves INTO library
+      - /volume1/downloads:/volume1/downloads:ro  # ro: read downloads, moves use rename()
     environment:
       - TZ=America/New_York
       - RUST_LOG=info,pir9=debug

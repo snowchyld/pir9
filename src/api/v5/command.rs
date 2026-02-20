@@ -137,6 +137,7 @@ pub async fn create_command(
         let imdb_client = state.imdb_client.clone();
         let media_config = state.config.read().media.clone();
         let command_tokens = state.command_tokens.clone();
+        let scan_result_consumer = state.scan_result_consumer.get().cloned();
         let cmd_id = id;
         let cmd_name = name.to_string();
         let cmd_body = body.clone();
@@ -167,6 +168,7 @@ pub async fn create_command(
                 imdb_client: Some(imdb_client),
                 cancel_token: Some(token),
                 media_config: Some(media_config),
+                scan_result_consumer,
             };
             let result =
                 execute_command_with_options(&cmd_name, &cmd_body, &db, &event_bus, options).await;
@@ -311,6 +313,8 @@ pub struct CommandExecutionOptions {
     pub cancel_token: Option<tokio_util::sync::CancellationToken>,
     /// Media config for episode naming during imports
     pub media_config: Option<crate::core::configuration::MediaConfig>,
+    /// Scan result consumer for registering download imports (worker mode)
+    pub scan_result_consumer: Option<std::sync::Arc<crate::core::scanner::ScanResultConsumer>>,
 }
 
 /// Execute a command with additional options (for distributed mode and IMDB metadata)
@@ -336,7 +340,15 @@ pub async fn execute_command_with_options(
             execute_rescan_series(body, db, event_bus, options.hybrid_event_bus.as_ref()).await
         }
         "DownloadedEpisodesScan" | "ProcessMonitoredDownloads" => {
-            execute_process_downloads(body, db, event_bus, options.media_config.as_ref()).await
+            execute_process_downloads(
+                body,
+                db,
+                event_bus,
+                options.media_config.as_ref(),
+                options.hybrid_event_bus.as_ref(),
+                options.scan_result_consumer.as_ref(),
+            )
+            .await
         }
         "RssSync" => execute_rss_sync(body, db, event_bus).await,
         "ApplicationCheckUpdate" => {
@@ -1309,12 +1321,18 @@ async fn execute_rescan_series_distributed(
     ))
 }
 
-/// Execute ProcessMonitoredDownloads command - check download clients for completed downloads
+/// Execute ProcessMonitoredDownloads command - check download clients for completed downloads.
+///
+/// When a worker is available (Redis enabled), dispatches file discovery to the worker
+/// instead of scanning over NFS. The worker discovers files + enriches with FFmpeg/BLAKE3,
+/// then the consumer handles matching, file moves, and DB insert.
 async fn execute_process_downloads(
     _body: &serde_json::Value,
     db: &crate::core::datastore::Database,
     _event_bus: &crate::core::messaging::EventBus,
     media_config: Option<&crate::core::configuration::MediaConfig>,
+    hybrid_event_bus: Option<&crate::core::messaging::HybridEventBus>,
+    scan_result_consumer: Option<&std::sync::Arc<crate::core::scanner::ScanResultConsumer>>,
 ) -> Result<String, String> {
     use crate::core::download::ImportService;
 
@@ -1338,6 +1356,14 @@ async fn execute_process_downloads(
         pending.len()
     );
 
+    // If Redis/workers available, dispatch file discovery to worker
+    if let (Some(hybrid_bus), Some(consumer)) = (hybrid_event_bus, scan_result_consumer) {
+        if hybrid_bus.is_redis_enabled() {
+            return execute_process_downloads_distributed(&pending, hybrid_bus, consumer).await;
+        }
+    }
+
+    // Fallback: local import (no worker available)
     let mut imported = 0;
     let mut failed = 0;
 
@@ -1386,6 +1412,76 @@ async fn execute_process_downloads(
     Ok(format!(
         "Processed downloads: {} imported, {} failed",
         imported, failed
+    ))
+}
+
+/// Dispatch download processing to workers via Redis.
+///
+/// For each completed download, creates a scan request for the download output path
+/// so the worker can discover video files and enrich them. The consumer then handles
+/// matching → file move → DB insert as a multi-phase pipeline.
+async fn execute_process_downloads_distributed(
+    pending: &[crate::core::download::import::PendingImport],
+    hybrid_bus: &crate::core::messaging::HybridEventBus,
+    consumer: &std::sync::Arc<crate::core::scanner::ScanResultConsumer>,
+) -> Result<String, String> {
+    use crate::core::messaging::{Message, ScanType};
+    use crate::core::scanner::DownloadImportInfo;
+
+    let mut dispatched = 0;
+
+    for item in pending {
+        let job_id = uuid::Uuid::new_v4().to_string();
+        let output_path_str = item.output_path.to_string_lossy().to_string();
+
+        tracing::info!(
+            "ProcessMonitoredDownloads: dispatching '{}' to worker (path={}, job_id={})",
+            item.title,
+            output_path_str,
+            job_id
+        );
+
+        // Register download import info in the consumer for Phase 2 when scan result arrives
+        let import_info = DownloadImportInfo {
+            download_id: item.download_id.clone(),
+            download_client_id: item.download_client_id,
+            download_client_name: item.download_client_name.clone(),
+            title: item.title.clone(),
+            output_path: item.output_path.clone(),
+            parsed_info: item.parsed_info.clone(),
+            series: item.series.clone(),
+            episodes: item.episodes.clone(),
+        };
+
+        consumer
+            .register_download_import(&job_id, vec![import_info])
+            .await;
+
+        // Register as a pending scan job (so consumer routes to download handler)
+        consumer
+            .register_job(
+                &job_id,
+                ScanType::DownloadedEpisodesScan,
+                vec![0], // No specific series_id — worker will discover files
+            )
+            .await;
+
+        // Create scan request for the download output path
+        // Use series_id=0 as placeholder (download paths aren't series-specific)
+        let message = Message::ScanRequest {
+            job_id: job_id.clone(),
+            scan_type: ScanType::DownloadedEpisodesScan,
+            series_ids: vec![0],
+            paths: vec![output_path_str],
+        };
+
+        hybrid_bus.publish(message).await;
+        dispatched += 1;
+    }
+
+    Ok(format!(
+        "Dispatched {} download imports to worker for processing",
+        dispatched
     ))
 }
 

@@ -26,6 +26,129 @@ use crate::core::naming::{self, EpisodeNamingContext};
 use crate::core::parser::{best_series_match, parse_title, ParsedEpisodeInfo};
 use crate::core::scanner::{match_special_by_title, parse_episodes_from_filename};
 
+/// Compute the destination path for an imported file (pure computation, no I/O).
+///
+/// This standalone function extracts the path logic from `ImportService` so the
+/// `ScanResultConsumer` can plan file moves without needing filesystem access.
+pub fn compute_destination_path(
+    media_config: &MediaConfig,
+    series: &SeriesDbModel,
+    season_number: i32,
+    source_filename: &str,
+    episodes: &[EpisodeDbModel],
+    parsed_info: &ParsedEpisodeInfo,
+) -> PathBuf {
+    let ext = std::path::Path::new(source_filename)
+        .extension()
+        .map(|e| e.to_string_lossy().to_string())
+        .unwrap_or_else(|| "mkv".to_string());
+
+    let mut dest = PathBuf::from(&series.path);
+
+    // Add season folder if enabled
+    if series.season_folder {
+        dest.push(naming::build_season_folder(media_config, season_number));
+    }
+
+    // Build filename: use naming template if enabled, otherwise keep original
+    let filename = if media_config.rename_episodes && !episodes.is_empty() {
+        let ctx = EpisodeNamingContext {
+            series,
+            episodes,
+            quality: &parsed_info.quality,
+            release_group: parsed_info.release_group.as_deref(),
+        };
+        let named = naming::build_episode_filename(media_config, &ctx);
+        format!("{}.{}", named, ext)
+    } else {
+        let source_stem = std::path::Path::new(source_filename)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "video".to_string());
+        format!("{}.{}", source_stem, ext)
+    };
+
+    dest.push(filename);
+    dest
+}
+
+/// Match parsed info to a series in the database (standalone, no ImportService needed).
+pub async fn match_series_standalone(
+    db: &Database,
+    info: &ParsedEpisodeInfo,
+) -> anyhow::Result<Option<SeriesDbModel>> {
+    let series_repo = SeriesRepository::new(db.clone());
+    let all_series = series_repo.get_all().await?;
+    Ok(
+        best_series_match(info, &all_series)
+            .map(|idx| all_series.into_iter().nth(idx).unwrap()),
+    )
+}
+
+/// Match episodes for a series based on parsed info (standalone, no ImportService needed).
+pub async fn match_episodes_standalone(
+    db: &Database,
+    series: &SeriesDbModel,
+    info: &ParsedEpisodeInfo,
+) -> anyhow::Result<Vec<EpisodeDbModel>> {
+    let episode_repo = EpisodeRepository::new(db.clone());
+    let mut matched_episodes = Vec::new();
+
+    // Handle multi-season full packs
+    if info.full_season && info.is_multi_season {
+        return episode_repo.get_by_series_id(series.id).await;
+    }
+
+    // Handle full season
+    if info.full_season {
+        if let Some(season) = info.season_number {
+            return episode_repo
+                .get_by_series_and_season(series.id, season)
+                .await;
+        }
+    }
+
+    // Handle standard season/episode
+    if let Some(season) = info.season_number {
+        for ep_num in &info.episode_numbers {
+            if let Ok(Some(episode)) = episode_repo
+                .get_by_series_season_episode(series.id, season, *ep_num)
+                .await
+            {
+                matched_episodes.push(episode);
+            }
+        }
+    }
+
+    // Handle absolute episode numbers (anime)
+    if !info.absolute_episode_numbers.is_empty() {
+        let all_episodes = episode_repo.get_by_series_id(series.id).await?;
+        for abs_num in &info.absolute_episode_numbers {
+            for ep in &all_episodes {
+                if ep.absolute_episode_number == Some(*abs_num) {
+                    matched_episodes.push(ep.clone());
+                    break;
+                }
+            }
+        }
+    }
+
+    // Handle daily episodes
+    if info.is_daily {
+        if let Some(air_date) = info.air_date {
+            let all_episodes = episode_repo.get_by_series_id(series.id).await?;
+            for ep in all_episodes {
+                if ep.air_date == Some(air_date) {
+                    matched_episodes.push(ep);
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(matched_episodes)
+}
+
 /// Result of an import operation
 #[derive(Debug, Clone)]
 pub struct ImportResult {

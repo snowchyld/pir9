@@ -207,11 +207,18 @@ async fn run_server_mode(args: &Args) -> Result<()> {
                 JobTrackerService, ScanResultConsumer, WorkerRegistryService,
             };
 
-            // Start scan result consumer
-            let consumer = std::sync::Arc::new(ScanResultConsumer::new(
+            // Start scan result consumer (with media config for download import naming)
+            let media_config = state.config.read().media.clone();
+            let mut consumer_inner = ScanResultConsumer::new(
                 database.clone(),
                 hybrid_bus.clone(),
-            ));
+            );
+            consumer_inner.set_media_config(media_config);
+            let consumer = std::sync::Arc::new(consumer_inner);
+
+            // Store in AppState for command.rs to register download imports
+            let _ = state.scan_result_consumer.set(consumer.clone());
+
             tokio::spawn(consumer.run());
             info!("Scan result consumer started");
 

@@ -54,6 +54,10 @@ fn message_type_name(message: &Message) -> &'static str {
         Message::MovieRefreshed { .. } => "MovieRefreshed",
         Message::MovieFileImported { .. } => "MovieFileImported",
         Message::MovieFileDeleted { .. } => "MovieFileDeleted",
+        Message::ImportFilesRequest { .. } => "ImportFilesRequest",
+        Message::ImportFilesResult { .. } => "ImportFilesResult",
+        Message::DeletePathsRequest { .. } => "DeletePathsRequest",
+        Message::DeletePathsResult { .. } => "DeletePathsResult",
     }
 }
 
@@ -299,9 +303,128 @@ impl WorkerRunner {
             Message::WorkerOffline { worker_id } => {
                 info!("Worker went offline: {}", worker_id);
             }
-            // Scan results are for the server, not workers
-            Message::ScanResult { .. } => {
-                // Ignore - this is for the server to process
+            // File move requests from server (download import Phase 3)
+            Message::ImportFilesRequest { job_id, files } => {
+                info!(
+                    "Received import files request: job_id={}, files={}",
+                    job_id,
+                    files.len()
+                );
+
+                // Check if any source paths are on our volumes
+                let any_ours = files.iter().any(|f| self.handles_path(&f.source_path.to_string_lossy()));
+                if !any_ours {
+                    debug!("Import files request not for our paths, ignoring");
+                    return;
+                }
+
+                let mut results = Vec::new();
+                for spec in files {
+                    let result = match move_file(&spec.source_path, &spec.dest_path) {
+                        Ok(size) => {
+                            info!(
+                                "Moved file: {} -> {} ({} bytes)",
+                                spec.source_path.display(),
+                                spec.dest_path.display(),
+                                size
+                            );
+                            crate::core::messaging::ImportFileResult {
+                                source_path: spec.source_path.clone(),
+                                dest_path: spec.dest_path.clone(),
+                                success: true,
+                                file_size: size,
+                                error: None,
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to move file {} -> {}: {}",
+                                spec.source_path.display(),
+                                spec.dest_path.display(),
+                                e
+                            );
+                            crate::core::messaging::ImportFileResult {
+                                source_path: spec.source_path.clone(),
+                                dest_path: spec.dest_path.clone(),
+                                success: false,
+                                file_size: 0,
+                                error: Some(e.to_string()),
+                            }
+                        }
+                    };
+                    results.push(result);
+                }
+
+                let succeeded = results.iter().filter(|r| r.success).count();
+                self.record_scan(succeeded as u64);
+
+                event_bus
+                    .publish(Message::ImportFilesResult {
+                        job_id: job_id.clone(),
+                        worker_id: self.worker_id.clone(),
+                        results,
+                    })
+                    .await;
+            }
+            // File delete requests from server
+            Message::DeletePathsRequest {
+                job_id,
+                paths,
+                recursive,
+            } => {
+                info!(
+                    "Received delete paths request: job_id={}, paths={}, recursive={}",
+                    job_id,
+                    paths.len(),
+                    recursive
+                );
+
+                // Check if any paths are on our volumes
+                let any_ours = paths.iter().any(|p| self.handles_path(p));
+                if !any_ours {
+                    debug!("Delete paths request not for our paths, ignoring");
+                    return;
+                }
+
+                let mut results = Vec::new();
+                for path_str in paths {
+                    let path = std::path::Path::new(path_str.as_str());
+                    let result = if path.is_dir() && *recursive {
+                        std::fs::remove_dir_all(path)
+                    } else if path.is_file() {
+                        std::fs::remove_file(path)
+                    } else if !path.exists() {
+                        Ok(()) // Already gone
+                    } else {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            "Path is a directory but recursive=false",
+                        ))
+                    };
+
+                    match result {
+                        Ok(()) => {
+                            info!("Deleted: {}", path_str);
+                            results.push((path_str.clone(), true, None));
+                        }
+                        Err(e) => {
+                            error!("Failed to delete {}: {}", path_str, e);
+                            results.push((path_str.clone(), false, Some(e.to_string())));
+                        }
+                    }
+                }
+
+                event_bus
+                    .publish(Message::DeletePathsResult {
+                        job_id: job_id.clone(),
+                        worker_id: self.worker_id.clone(),
+                        results,
+                    })
+                    .await;
+            }
+            // Scan results and import results are for the server, not workers
+            Message::ScanResult { .. } | Message::ImportFilesResult { .. } | Message::DeletePathsResult { .. } => {
+                // Ignore - these are for the server to process
             }
             // Log other message types at trace level
             other => {
@@ -449,6 +572,27 @@ impl WorkerRunner {
 
         results
     }
+}
+
+/// Move a file from source to dest, trying rename first (instant on same filesystem).
+///
+/// On the Synology NAS, `/volume1/downloads` and `/volume1/Shows` live on the same
+/// Btrfs volume, so `rename()` is a metadata-only operation — atomic and instant.
+/// Falls back to copy+delete for cross-filesystem moves.
+fn move_file(source: &std::path::Path, dest: &std::path::Path) -> std::io::Result<i64> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // Try rename first (instant on same filesystem)
+    if std::fs::rename(source, dest).is_ok() {
+        let size = std::fs::metadata(dest)?.len() as i64;
+        return Ok(size);
+    }
+    // Cross-filesystem fallback: copy + delete
+    std::fs::copy(source, dest)?;
+    let size = std::fs::metadata(dest)?.len() as i64;
+    let _ = std::fs::remove_file(source);
+    Ok(size)
 }
 
 /// Enrich a scanned file with FFmpeg media info and BLAKE3 content hash.

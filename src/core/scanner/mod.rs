@@ -18,7 +18,9 @@ use tracing::{debug, warn};
 use crate::core::messaging::ScannedFile;
 use crate::core::parser::normalize_title;
 
-pub use consumer::{create_movie_scan_request, create_scan_request, ScanResultConsumer};
+pub use consumer::{
+    create_movie_scan_request, create_scan_request, DownloadImportInfo, ScanResultConsumer,
+};
 pub use jobs::JobTrackerService;
 pub use registry::WorkerRegistryService;
 

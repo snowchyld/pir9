@@ -186,6 +186,7 @@ pub async fn create_command(
                 imdb_client: Some(imdb_client),
                 cancel_token: None,
                 media_config: Some(media_config),
+                scan_result_consumer: None,
             };
             let result = crate::api::v5::command::execute_command_with_options(
                 &cmd_name, &cmd_body, &db, &event_bus, options,

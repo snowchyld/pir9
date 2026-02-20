@@ -23,6 +23,7 @@ use crate::core::{
     imdb::ImdbClient,
     messaging::{EventBus, HybridEventBus},
     metadata::MetadataService,
+    scanner::ScanResultConsumer,
     scheduler::JobScheduler,
 };
 
@@ -42,6 +43,8 @@ pub struct AppState {
     pub hybrid_event_bus: Option<HybridEventBus>,
     /// Cancellation tokens for running commands (keyed by command ID)
     pub command_tokens: dashmap::DashMap<i64, tokio_util::sync::CancellationToken>,
+    /// Scan result consumer for registering download imports (set in server mode)
+    pub scan_result_consumer: tokio::sync::OnceCell<Arc<ScanResultConsumer>>,
 }
 
 impl AppState {
@@ -63,6 +66,7 @@ impl AppState {
             event_bus: EventBus::new(),
             hybrid_event_bus: None,
             command_tokens: dashmap::DashMap::new(),
+            scan_result_consumer: tokio::sync::OnceCell::new(),
         }))
     }
 
@@ -101,6 +105,7 @@ impl AppState {
             event_bus: EventBus::new(),
             hybrid_event_bus: Some(hybrid_bus),
             command_tokens: dashmap::DashMap::new(),
+            scan_result_consumer: tokio::sync::OnceCell::new(),
         }))
     }
 
