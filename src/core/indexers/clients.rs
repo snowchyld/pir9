@@ -679,8 +679,6 @@ fn parse_quality_from_title(title: &str) -> QualityModel {
     } else if title_lower.contains("hdtv") {
         if title_lower.contains("1080") {
             Quality::Hdtv1080p
-        } else if title_lower.contains("720") {
-            Quality::Hdtv720p
         } else {
             Quality::Hdtv720p
         }

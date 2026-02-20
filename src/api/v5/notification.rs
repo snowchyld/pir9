@@ -122,12 +122,7 @@ fn model_to_resource(model: &NotificationDbModel) -> NotificationResource {
     let fields = settings_to_fields(&model.implementation, &settings);
 
     // Determine capabilities based on implementation
-    let (supports_on_grab, supports_on_download, supports_on_upgrade, supports_on_rename,
-         supports_on_series_add, supports_on_series_delete, supports_on_episode_file_delete,
-         supports_on_episode_file_delete_for_upgrade, supports_on_health_issue,
-         supports_on_health_restored, supports_on_application_update,
-         supports_on_manual_interaction_required, supports_on_import_complete) =
-        get_implementation_capabilities(&model.implementation);
+    let supported = supports_all_events(&model.implementation);
 
     NotificationResource {
         id: model.id,
@@ -152,19 +147,19 @@ fn model_to_resource(model: &NotificationDbModel) -> NotificationResource {
         on_health_restored: model.on_health_restored,
         on_application_update: model.on_application_update,
         on_manual_interaction_required: model.on_manual_interaction_required,
-        supports_on_grab,
-        supports_on_download,
-        supports_on_upgrade,
-        supports_on_import_complete,
-        supports_on_rename,
-        supports_on_series_add,
-        supports_on_series_delete,
-        supports_on_episode_file_delete,
-        supports_on_episode_file_delete_for_upgrade,
-        supports_on_health_issue,
-        supports_on_health_restored,
-        supports_on_application_update,
-        supports_on_manual_interaction_required,
+        supports_on_grab: supported,
+        supports_on_download: supported,
+        supports_on_upgrade: supported,
+        supports_on_import_complete: supported,
+        supports_on_rename: supported,
+        supports_on_series_add: supported,
+        supports_on_series_delete: supported,
+        supports_on_episode_file_delete: supported,
+        supports_on_episode_file_delete_for_upgrade: supported,
+        supports_on_health_issue: supported,
+        supports_on_health_restored: supported,
+        supports_on_application_update: supported,
+        supports_on_manual_interaction_required: supported,
     }
 }
 
@@ -353,27 +348,9 @@ fn fields_to_settings(fields: &[FieldResource]) -> String {
         .unwrap_or_else(|_| "{}".to_string())
 }
 
-/// Get implementation capabilities
-fn get_implementation_capabilities(implementation: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool) {
-    // All implementations support all events for now
-    match implementation {
-        "Discord" | "Webhook" | "Email" => (
-            true,  // supports_on_grab
-            true,  // supports_on_download
-            true,  // supports_on_upgrade
-            true,  // supports_on_rename
-            true,  // supports_on_series_add
-            true,  // supports_on_series_delete
-            true,  // supports_on_episode_file_delete
-            true,  // supports_on_episode_file_delete_for_upgrade
-            true,  // supports_on_health_issue
-            true,  // supports_on_health_restored
-            true,  // supports_on_application_update
-            true,  // supports_on_manual_interaction_required
-            true,  // supports_on_import_complete
-        ),
-        _ => (false, false, false, false, false, false, false, false, false, false, false, false, false),
-    }
+/// Whether this implementation supports notification events
+fn supports_all_events(implementation: &str) -> bool {
+    matches!(implementation, "Discord" | "Webhook" | "Email")
 }
 
 pub async fn get_notifications(

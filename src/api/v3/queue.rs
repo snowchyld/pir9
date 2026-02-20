@@ -402,7 +402,7 @@ pub async fn get_queue(
     let all_downloads = fetch_all_downloads(&state, include_unknown).await;
 
     let page = query.page.unwrap_or(1).max(1);
-    let page_size = query.page_size.unwrap_or(20).max(1).min(100);
+    let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
 
     let total_records = all_downloads.len() as i32;
 

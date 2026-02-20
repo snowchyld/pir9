@@ -113,11 +113,9 @@ pub async fn delete_backup(
 
     if let Ok(entries) = std::fs::read_dir(backup_dir) {
         for (idx, entry) in entries.flatten().enumerate() {
-            if (idx + 1) as i32 == id {
-                if std::fs::remove_file(entry.path()).is_ok() {
-                    tracing::info!("Deleted backup: {}", entry.path().display());
-                    return StatusCode::OK;
-                }
+            if (idx + 1) as i32 == id && std::fs::remove_file(entry.path()).is_ok() {
+                tracing::info!("Deleted backup: {}", entry.path().display());
+                return StatusCode::OK;
             }
         }
     }

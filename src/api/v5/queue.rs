@@ -577,7 +577,7 @@ async fn list_queue(
     }
 
     let page = params.page.unwrap_or(1).max(1);
-    let page_size = params.page_size.unwrap_or(10000).max(1).min(10000);
+    let page_size = params.page_size.unwrap_or(10000).clamp(1, 10000);
     let total_records = all_downloads.len() as i64;
 
     let start = ((page - 1) * page_size) as usize;

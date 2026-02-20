@@ -451,7 +451,7 @@ impl CreateMovieRequest {
         if self.title.is_empty() {
             return Err(ApiError::Validation("title is required".to_string()));
         }
-        if self.path.is_none() && self.root_folder_path.as_ref().map_or(true, |s| s.is_empty()) {
+        if self.path.is_none() && self.root_folder_path.as_ref().is_none_or(|s| s.is_empty()) {
             return Err(ApiError::Validation("path or rootFolderPath is required".to_string()));
         }
         Ok(())
@@ -619,7 +619,7 @@ impl From<MovieDbModel> for MovieResponse {
         } else {
             // Rewrite urls to local proxy paths, preserving remote_url for CDN access
             images.into_iter().map(|img| {
-                let ext = if img.cover_type == "fanart" { "jpg" } else { "jpg" };
+                let ext = "jpg";
                 MovieImage {
                     url: format!("/MediaCover/Movies/{}/{}.{}", m.id, img.cover_type, ext),
                     remote_url: if img.remote_url.is_some() { img.remote_url } else { Some(img.url).filter(|u| u.starts_with("http")) },
@@ -628,7 +628,7 @@ impl From<MovieDbModel> for MovieResponse {
             }).collect()
         };
 
-        let folder = m.path.split('/').last().map(|f| f.to_string());
+        let folder = m.path.split('/').next_back().map(|f| f.to_string());
 
         Self {
             id: m.id,
@@ -755,7 +755,7 @@ async fn import_movies(
 
         // If imdb_id not provided, try to look up via IMDB service
         let (resolved_imdb_id, resolved_title, resolved_year, resolved_overview, resolved_runtime, resolved_genres, resolved_rating, resolved_votes) =
-            if imdb_id.as_ref().map_or(true, |id| id.is_empty()) && state.imdb_client.is_enabled() {
+            if imdb_id.as_ref().is_none_or(|id| id.is_empty()) && state.imdb_client.is_enabled() {
                 tracing::info!("Looking up movie for import: {} (year={:?})", lookup_title, folder_year);
                 match state.imdb_client.search_movies(&lookup_title, 10).await {
                     Ok(results) if !results.is_empty() => {
@@ -963,7 +963,7 @@ fn scan_movie_folder(folder_path: &str, movie_id: i64) -> Option<MovieFileDbMode
                         let size = std::fs::metadata(&path)
                             .map(|m| m.len())
                             .unwrap_or(0);
-                        if best.as_ref().map_or(true, |(_, s)| size > *s) {
+                        if best.as_ref().is_none_or(|(_, s)| size > *s) {
                             *best = Some((path, size));
                         }
                     }

@@ -238,11 +238,11 @@ impl JobTracker {
     /// Remove completed/failed jobs older than max_age
     pub fn cleanup(&mut self, max_age: Duration) {
         self.jobs.retain(|id, job| {
-            if matches!(job.state, JobState::Completed | JobState::Failed) {
-                if job.updated_at.elapsed() > max_age {
-                    debug!("Cleaning up old job: {}", id);
-                    return false;
-                }
+            if matches!(job.state, JobState::Completed | JobState::Failed)
+                && job.updated_at.elapsed() > max_age
+            {
+                debug!("Cleaning up old job: {}", id);
+                return false;
             }
             true
         });

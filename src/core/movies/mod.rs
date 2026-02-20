@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 /// Movie status types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, Default)]
 #[repr(i32)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum MovieStatusType {
     #[default]
     TBA = 0,

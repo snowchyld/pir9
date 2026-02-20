@@ -126,13 +126,11 @@ impl WorkerRegistry {
         let mut timed_out = Vec::new();
 
         for (worker_id, worker) in self.workers.iter_mut() {
-            if worker.is_timed_out() {
-                if worker.healthy {
-                    warn!("Worker {} has timed out (last heartbeat: {:?} ago)",
-                          worker_id, worker.time_since_heartbeat());
-                    worker.healthy = false;
-                    timed_out.push(worker_id.clone());
-                }
+            if worker.is_timed_out() && worker.healthy {
+                warn!("Worker {} has timed out (last heartbeat: {:?} ago)",
+                      worker_id, worker.time_since_heartbeat());
+                worker.healthy = false;
+                timed_out.push(worker_id.clone());
             }
         }
 

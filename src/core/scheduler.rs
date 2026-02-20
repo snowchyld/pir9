@@ -538,7 +538,7 @@ async fn execute_backup(_db: &Database) -> Result<()> {
 
     while let Some(entry) = dir_entries.next_entry().await? {
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "sql") {
+        if path.extension().is_some_and(|ext| ext == "sql") {
             backups.push(entry);
         }
     }

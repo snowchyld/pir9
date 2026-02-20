@@ -194,10 +194,8 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
         _ => {
             // Generic: dump all settings as fields
             if let Some(obj) = settings.as_object() {
-                let mut order = 0;
-                for (key, value) in obj {
-                    fields.push(make_field(order, key, key, "textbox", Some(value.clone()), None));
-                    order += 1;
+                for (order, (key, value)) in obj.iter().enumerate() {
+                    fields.push(make_field(order as i32, key, key, "textbox", Some(value.clone()), None));
                 }
             }
         }

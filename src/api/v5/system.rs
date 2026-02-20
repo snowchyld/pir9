@@ -162,7 +162,7 @@ async fn list_backups(
             {
                 if let Ok(meta) = entry.metadata() {
                     let modified = meta.modified()
-                        .map(|t| chrono::DateTime::<chrono::Utc>::from(t))
+                        .map(chrono::DateTime::<chrono::Utc>::from)
                         .unwrap_or_else(|_| chrono::Utc::now());
                     backups.push(Backup {
                         name: entry.file_name().to_string_lossy().to_string(),

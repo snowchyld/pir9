@@ -1525,7 +1525,7 @@ impl CreateSeriesRequest {
             return Err(ApiError::Validation("title is required".to_string()));
         }
         // Either path or rootFolderPath must be provided
-        if self.path.is_none() && self.root_folder_path.as_ref().map_or(true, |s| s.is_empty()) {
+        if self.path.is_none() && self.root_folder_path.as_ref().is_none_or(|s| s.is_empty()) {
             return Err(ApiError::Validation("path or rootFolderPath is required".to_string()));
         }
         Ok(())
@@ -1798,7 +1798,7 @@ impl From<SeriesDbModel> for SeriesResponse {
         let ended = s.status == 1;
 
         // Extract folder name from path
-        let folder = s.path.split('/').last().map(|f| f.to_string());
+        let folder = s.path.split('/').next_back().map(|f| f.to_string());
 
         Self {
             id: s.id,

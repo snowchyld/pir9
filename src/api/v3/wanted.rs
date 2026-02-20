@@ -92,7 +92,7 @@ pub async fn get_wanted_missing(
     query: Query<WantedQuery>,
 ) -> Json<WantedResourcePagingResource> {
     let page = query.page.unwrap_or(1).max(1);
-    let page_size = query.page_size.unwrap_or(20).max(1).min(100);
+    let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
     let sort_key = query.sort_key.clone().unwrap_or("airDateUtc".to_string());
     let sort_direction = query.sort_direction.clone().unwrap_or("descending".to_string());
     let monitored_only = query.monitored.unwrap_or(true);
@@ -161,7 +161,7 @@ pub async fn get_wanted_cutoff(
     query: Query<WantedQuery>,
 ) -> Json<WantedResourcePagingResource> {
     let page = query.page.unwrap_or(1).max(1);
-    let page_size = query.page_size.unwrap_or(20).max(1).min(100);
+    let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
     let sort_key = query.sort_key.clone().unwrap_or("airDateUtc".to_string());
     let sort_direction = query.sort_direction.clone().unwrap_or("descending".to_string());
     let include_series = query.include_series.unwrap_or(false);

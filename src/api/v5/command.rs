@@ -261,6 +261,7 @@ pub fn routes() -> Router<Arc<AppState>> {
 }
 
 /// Options for command execution
+#[derive(Default)]
 pub struct CommandExecutionOptions {
     /// Hybrid event bus for distributed scanning (if in server mode)
     pub hybrid_event_bus: Option<crate::core::messaging::HybridEventBus>,
@@ -270,17 +271,6 @@ pub struct CommandExecutionOptions {
     pub imdb_client: Option<crate::core::imdb::ImdbClient>,
     /// Cancellation token to stop long-running commands
     pub cancel_token: Option<tokio_util::sync::CancellationToken>,
-}
-
-impl Default for CommandExecutionOptions {
-    fn default() -> Self {
-        Self {
-            hybrid_event_bus: None,
-            metadata_service: None,
-            imdb_client: None,
-            cancel_token: None,
-        }
-    }
 }
 
 /// Execute a command with additional options (for distributed mode and IMDB metadata)
@@ -649,7 +639,7 @@ async fn execute_refresh_movies(
 
     for (idx, movie_id) in movie_ids.iter().enumerate() {
         // Check for cancellation between movies
-        if cancel_token.map_or(false, |t| t.is_cancelled()) {
+        if cancel_token.is_some_and(|t| t.is_cancelled()) {
             let summary = format!(
                 "Cancelled: refreshed {}/{} movies before stop ({} IMDB IDs, {} images, {} errors)",
                 refreshed, total, imdb_found, images_found, errors
@@ -901,12 +891,12 @@ async fn execute_rescan_series(
                     ef.id
                 } else {
                     // Create new episode file record
-                    let file_size = std::fs::metadata(&file_path)
+                    let file_size = std::fs::metadata(file_path)
                         .map(|m| m.len() as i64)
                         .unwrap_or(0);
 
                     let relative_path = file_path
-                        .strip_prefix(&series.path)
+                        .strip_prefix(series.path.as_str())
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_else(|_| file_name.to_string());
 
