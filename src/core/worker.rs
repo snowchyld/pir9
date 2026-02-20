@@ -724,31 +724,23 @@ impl WorkerRunner {
     }
 }
 
-/// Result of a file move, including whether it was a rename or copy
+/// Result of a file import operation
 struct MoveResult {
     size: i64,
-    method: &'static str, // "rename" or "copy"
+    method: &'static str, // "copy"
 }
 
-/// Move a file from source to dest, trying rename first (instant on same filesystem).
+/// Copy a file from source to dest, preserving the original.
 ///
-/// On the Synology NAS, `/volume1/downloads` and `/volume1/Shows` live on the same
-/// Btrfs volume, so `rename()` is a metadata-only operation — atomic and instant.
-/// Falls back to copy+delete for cross-filesystem moves.
+/// Always copies — source files are never moved or deleted. The download
+/// client manages source cleanup via its own retention/seeding rules.
 fn move_file(source: &std::path::Path, dest: &std::path::Path) -> std::io::Result<MoveResult> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    // Try rename first (instant on same filesystem)
-    if std::fs::rename(source, dest).is_ok() {
-        let size = std::fs::metadata(dest)?.len() as i64;
-        return Ok(MoveResult { size, method: "rename" });
-    }
-    // Cross-filesystem fallback: copy with progress + delete
     let source_size = std::fs::metadata(source)?.len();
     copy_with_progress(source, dest, source_size)?;
     let size = std::fs::metadata(dest)?.len() as i64;
-    let _ = std::fs::remove_file(source);
     Ok(MoveResult { size, method: "copy" })
 }
 

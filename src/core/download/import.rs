@@ -751,17 +751,13 @@ impl ImportService {
             std::fs::create_dir_all(parent).context("Failed to create destination directory")?;
         }
 
-        // Move/copy the file
+        // Copy the file to library (source is never deleted — download client
+        // manages cleanup via its own retention/seeding rules)
         let file_size = std::fs::metadata(source_file)
             .map(|m| m.len() as i64)
             .unwrap_or(0);
 
-        // Try move first, fall back to copy
-        if std::fs::rename(source_file, &dest_path).is_err() {
-            std::fs::copy(source_file, &dest_path).context("Failed to copy file")?;
-            // If copy succeeded, remove original
-            let _ = std::fs::remove_file(source_file);
-        }
+        std::fs::copy(source_file, &dest_path).context("Failed to copy file")?;
 
         // Create episode file record
         let relative_path = dest_path
