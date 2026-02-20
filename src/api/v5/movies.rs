@@ -429,6 +429,38 @@ async fn rematch_movie(
 
     movie.last_info_sync = Some(Utc::now());
 
+    // Check for duplicate tmdb_id before updating — another movie may already
+    // claim this TMDB entry. If so, mark the OTHER movie as a duplicate rather
+    // than crashing with a constraint violation.
+    if movie.tmdb_id > 0 {
+        if let Ok(Some(existing)) = repo.get_by_tmdb_id(movie.tmdb_id).await {
+            if existing.id != movie.id {
+                tracing::warn!(
+                    "Rematch: tmdb_id {} already belongs to movie id={} '{}', marking it as duplicate",
+                    movie.tmdb_id,
+                    existing.id,
+                    existing.title
+                );
+                // Mark the conflicting movie as duplicate by clearing its tmdb_id
+                // (partial unique index allows NULL/0) and prefixing title with [DUPE]
+                let pool = state.db.pool();
+                let dupe_title = if existing.title.starts_with("[DUPE] ") {
+                    existing.title.clone()
+                } else {
+                    format!("[DUPE] {}", existing.title)
+                };
+                let _ = sqlx::query(
+                    "UPDATE movies SET tmdb_id = 0, title = $1, clean_title = $2 WHERE id = $3",
+                )
+                .bind(&dupe_title)
+                .bind(&clean_title(&dupe_title))
+                .bind(existing.id)
+                .execute(pool)
+                .await;
+            }
+        }
+    }
+
     repo.update(&movie)
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to update movie: {}", e)))?;

@@ -1854,28 +1854,97 @@ async fn execute_rescan_movie(
 
     tracing::info!("RescanMovie: scanning '{}' at {}", movie.title, movie.path);
 
-    let folder_path = &movie.path;
-    if !std::path::Path::new(folder_path).exists() {
+    let mut folder_path = movie.path.clone();
+
+    // If the expected path doesn't exist, try to find a matching folder
+    // in the root folder by fuzzy title matching. This handles cases where
+    // the folder name has a minor difference (e.g. a missing word).
+    if !std::path::Path::new(&folder_path).exists() {
         tracing::info!(
-            "RescanMovie: path does not exist for '{}': {}",
+            "RescanMovie: exact path not found for '{}': {}, searching root folder...",
             movie.title,
             folder_path
         );
-        // If movie claimed to have a file but path is gone, clear the file reference
-        if movie.has_file {
+
+        let found = tokio::task::spawn_blocking({
+            let root = movie.root_folder_path.clone();
+            let movie_title = movie.title.clone();
+            let movie_year = movie.year;
+            move || {
+                use crate::core::parser::normalize_title;
+                let normalized_movie = normalize_title(&movie_title);
+                let root_path = std::path::Path::new(&root);
+                if !root_path.is_dir() {
+                    return None;
+                }
+
+                let mut best: Option<(std::path::PathBuf, usize)> = None;
+                let entries = std::fs::read_dir(root_path).ok()?;
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if !path.is_dir() {
+                        continue;
+                    }
+                    let dir_name = path.file_name()?.to_string_lossy().to_string();
+                    let normalized_dir = normalize_title(&dir_name);
+
+                    // Score: check if normalized movie title is contained in dir name
+                    // or dir name is contained in movie title (handles missing words)
+                    let is_match = normalized_dir.contains(&normalized_movie)
+                        || normalized_movie.contains(&normalized_dir);
+                    // Also match by year if present in folder name
+                    let has_year = dir_name.contains(&movie_year.to_string());
+
+                    if is_match && has_year {
+                        let score = normalized_dir.len();
+                        if best.as_ref().is_none_or(|(_, s)| {
+                            // Prefer closest length match
+                            let diff_new = score.abs_diff(normalized_movie.len());
+                            let diff_old = s.abs_diff(normalized_movie.len());
+                            diff_new < diff_old
+                        }) {
+                            best = Some((path, score));
+                        }
+                    }
+                }
+                best.map(|(p, _)| p)
+            }
+        })
+        .await
+        .unwrap_or(None);
+
+        if let Some(actual_path) = found {
+            let actual_str = actual_path.to_string_lossy().to_string();
+            tracing::info!(
+                "RescanMovie: fuzzy matched '{}' -> '{}'",
+                movie.title,
+                actual_str
+            );
+            // Update movie.path in DB to the actual folder
             let pool = db.pool();
-            let _ = sqlx::query(
-                "UPDATE movies SET has_file = false, movie_file_id = NULL WHERE id = $1",
-            )
-            .bind(movie_id)
-            .execute(pool)
-            .await;
+            let _ = sqlx::query("UPDATE movies SET path = $1 WHERE id = $2")
+                .bind(&actual_str)
+                .bind(movie_id)
+                .execute(pool)
+                .await;
+            folder_path = actual_str;
+        } else {
+            // No match found — clear file reference if needed
+            if movie.has_file {
+                let pool = db.pool();
+                let _ = sqlx::query(
+                    "UPDATE movies SET has_file = false, movie_file_id = NULL WHERE id = $1",
+                )
+                .bind(movie_id)
+                .execute(pool)
+                .await;
+            }
+            return Ok(format!("Path does not exist: {}", folder_path));
         }
-        return Ok(format!("Path does not exist: {}", folder_path));
     }
 
     // Scan for the largest video file
-    if let Some(mut movie_file) = super::movies::scan_movie_folder(folder_path, movie_id) {
+    if let Some(mut movie_file) = super::movies::scan_movie_folder(&folder_path, movie_id) {
         // Check if this file is already tracked
         let existing_files = file_repo
             .get_by_movie_id(movie_id)

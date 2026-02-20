@@ -462,6 +462,8 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
         };
 
         let all_series = series_repo.get_all().await.unwrap_or_default();
+        let movie_repo = MovieRepository::new(state.db.clone());
+        let all_movies = movie_repo.get_all().await.unwrap_or_default();
         let mut id_counter = (all_downloads.len() as i64) + 10000;
 
         for db_client in clients.iter().filter(|c| c.enable) {
@@ -673,11 +675,48 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                     }
                 }
 
-                // Check if matched episode(s) already have files in the library
-                let mut episode_has_file_val = false;
-                if let Some(ep_id) = matched_episode_id {
+                // --- Movie match fallback (when no series matched) ---
+                let mut matched_movie_id: Option<i64> = None;
+                let mut matched_movie_title: Option<String> = None;
+                let mut matched_movie_slug: Option<String> = None;
+                if matched_series_id.is_none() {
+                    let name_normalized = normalize_title(&dl.name);
+                    let mut best_movie: Option<(i64, usize, &str, &str)> = None;
+
+                    for movie in &all_movies {
+                        let clean = normalize_title(&movie.clean_title);
+                        if clean.len() >= 4 && name_normalized.contains(clean.as_str()) {
+                            if best_movie.is_none()
+                                || clean.len() > best_movie.as_ref().unwrap().1
+                            {
+                                best_movie = Some((
+                                    movie.id,
+                                    clean.len(),
+                                    &movie.title,
+                                    &movie.title_slug,
+                                ));
+                            }
+                        }
+                    }
+
+                    if let Some((movie_id, _, title, slug)) = best_movie {
+                        matched_movie_id = Some(movie_id);
+                        matched_movie_title = Some(title.to_string());
+                        matched_movie_slug = Some(slug.to_string());
+                    }
+                }
+
+                // Check if matched media already has files in the library
+                let mut media_has_file = false;
+
+                if let Some(movie_id) = matched_movie_id {
+                    // Movie: check if the movie record has_file
+                    if let Some(movie) = all_movies.iter().find(|m| m.id == movie_id) {
+                        media_has_file = movie.has_file;
+                    }
+                } else if let Some(ep_id) = matched_episode_id {
                     if let Ok(Some(ep)) = episode_repo.get_by_id(ep_id).await {
-                        episode_has_file_val = ep.has_file;
+                        media_has_file = ep.has_file;
                     }
                 } else if matched_series_id.is_some() {
                     // For season packs (no specific episode matched),
@@ -694,15 +733,15 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                                 if !season_eps.is_empty()
                                     && season_eps.iter().all(|e| e.has_file)
                                 {
-                                    episode_has_file_val = true;
+                                    media_has_file = true;
                                 }
                             }
                         }
                     }
                 }
 
-                // Skip completed/seeding downloads where episode(s) already imported
-                if episode_has_file_val
+                // Skip completed/seeding downloads where media already imported
+                if media_has_file
                     && matches!(
                         dl.status,
                         DownloadState::Completed | DownloadState::Seeding
@@ -771,6 +810,19 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                     None
                 };
 
+                // Override content_type when we matched a movie
+                let effective_content_type = if matched_movie_id.is_some() {
+                    "movie".to_string()
+                } else {
+                    content_type.to_string()
+                };
+
+                let matched_movie_resource = matched_movie_id.map(|mid| QueueMovieResource {
+                    id: mid,
+                    title: matched_movie_title.clone().unwrap_or_default(),
+                    title_slug: matched_movie_slug.clone().unwrap_or_default(),
+                });
+
                 all_downloads.push(QueueResource {
                     id: id_counter,
                     series_id: matched_series_id,
@@ -806,16 +858,16 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                     download_client_has_post_import_category: false,
                     indexer: None,
                     output_path: dl.output_path,
-                    episode_has_file: episode_has_file_val,
-                    content_type: content_type.to_string(),
-                    movie_id: None,
+                    episode_has_file: media_has_file,
+                    content_type: effective_content_type,
+                    movie_id: matched_movie_id,
                     seeds: dl.seeds,
                     leechers: dl.leechers,
                     seed_count: dl.seed_count,
                     leech_count: dl.leech_count,
                     episode: parsed_episode,
                     series: parsed_series,
-                    movie: None,
+                    movie: matched_movie_resource,
                 });
 
                 id_counter += 1;

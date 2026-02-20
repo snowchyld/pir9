@@ -567,7 +567,187 @@ impl TrackedDownloadService {
             }
         }
 
+        // Auto-clean tracked downloads that have already been imported
+        if let Err(e) = self.cleanup_imported_downloads().await {
+            warn!("ProcessQueue: auto-clean failed: {}", e);
+        }
+
         Ok(())
+    }
+
+    /// Auto-remove tracked downloads whose target media has been fully imported.
+    ///
+    /// For each completed/importPending tracked download, checks if the target
+    /// (movie or episode) already has an imported file with a stored hash. If the
+    /// source file at `output_path` still exists, computes its BLAKE3 hash and
+    /// compares with the stored destination hash. On match the tracked download
+    /// record is deleted from pir9's database — the torrent itself is **never**
+    /// removed from the download client (qBittorrent etc.).
+    pub async fn cleanup_imported_downloads(&self) -> Result<usize> {
+        use crate::core::datastore::repositories::{EpisodeFileRepository, MovieFileRepository};
+
+        let repo = TrackedDownloadRepository::new(self.db.clone());
+        let episode_repo = EpisodeRepository::new(self.db.clone());
+        let episode_file_repo = EpisodeFileRepository::new(self.db.clone());
+        let movie_file_repo = MovieFileRepository::new(self.db.clone());
+
+        let active = repo.get_all_active().await?;
+        let mut cleaned = 0usize;
+
+        for td in &active {
+            // Only process completed/importPending downloads
+            let state = TrackedDownloadState::from_i32(td.status);
+            if !matches!(
+                state,
+                TrackedDownloadState::ImportPending
+                    | TrackedDownloadState::Imported
+                    | TrackedDownloadState::Downloading
+            ) {
+                continue;
+            }
+
+            // Need an output_path to locate the source file
+            let output_path = match td.output_path.as_deref() {
+                Some(p) if !p.is_empty() => p,
+                _ => continue,
+            };
+
+            // --- Movie path ---
+            if let Some(movie_id) = td.movie_id {
+                let dest_file = match movie_file_repo.get_by_movie_id(movie_id).await {
+                    Ok(Some(f)) => f,
+                    _ => continue,
+                };
+                let dest_hash = match dest_file.file_hash.as_deref() {
+                    Some(h) if !h.is_empty() => h.to_string(),
+                    _ => continue,
+                };
+
+                // Find the largest video file at the source (same logic as scan_movie_folder)
+                let source_path = find_largest_video_file(output_path).await;
+                let source_file = match source_path {
+                    Some(p) => p,
+                    None => continue,
+                };
+
+                match crate::core::mediafiles::compute_file_hash(&source_file).await {
+                    Ok(source_hash) if source_hash == dest_hash => {
+                        info!(
+                            "Auto-clean: movie download '{}' verified (hash match), removing from tracking",
+                            td.title
+                        );
+                        let _ = repo.delete(td.id).await;
+                        cleaned += 1;
+                    }
+                    Ok(_) => {
+                        debug!(
+                            "Auto-clean: hash mismatch for movie '{}', keeping tracked",
+                            td.title
+                        );
+                    }
+                    Err(e) => {
+                        debug!(
+                            "Auto-clean: could not hash source for '{}': {}",
+                            td.title, e
+                        );
+                    }
+                }
+                continue;
+            }
+
+            // --- Series / Anime path ---
+            if td.series_id > 0 {
+                let episode_ids: Vec<i64> =
+                    serde_json::from_str(&td.episode_ids).unwrap_or_default();
+                if episode_ids.is_empty() {
+                    continue;
+                }
+
+                // Check all matched episodes have files with hashes
+                let mut all_verified = true;
+                for &ep_id in &episode_ids {
+                    let ep = match episode_repo.get_by_id(ep_id).await {
+                        Ok(Some(e)) => e,
+                        _ => {
+                            all_verified = false;
+                            break;
+                        }
+                    };
+                    if !ep.has_file {
+                        all_verified = false;
+                        break;
+                    }
+                    // Verify via file hash if episode_file_id is set
+                    if let Some(file_id) = ep.episode_file_id {
+                        match episode_file_repo.get_by_id(file_id).await {
+                            Ok(Some(ef)) if ef.file_hash.as_deref().is_some_and(|h| !h.is_empty()) => {
+                                // Destination file has a verified hash — import succeeded
+                            }
+                            _ => {
+                                all_verified = false;
+                                break;
+                            }
+                        }
+                    } else {
+                        all_verified = false;
+                        break;
+                    }
+                }
+
+                if all_verified {
+                    // For single-file downloads, also verify source hash against dest
+                    let do_source_hash_check = episode_ids.len() == 1;
+                    if do_source_hash_check {
+                        let ep = episode_repo.get_by_id(episode_ids[0]).await?.unwrap();
+                        let ef = episode_file_repo
+                            .get_by_id(ep.episode_file_id.unwrap())
+                            .await?
+                            .unwrap();
+                        let dest_hash = ef.file_hash.as_deref().unwrap();
+
+                        if let Some(source_file) = find_largest_video_file(output_path).await {
+                            match crate::core::mediafiles::compute_file_hash(&source_file).await {
+                                Ok(source_hash) if source_hash == dest_hash => {
+                                    info!(
+                                        "Auto-clean: episode download '{}' verified (hash match), removing from tracking",
+                                        td.title
+                                    );
+                                    let _ = repo.delete(td.id).await;
+                                    cleaned += 1;
+                                }
+                                Ok(_) => {
+                                    debug!(
+                                        "Auto-clean: hash mismatch for '{}', keeping tracked",
+                                        td.title
+                                    );
+                                }
+                                Err(e) => {
+                                    debug!(
+                                        "Auto-clean: could not hash source for '{}': {}",
+                                        td.title, e
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        // Season pack: all episodes have verified files — clean without
+                        // individual source hash check (too many files to match 1:1)
+                        info!(
+                            "Auto-clean: season pack '{}' — all {} episodes imported, removing from tracking",
+                            td.title,
+                            episode_ids.len()
+                        );
+                        let _ = repo.delete(td.id).await;
+                        cleaned += 1;
+                    }
+                }
+            }
+        }
+
+        if cleaned > 0 {
+            info!("Auto-clean: removed {} imported downloads from tracking", cleaned);
+        }
+        Ok(cleaned)
     }
 
     /// Remove a download from queue
@@ -959,6 +1139,12 @@ impl TrackedDownloadService {
         }
 
         info!("Reconcile downloads complete: {} newly tracked", reconciled);
+
+        // Auto-clean tracked downloads that have already been imported
+        if let Err(e) = self.cleanup_imported_downloads().await {
+            warn!("Reconcile: auto-clean failed: {}", e);
+        }
+
         Ok(reconciled)
     }
 
@@ -1068,4 +1254,61 @@ impl TrackedDownloadState {
             _ => TrackedDownloadState::Downloading,
         }
     }
+}
+
+/// Find the largest video file at a path (file or directory, max depth 2).
+/// Returns `None` if the path doesn't exist or contains no video files.
+/// Uses `spawn_blocking` since this is filesystem I/O (may be NFS-mounted).
+async fn find_largest_video_file(path: &str) -> Option<std::path::PathBuf> {
+    use crate::core::scanner::is_video_file;
+    let path = std::path::PathBuf::from(path);
+
+    tokio::task::spawn_blocking(move || {
+        if !path.exists() {
+            return None;
+        }
+
+        // Single file: return it if it's a video
+        if path.is_file() {
+            return if is_video_file(&path) {
+                Some(path)
+            } else {
+                None
+            };
+        }
+
+        // Directory: walk up to depth 2, return largest video file
+        let mut best: Option<(std::path::PathBuf, u64)> = None;
+
+        fn walk(
+            dir: &std::path::Path,
+            best: &mut Option<(std::path::PathBuf, u64)>,
+            depth: usize,
+        ) {
+            use crate::core::scanner::is_video_file;
+            if depth > 2 {
+                return;
+            }
+            let entries = match std::fs::read_dir(dir) {
+                Ok(e) => e,
+                Err(_) => return,
+            };
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    walk(&p, best, depth + 1);
+                } else if is_video_file(&p) {
+                    let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                    if best.as_ref().is_none_or(|(_, s)| size > *s) {
+                        *best = Some((p, size));
+                    }
+                }
+            }
+        }
+
+        walk(&path, &mut best, 0);
+        best.map(|(p, _)| p)
+    })
+    .await
+    .unwrap_or(None)
 }
