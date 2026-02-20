@@ -993,6 +993,312 @@ impl NotificationProvider for PushoverProvider {
 }
 
 // ============================================================================
+// Email/SMTP Provider
+// ============================================================================
+
+/// Email notification provider using SMTP
+pub struct EmailProvider {
+    server: String,
+    port: u16,
+    username: Option<String>,
+    password: Option<String>,
+    from: String,
+    to: Vec<String>,
+    use_ssl: bool,
+    require_encryption: bool,
+}
+
+impl EmailProvider {
+    pub fn new(server: String, from: String, to: Vec<String>) -> Self {
+        Self {
+            server,
+            port: 587,
+            username: None,
+            password: None,
+            from,
+            to,
+            use_ssl: false,
+            require_encryption: true,
+        }
+    }
+
+    pub fn with_port(mut self, port: u16) -> Self {
+        self.port = port;
+        self
+    }
+
+    pub fn with_credentials(mut self, username: Option<String>, password: Option<String>) -> Self {
+        self.username = username;
+        self.password = password;
+        self
+    }
+
+    pub fn with_ssl(mut self, use_ssl: bool) -> Self {
+        self.use_ssl = use_ssl;
+        self
+    }
+
+    pub fn with_require_encryption(mut self, require: bool) -> Self {
+        self.require_encryption = require;
+        self
+    }
+
+    fn build_transport(&self) -> Result<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>> {
+        use lettre::transport::smtp::authentication::Credentials;
+
+        let builder = if self.use_ssl {
+            // Implicit TLS (port 465 typically)
+            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::relay(&self.server)
+                .context("Failed to create SMTP relay transport")?
+                .port(self.port)
+        } else if self.require_encryption {
+            // STARTTLS (port 587 typically)
+            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::starttls_relay(&self.server)
+                .context("Failed to create SMTP STARTTLS transport")?
+                .port(self.port)
+        } else {
+            // No encryption (port 25 typically)
+            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous(&self.server)
+                .port(self.port)
+        };
+
+        let builder = if let (Some(ref user), Some(ref pass)) = (&self.username, &self.password) {
+            builder.credentials(Credentials::new(user.clone(), pass.clone()))
+        } else {
+            builder
+        };
+
+        Ok(builder.build())
+    }
+}
+
+#[async_trait::async_trait]
+impl NotificationProvider for EmailProvider {
+    fn name(&self) -> &str {
+        "Email"
+    }
+
+    fn implementation(&self) -> &str {
+        "Email"
+    }
+
+    fn config_contract(&self) -> &str {
+        "EmailSettings"
+    }
+
+    fn info_link(&self) -> &str {
+        "https://wiki.servarr.com/sonarr/settings#connect"
+    }
+
+    async fn test(&self) -> Result<()> {
+        use lettre::AsyncTransport;
+
+        let transport = self.build_transport()?;
+        transport
+            .test_connection()
+            .await
+            .context("SMTP connection test failed")?;
+        Ok(())
+    }
+
+    async fn send(&self, payload: &NotificationPayload) -> Result<()> {
+        use lettre::{message::header::ContentType, AsyncTransport, Message};
+
+        let series = payload.series_title.as_deref().unwrap_or("Unknown");
+
+        let subject = match &payload.event_type {
+            NotificationEventType::Grab => format!("[pir9] Episode Grabbed - {}", series),
+            NotificationEventType::Download => format!("[pir9] Episode Downloaded - {}", series),
+            NotificationEventType::Upgrade => format!("[pir9] Episode Upgraded - {}", series),
+            NotificationEventType::Rename => format!("[pir9] Episode Renamed - {}", series),
+            NotificationEventType::SeriesAdd => format!("[pir9] Series Added - {}", series),
+            NotificationEventType::SeriesDelete => format!("[pir9] Series Deleted - {}", series),
+            NotificationEventType::Test => "[pir9] Test Notification".to_string(),
+            _ => format!("[pir9] {}", payload.title),
+        };
+
+        let mut body = format!("<h3>{}</h3>", payload.title);
+
+        if let Some(ref ep_info) = payload.episode_info {
+            let ep_title = ep_info.title.as_deref().unwrap_or("TBA");
+            body.push_str(&format!(
+                "<p><strong>{}</strong> - S{:02}E{:02} - {}</p>",
+                series, ep_info.season_number, ep_info.episode_number, ep_title
+            ));
+            if let Some(ref quality) = ep_info.quality {
+                body.push_str(&format!("<p>Quality: {}</p>", quality));
+            }
+        }
+
+        if let Some(ref release) = payload.release_info {
+            body.push_str(&format!(
+                "<p>Release: {} ({})</p>",
+                release.release_title,
+                format_size(release.size)
+            ));
+            body.push_str(&format!("<p>Indexer: {}</p>", release.indexer));
+        }
+
+        if let Some(ref health) = payload.health_info {
+            body.push_str(&format!(
+                "<p><strong>{}:</strong> {}</p>",
+                health.source, health.message
+            ));
+        }
+
+        body.push_str("<hr><p><small>Sent by pir9</small></p>");
+
+        let from_addr: lettre::Address =
+            self.from.parse().context("Invalid 'from' email address")?;
+
+        for to_addr_str in &self.to {
+            let to_addr: lettre::Address = to_addr_str
+                .parse()
+                .with_context(|| format!("Invalid 'to' email address: {}", to_addr_str))?;
+
+            let email = Message::builder()
+                .from(lettre::message::Mailbox::new(
+                    Some("pir9".to_string()),
+                    from_addr.clone(),
+                ))
+                .to(lettre::message::Mailbox::new(None, to_addr))
+                .subject(&subject)
+                .header(ContentType::TEXT_HTML)
+                .body(body.clone())
+                .context("Failed to build email message")?;
+
+            let transport = self.build_transport()?;
+            transport
+                .send(email)
+                .await
+                .context("Failed to send email")?;
+        }
+
+        Ok(())
+    }
+
+    fn get_fields(&self) -> Vec<NotificationField> {
+        vec![
+            NotificationField {
+                order: 0,
+                name: "server".to_string(),
+                label: "SMTP Server".to_string(),
+                value: Some(serde_json::Value::String(self.server.clone())),
+                field_type: "textbox".to_string(),
+                advanced: false,
+                help_text: Some("SMTP server hostname".to_string()),
+                help_link: None,
+                privacy: "normal".to_string(),
+                is_float: false,
+            },
+            NotificationField {
+                order: 1,
+                name: "port".to_string(),
+                label: "Port".to_string(),
+                value: Some(serde_json::Value::Number(self.port.into())),
+                field_type: "textbox".to_string(),
+                advanced: false,
+                help_text: Some(
+                    "SMTP port (587 for STARTTLS, 465 for SSL, 25 for unencrypted)".to_string(),
+                ),
+                help_link: None,
+                privacy: "normal".to_string(),
+                is_float: false,
+            },
+            NotificationField {
+                order: 2,
+                name: "username".to_string(),
+                label: "Username".to_string(),
+                value: self
+                    .username
+                    .as_ref()
+                    .map(|s| serde_json::Value::String(s.clone())),
+                field_type: "textbox".to_string(),
+                advanced: false,
+                help_text: Some("SMTP username for authentication".to_string()),
+                help_link: None,
+                privacy: "normal".to_string(),
+                is_float: false,
+            },
+            NotificationField {
+                order: 3,
+                name: "password".to_string(),
+                label: "Password".to_string(),
+                value: self
+                    .password
+                    .as_ref()
+                    .map(|s| serde_json::Value::String(s.clone())),
+                field_type: "password".to_string(),
+                advanced: false,
+                help_text: Some("SMTP password".to_string()),
+                help_link: None,
+                privacy: "password".to_string(),
+                is_float: false,
+            },
+            NotificationField {
+                order: 4,
+                name: "from".to_string(),
+                label: "From Address".to_string(),
+                value: Some(serde_json::Value::String(self.from.clone())),
+                field_type: "textbox".to_string(),
+                advanced: false,
+                help_text: Some("Sender email address".to_string()),
+                help_link: None,
+                privacy: "normal".to_string(),
+                is_float: false,
+            },
+            NotificationField {
+                order: 5,
+                name: "to".to_string(),
+                label: "Recipient Address".to_string(),
+                value: Some(serde_json::Value::Array(
+                    self.to
+                        .iter()
+                        .map(|s| serde_json::Value::String(s.clone()))
+                        .collect(),
+                )),
+                field_type: "textbox".to_string(),
+                advanced: false,
+                help_text: Some("Recipient email address(es), comma-separated".to_string()),
+                help_link: None,
+                privacy: "normal".to_string(),
+                is_float: false,
+            },
+            NotificationField {
+                order: 6,
+                name: "useSsl".to_string(),
+                label: "Use SSL".to_string(),
+                value: Some(serde_json::Value::Bool(self.use_ssl)),
+                field_type: "checkbox".to_string(),
+                advanced: true,
+                help_text: Some(
+                    "Use implicit SSL/TLS (port 465). If unchecked, uses STARTTLS (port 587)"
+                        .to_string(),
+                ),
+                help_link: None,
+                privacy: "normal".to_string(),
+                is_float: false,
+            },
+            NotificationField {
+                order: 7,
+                name: "requireEncryption".to_string(),
+                label: "Require Encryption".to_string(),
+                value: Some(serde_json::Value::Bool(self.require_encryption)),
+                field_type: "checkbox".to_string(),
+                advanced: true,
+                help_text: Some(
+                    "Require TLS encryption. If unchecked and SSL is off, sends unencrypted"
+                        .to_string(),
+                ),
+                help_link: None,
+                privacy: "normal".to_string(),
+                is_float: false,
+            },
+        ]
+    }
+}
+
+// ============================================================================
 // Provider Factory
 // ============================================================================
 
@@ -1094,6 +1400,44 @@ pub fn create_provider_from_model(
                     .with_devices(devices),
             ))
         }
+        "Email" => {
+            let server = settings["server"]
+                .as_str()
+                .ok_or_else(|| anyhow!("SMTP server is required"))?
+                .to_string();
+
+            let from = settings["from"]
+                .as_str()
+                .ok_or_else(|| anyhow!("From address is required"))?
+                .to_string();
+
+            let to: Vec<String> = if let Some(arr) = settings["to"].as_array() {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            } else if let Some(s) = settings["to"].as_str() {
+                s.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            } else {
+                return Err(anyhow!("Recipient address is required"));
+            };
+
+            let port = settings["port"].as_u64().unwrap_or(587) as u16;
+            let username = settings["username"].as_str().map(String::from);
+            let password = settings["password"].as_str().map(String::from);
+            let use_ssl = settings["useSsl"].as_bool().unwrap_or(false);
+            let require_encryption = settings["requireEncryption"].as_bool().unwrap_or(true);
+
+            Ok(Arc::new(
+                EmailProvider::new(server, from, to)
+                    .with_port(port)
+                    .with_credentials(username, password)
+                    .with_ssl(use_ssl)
+                    .with_require_encryption(require_encryption),
+            ))
+        }
         _ => Err(anyhow!(
             "Unknown notification implementation: {}",
             model.implementation
@@ -1138,6 +1482,13 @@ pub fn get_provider_schemas() -> Vec<ProviderSchema> {
             config_contract: "PushoverSettings".to_string(),
             info_link: "https://wiki.servarr.com/sonarr/settings#connect".to_string(),
             fields: PushoverProvider::new(String::new(), String::new()).get_fields(),
+        },
+        ProviderSchema {
+            implementation: "Email".to_string(),
+            implementation_name: "Email".to_string(),
+            config_contract: "EmailSettings".to_string(),
+            info_link: "https://wiki.servarr.com/sonarr/settings#connect".to_string(),
+            fields: EmailProvider::new(String::new(), String::new(), vec![]).get_fields(),
         },
     ]
 }
