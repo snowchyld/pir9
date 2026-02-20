@@ -395,6 +395,391 @@ impl NotificationProvider for WebhookProvider {
 }
 
 // ============================================================================
+// Slack Incoming Webhook Provider
+// ============================================================================
+
+/// Slack incoming webhook notification provider
+pub struct SlackProvider {
+    webhook_url: String,
+    channel: Option<String>,
+    username: Option<String>,
+}
+
+impl SlackProvider {
+    pub fn new(webhook_url: String) -> Self {
+        Self {
+            webhook_url,
+            channel: None,
+            username: None,
+        }
+    }
+
+    pub fn with_channel(mut self, channel: Option<String>) -> Self {
+        self.channel = channel;
+        self
+    }
+
+    pub fn with_username(mut self, username: Option<String>) -> Self {
+        self.username = username;
+        self
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct SlackWebhookPayload {
+    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    attachments: Vec<SlackAttachment>,
+}
+
+#[derive(Debug, Serialize)]
+struct SlackAttachment {
+    fallback: String,
+    title: String,
+    text: String,
+    color: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fields: Vec<SlackField>,
+}
+
+#[derive(Debug, Serialize)]
+struct SlackField {
+    title: String,
+    value: String,
+    short: bool,
+}
+
+#[async_trait]
+impl NotificationProvider for SlackProvider {
+    fn name(&self) -> &str {
+        "Slack"
+    }
+
+    fn implementation(&self) -> &str {
+        "Slack"
+    }
+
+    fn config_contract(&self) -> &str {
+        "SlackSettings"
+    }
+
+    fn info_link(&self) -> &str {
+        "https://wiki.servarr.com/sonarr/settings#connect"
+    }
+
+    async fn test(&self) -> Result<()> {
+        let test_payload = NotificationPayload {
+            event_type: NotificationEventType::Test,
+            title: "pir9 Test Notification".to_string(),
+            message: "This is a test notification from pir9".to_string(),
+            series_title: Some("Test Series".to_string()),
+            series_id: None,
+            episode_info: None,
+            release_info: None,
+            health_info: None,
+        };
+        self.send(&test_payload).await
+    }
+
+    async fn send(&self, payload: &NotificationPayload) -> Result<()> {
+        let mut fields = Vec::new();
+
+        if let Some(series) = &payload.series_title {
+            fields.push(SlackField {
+                title: "Series".to_string(),
+                value: series.clone(),
+                short: true,
+            });
+        }
+
+        if let Some(episode) = &payload.episode_info {
+            fields.push(SlackField {
+                title: "Episode".to_string(),
+                value: format!(
+                    "S{:02}E{:02}",
+                    episode.season_number, episode.episode_number
+                ),
+                short: true,
+            });
+            if let Some(title) = &episode.title {
+                fields.push(SlackField {
+                    title: "Title".to_string(),
+                    value: title.clone(),
+                    short: true,
+                });
+            }
+        }
+
+        if let Some(release) = &payload.release_info {
+            fields.push(SlackField {
+                title: "Release".to_string(),
+                value: release.release_title.clone(),
+                short: false,
+            });
+            fields.push(SlackField {
+                title: "Size".to_string(),
+                value: format_size(release.size),
+                short: true,
+            });
+        }
+
+        let color = match payload.event_type {
+            NotificationEventType::Grab => "#3498db",
+            NotificationEventType::Download => "#2ecc71",
+            NotificationEventType::Upgrade => "#9b59b6",
+            NotificationEventType::HealthIssue => "#e74c3c",
+            NotificationEventType::HealthRestored => "#2ecc71",
+            NotificationEventType::SeriesDelete | NotificationEventType::EpisodeFileDelete => {
+                "#e67e22"
+            }
+            _ => "#95a5a6",
+        };
+
+        let slack_payload = SlackWebhookPayload {
+            text: String::new(),
+            channel: self.channel.clone(),
+            username: self.username.clone(),
+            attachments: vec![SlackAttachment {
+                fallback: format!("{}: {}", payload.title, payload.message),
+                title: payload.title.clone(),
+                text: payload.message.clone(),
+                color: color.to_string(),
+                fields,
+            }],
+        };
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&self.webhook_url)
+            .json(&slack_payload)
+            .send()
+            .await
+            .context("Failed to send Slack notification")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("Slack API returned {}: {}", status, body));
+        }
+
+        Ok(())
+    }
+
+    fn get_fields(&self) -> Vec<NotificationField> {
+        vec![
+            NotificationField {
+                order: 0,
+                name: "webHookUrl".to_string(),
+                label: "Webhook URL".to_string(),
+                value: Some(serde_json::Value::String(self.webhook_url.clone())),
+                field_type: "textbox".to_string(),
+                advanced: false,
+                help_text: Some("Slack incoming webhook URL".to_string()),
+                help_link: Some("https://api.slack.com/messaging/webhooks".to_string()),
+                privacy: "apiKey".to_string(),
+                is_float: false,
+            },
+            NotificationField {
+                order: 1,
+                name: "channel".to_string(),
+                label: "Channel".to_string(),
+                value: self.channel.clone().map(serde_json::Value::String),
+                field_type: "textbox".to_string(),
+                advanced: false,
+                help_text: Some(
+                    "Override the default webhook channel (e.g. #downloads)".to_string(),
+                ),
+                help_link: None,
+                privacy: "normal".to_string(),
+                is_float: false,
+            },
+            NotificationField {
+                order: 2,
+                name: "username".to_string(),
+                label: "Username".to_string(),
+                value: self.username.clone().map(serde_json::Value::String),
+                field_type: "textbox".to_string(),
+                advanced: true,
+                help_text: Some("Override the default webhook username".to_string()),
+                help_link: None,
+                privacy: "normal".to_string(),
+                is_float: false,
+            },
+        ]
+    }
+}
+
+// ============================================================================
+// Telegram Bot API Provider
+// ============================================================================
+
+/// Telegram bot notification provider
+pub struct TelegramProvider {
+    bot_token: String,
+    chat_id: String,
+    send_silently: bool,
+}
+
+impl TelegramProvider {
+    pub fn new(bot_token: String, chat_id: String) -> Self {
+        Self {
+            bot_token,
+            chat_id,
+            send_silently: false,
+        }
+    }
+
+    pub fn with_silent(mut self, silent: bool) -> Self {
+        self.send_silently = silent;
+        self
+    }
+
+    fn api_url(&self, method: &str) -> String {
+        format!("https://api.telegram.org/bot{}/{}", self.bot_token, method)
+    }
+}
+
+#[async_trait]
+impl NotificationProvider for TelegramProvider {
+    fn name(&self) -> &str {
+        "Telegram"
+    }
+
+    fn implementation(&self) -> &str {
+        "Telegram"
+    }
+
+    fn config_contract(&self) -> &str {
+        "TelegramSettings"
+    }
+
+    fn info_link(&self) -> &str {
+        "https://wiki.servarr.com/sonarr/settings#connect"
+    }
+
+    async fn test(&self) -> Result<()> {
+        // Validate bot token by calling getMe
+        let client = reqwest::Client::new();
+        let response = client
+            .get(self.api_url("getMe"))
+            .send()
+            .await
+            .context("Failed to connect to Telegram API")?;
+
+        if !response.status().is_success() {
+            return Err(anyhow!("Invalid Telegram bot token"));
+        }
+
+        // Send a test message
+        let test_payload = NotificationPayload {
+            event_type: NotificationEventType::Test,
+            title: "pir9 Test Notification".to_string(),
+            message: "This is a test notification from pir9".to_string(),
+            series_title: Some("Test Series".to_string()),
+            series_id: None,
+            episode_info: None,
+            release_info: None,
+            health_info: None,
+        };
+        self.send(&test_payload).await
+    }
+
+    async fn send(&self, payload: &NotificationPayload) -> Result<()> {
+        // Build HTML-formatted message
+        let mut text = format!("<b>{}</b>\n{}", payload.title, payload.message);
+
+        if let Some(series) = &payload.series_title {
+            text.push_str(&format!("\n\n<b>Series:</b> {}", series));
+        }
+
+        if let Some(episode) = &payload.episode_info {
+            text.push_str(&format!(
+                "\n<b>Episode:</b> S{:02}E{:02}",
+                episode.season_number, episode.episode_number
+            ));
+            if let Some(title) = &episode.title {
+                text.push_str(&format!(" - {}", title));
+            }
+        }
+
+        if let Some(release) = &payload.release_info {
+            text.push_str(&format!("\n<b>Release:</b> {}", release.release_title));
+            text.push_str(&format!("\n<b>Size:</b> {}", format_size(release.size)));
+        }
+
+        let body = serde_json::json!({
+            "chat_id": self.chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_notification": self.send_silently,
+        });
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(self.api_url("sendMessage"))
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to send Telegram notification")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("Telegram API returned {}: {}", status, body));
+        }
+
+        Ok(())
+    }
+
+    fn get_fields(&self) -> Vec<NotificationField> {
+        vec![
+            NotificationField {
+                order: 0,
+                name: "botToken".to_string(),
+                label: "Bot Token".to_string(),
+                value: Some(serde_json::Value::String(self.bot_token.clone())),
+                field_type: "textbox".to_string(),
+                advanced: false,
+                help_text: Some("Telegram bot token from @BotFather".to_string()),
+                help_link: Some("https://core.telegram.org/bots#creating-a-new-bot".to_string()),
+                privacy: "apiKey".to_string(),
+                is_float: false,
+            },
+            NotificationField {
+                order: 1,
+                name: "chatId".to_string(),
+                label: "Chat ID".to_string(),
+                value: Some(serde_json::Value::String(self.chat_id.clone())),
+                field_type: "textbox".to_string(),
+                advanced: false,
+                help_text: Some(
+                    "Telegram chat ID or channel username (e.g. @mychannel)".to_string(),
+                ),
+                help_link: None,
+                privacy: "normal".to_string(),
+                is_float: false,
+            },
+            NotificationField {
+                order: 2,
+                name: "sendSilently".to_string(),
+                label: "Send Silently".to_string(),
+                value: Some(serde_json::Value::Bool(self.send_silently)),
+                field_type: "checkbox".to_string(),
+                advanced: true,
+                help_text: Some("Send notifications silently (no notification sound)".to_string()),
+                help_link: None,
+                privacy: "normal".to_string(),
+                is_float: false,
+            },
+        ]
+    }
+}
+
+// ============================================================================
 // Provider Factory
 // ============================================================================
 
@@ -435,6 +820,38 @@ pub fn create_provider_from_model(
 
             Ok(Arc::new(WebhookProvider::new(url).with_method(method)))
         }
+        "Slack" => {
+            let webhook_url = settings["webHookUrl"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Slack webhook URL is required"))?
+                .to_string();
+
+            let channel = settings["channel"].as_str().map(String::from);
+            let username = settings["username"].as_str().map(String::from);
+
+            Ok(Arc::new(
+                SlackProvider::new(webhook_url)
+                    .with_channel(channel)
+                    .with_username(username),
+            ))
+        }
+        "Telegram" => {
+            let bot_token = settings["botToken"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Telegram bot token is required"))?
+                .to_string();
+
+            let chat_id = settings["chatId"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Telegram chat ID is required"))?
+                .to_string();
+
+            let send_silently = settings["sendSilently"].as_bool().unwrap_or(false);
+
+            Ok(Arc::new(
+                TelegramProvider::new(bot_token, chat_id).with_silent(send_silently),
+            ))
+        }
         _ => Err(anyhow!(
             "Unknown notification implementation: {}",
             model.implementation
@@ -458,6 +875,20 @@ pub fn get_provider_schemas() -> Vec<ProviderSchema> {
             config_contract: "WebhookSettings".to_string(),
             info_link: "https://wiki.servarr.com/sonarr/settings#connect".to_string(),
             fields: WebhookProvider::new(String::new()).get_fields(),
+        },
+        ProviderSchema {
+            implementation: "Slack".to_string(),
+            implementation_name: "Slack".to_string(),
+            config_contract: "SlackSettings".to_string(),
+            info_link: "https://wiki.servarr.com/sonarr/settings#connect".to_string(),
+            fields: SlackProvider::new(String::new()).get_fields(),
+        },
+        ProviderSchema {
+            implementation: "Telegram".to_string(),
+            implementation_name: "Telegram".to_string(),
+            config_contract: "TelegramSettings".to_string(),
+            info_link: "https://wiki.servarr.com/sonarr/settings#connect".to_string(),
+            fields: TelegramProvider::new(String::new(), String::new()).get_fields(),
         },
     ]
 }
