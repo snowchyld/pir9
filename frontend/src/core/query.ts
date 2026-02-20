@@ -269,6 +269,39 @@ export function useSystemStatusQuery() {
 }
 
 /**
+ * Create a query for health checks
+ */
+export function useHealthQuery() {
+  return createQuery({
+    queryKey: ['/health'],
+    queryFn: () => http.get<import('./http').HealthCheck[]>('/health'),
+    refetchInterval: 30000,
+  });
+}
+
+/**
+ * Create a query for disk space
+ */
+export function useDiskSpaceQuery() {
+  return createQuery({
+    queryKey: ['/system/diskspace'],
+    queryFn: () => http.get<import('./http').DiskSpace[]>('/system/diskspace'),
+    staleTime: 60 * 1000,
+  });
+}
+
+/**
+ * Create a query for system updates
+ */
+export function useUpdateQuery() {
+  return createQuery({
+    queryKey: ['/system/update'],
+    queryFn: () => http.get<import('./http').UpdateInfo>('/system/update'),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+/**
  * Create a mutation for executing commands
  */
 export function useCommandMutation() {

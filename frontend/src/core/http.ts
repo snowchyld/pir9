@@ -404,6 +404,7 @@ export interface QueueItem {
   timeleft?: string;
   estimatedCompletionTime?: string;
   added?: string;
+  quality?: { quality: { id: number; name: string; source?: string; resolution?: number } };
   episode?: QueueItemEpisode;
   series?: QueueItemSeries;
   movie?: QueueItemMovie;
@@ -461,4 +462,27 @@ export interface SystemStatus {
   branch: string;
   authentication: string;
   urlBase: string;
+  startTime?: string;
+  runtimeName?: string;
+  databaseType?: string;
+}
+
+export interface DiskSpace {
+  path: string;
+  label: string;
+  freeSpace: number;
+  totalSpace: number;
+}
+
+export interface HealthCheck {
+  source: string;
+  type: 'ok' | 'notice' | 'warning' | 'error';
+  message: string;
+  wikiUrl?: string;
+}
+
+export interface UpdateInfo {
+  version: string;
+  branch: string;
+  updateAvailable: boolean;
 }

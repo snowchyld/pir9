@@ -32,6 +32,9 @@ import './components/primitives/stats-card';
 import './components/release-search-modal';
 
 // Feature pages
+// Dashboard
+import './features/dashboard/dashboard-page';
+
 // Series
 import './features/series/series-index-page';
 import './features/series/series-detail-page';

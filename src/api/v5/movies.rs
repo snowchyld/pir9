@@ -1459,11 +1459,45 @@ pub(super) fn scan_movie_folder(folder_path: &str, movie_id: i64) -> Option<Movi
     use std::path::Path;
 
     let root = Path::new(folder_path);
-    if !root.exists() || !root.is_dir() {
+    if !root.exists() {
         return None;
     }
 
     let video_extensions = ["mkv", "mp4", "avi", "wmv", "m4v", "ts", "webm", "mov"];
+
+    // Handle single-file torrents: path points directly to a video file
+    if root.is_file() {
+        let is_video = root
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| video_extensions.contains(&ext.to_lowercase().as_str()))
+            .unwrap_or(false);
+        if !is_video {
+            return None;
+        }
+        let size = std::fs::metadata(root).map(|m| m.len()).unwrap_or(0);
+        let file_name = root.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let quality = super::series::parse_quality_from_filename(file_name);
+        let release_group = super::series::parse_release_group(file_name);
+
+        return Some(MovieFileDbModel {
+            id: 0,
+            movie_id,
+            relative_path: file_name.to_string(),
+            path: root.to_string_lossy().to_string(),
+            size: size as i64,
+            date_added: Utc::now(),
+            scene_name: Some(file_name.to_string()),
+            release_group,
+            quality: serde_json::to_string(&quality)
+                .unwrap_or_else(|_| r#"{"quality":{"id":1,"name":"HDTV-720p"}}"#.to_string()),
+            languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
+            media_info: None,
+            original_file_path: Some(root.to_string_lossy().to_string()),
+            edition: None,
+            file_hash: None,
+        });
+    }
 
     let mut best_file: Option<(std::path::PathBuf, u64)> = None;
 

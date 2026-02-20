@@ -26,8 +26,11 @@ export interface Route {
  * Application routes matching the existing React frontend
  */
 export const routes: Route[] = [
+  // Dashboard
+  { path: '/', component: 'dashboard-page', title: 'Dashboard' },
+
   // Series
-  { path: '/', component: 'series-index-page', title: 'Series' },
+  { path: '/series', component: 'series-index-page', title: 'Series' },
   { path: '/series/:titleSlug', component: 'series-detail-page', title: 'Series' },
 
   // Movies

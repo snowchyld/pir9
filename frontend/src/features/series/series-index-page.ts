@@ -22,9 +22,15 @@ import {
   type ViewMode,
 } from '../../stores/app.store';
 
+interface NetworkGroup {
+  network: string;
+  series: Series[];
+}
+
 @customElement('series-index-page')
 export class SeriesIndexPage extends BaseComponent {
   private seriesQuery = useSeriesQuery();
+  private collapsedNetworks = new Set<string>();
 
   protected onInit(): void {
     this.watch(this.seriesQuery.data);
@@ -748,6 +754,57 @@ export class SeriesIndexPage extends BaseComponent {
           color: var(--text-color-muted);
           margin-top: 2px;
         }
+
+        /* Network grouping */
+        .network-group {
+          display: flex;
+          flex-direction: column;
+          gap: 0.75rem;
+        }
+
+        .network-header {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.625rem 1rem;
+          background: var(--bg-card);
+          border: 1px solid var(--border-glass);
+          border-radius: 0.625rem;
+          cursor: pointer;
+          color: var(--text-color);
+          font-size: 0.9375rem;
+          font-weight: 600;
+          width: 100%;
+          text-align: left;
+          transition: all var(--transition-fast) var(--ease-out-expo);
+        }
+
+        .network-header:hover {
+          background: var(--bg-input-hover);
+          border-color: rgba(93, 156, 236, 0.3);
+        }
+
+        .chevron {
+          flex-shrink: 0;
+          transition: transform var(--transition-normal) var(--ease-spring);
+        }
+
+        .chevron.open {
+          transform: rotate(90deg);
+        }
+
+        .network-name {
+          flex: 1;
+        }
+
+        .network-count {
+          padding: 0.125rem 0.5rem;
+          font-size: 0.75rem;
+          font-weight: 500;
+          border-radius: 9999px;
+          background: var(--bg-progress);
+          color: var(--text-color-muted);
+        }
       </style>
     `;
   }
@@ -799,11 +856,64 @@ export class SeriesIndexPage extends BaseComponent {
       return this.renderEmpty();
     }
 
-    if (viewMode === 'table') {
-      return this.renderTable(series);
+    const groups = this.groupByNetwork(series);
+
+    if (groups.length <= 1) {
+      // Single group or no grouping — render flat
+      if (viewMode === 'table') {
+        return this.renderTable(series);
+      }
+      return this.renderGrid(series);
     }
 
-    return this.renderGrid(series);
+    return groups
+      .map((group) => {
+        const collapsed = this.collapsedNetworks.has(group.network);
+        return html`
+          <div class="network-group">
+            <button
+              class="network-header"
+              onclick="this.closest('series-index-page').handleToggleNetwork('${escapeHtml(group.network)}')"
+            >
+              <svg class="chevron ${collapsed ? '' : 'open'}" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+              <span class="network-name">${escapeHtml(group.network)}</span>
+              <span class="network-count">${group.series.length}</span>
+            </button>
+            ${
+              collapsed
+                ? ''
+                : viewMode === 'table'
+                  ? this.renderTable(group.series)
+                  : this.renderGrid(group.series)
+            }
+          </div>
+        `;
+      })
+      .join('');
+  }
+
+  private groupByNetwork(series: Series[]): NetworkGroup[] {
+    const groups = new Map<string, Series[]>();
+
+    for (const s of series) {
+      const network = s.network || 'Unknown Network';
+      const list = groups.get(network);
+      if (list) {
+        list.push(s);
+      } else {
+        groups.set(network, [s]);
+      }
+    }
+
+    return [...groups.entries()]
+      .sort(([a], [b]) => {
+        if (a === 'Unknown Network') return 1;
+        if (b === 'Unknown Network') return -1;
+        return a.localeCompare(b);
+      })
+      .map(([network, items]) => ({ network, series: items }));
   }
 
   private renderEmpty(): string {
@@ -1005,6 +1115,15 @@ export class SeriesIndexPage extends BaseComponent {
 
   handleAddSeries(): void {
     navigate('/add/new');
+  }
+
+  handleToggleNetwork(network: string): void {
+    if (this.collapsedNetworks.has(network)) {
+      this.collapsedNetworks.delete(network);
+    } else {
+      this.collapsedNetworks.add(network);
+    }
+    this.requestUpdate();
   }
 
   async handleRefreshAll(): Promise<void> {

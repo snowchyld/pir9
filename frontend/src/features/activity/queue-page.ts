@@ -11,13 +11,22 @@ import type { QueueMatchDialog } from './queue-match-dialog';
 
 import './queue-match-dialog';
 
-type QueueSortKey = 'status' | 'title' | 'episode' | 'protocol' | 'progress' | 'timeleft';
+type QueueSortKey =
+  | 'status'
+  | 'title'
+  | 'episode'
+  | 'quality'
+  | 'protocol'
+  | 'progress'
+  | 'timeleft';
+type ContentTab = 'all' | 'shows' | 'movies' | 'anime';
 
 @customElement('queue-page')
 export class QueuePage extends BaseComponent {
   private queueQuery = useQueueQuery();
   private sortKey: QueueSortKey = 'timeleft';
   private sortDirection: 'asc' | 'desc' = 'asc';
+  private activeTab: ContentTab = 'all';
   private dialogOpen = false;
 
   private removeItemMutation = createMutation({
@@ -67,9 +76,17 @@ export class QueuePage extends BaseComponent {
 
   protected template(): string {
     const response = this.queueQuery.data.value as QueueResponse | undefined;
-    const items = response?.records ?? [];
+    const allItems = response?.records ?? [];
     const isLoading = this.queueQuery.isLoading.value;
     const isError = this.queueQuery.isError.value;
+
+    // Count per content type
+    const showsCount = allItems.filter((i) => this.isShow(i)).length;
+    const moviesCount = allItems.filter((i) => this.isMovie(i)).length;
+    const animeCount = allItems.filter((i) => i.contentType === 'anime').length;
+
+    // Filter by active tab
+    const items = this.filterByTab(allItems);
 
     return html`
       <div class="queue-page">
@@ -92,6 +109,14 @@ export class QueuePage extends BaseComponent {
               </svg>
             </button>
           </div>
+        </div>
+
+        <!-- Content type tabs -->
+        <div class="content-tabs">
+          ${safeHtml(this.renderTab('all', 'All', allItems.length))}
+          ${safeHtml(this.renderTab('shows', 'Shows', showsCount))}
+          ${safeHtml(this.renderTab('movies', 'Movies', moviesCount))}
+          ${safeHtml(this.renderTab('anime', 'Anime', animeCount))}
         </div>
 
         <div class="queue-content">
@@ -344,6 +369,58 @@ export class QueuePage extends BaseComponent {
           font-size: 0.75rem;
           color: var(--text-color-muted);
         }
+
+        /* Content type tabs */
+        .content-tabs {
+          display: flex;
+          gap: 0.25rem;
+          padding: 0.25rem;
+          background: var(--bg-card);
+          border: 1px solid var(--border-glass);
+          border-radius: 0.625rem;
+        }
+
+        .content-tab {
+          display: flex;
+          align-items: center;
+          gap: 0.375rem;
+          padding: 0.5rem 1rem;
+          background: transparent;
+          border: none;
+          border-radius: 0.5rem;
+          color: var(--text-color-muted);
+          font-size: 0.875rem;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+
+        .content-tab:hover {
+          color: var(--text-color);
+          background: var(--bg-input-hover);
+        }
+
+        .content-tab.active {
+          background: var(--color-primary);
+          color: var(--color-white);
+        }
+
+        .tab-count {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-width: 1.25rem;
+          height: 1.25rem;
+          padding: 0 0.375rem;
+          font-size: 0.6875rem;
+          font-weight: 600;
+          border-radius: 9999px;
+          background: rgba(255, 255, 255, 0.15);
+        }
+
+        .content-tab:not(.active) .tab-count {
+          background: var(--bg-progress);
+        }
       </style>
     `;
   }
@@ -407,9 +484,9 @@ export class QueuePage extends BaseComponent {
         <thead>
           <tr>
             ${safeHtml(th('Status', 'status'))}
-            ${safeHtml(th('Series', 'title'))}
+            ${safeHtml(th('Title', 'title'))}
             ${safeHtml(th('Episode', 'episode'))}
-            <th>Quality</th>
+            ${safeHtml(th('Quality', 'quality'))}
             ${safeHtml(th('Protocol', 'protocol'))}
             ${safeHtml(th('Progress', 'progress'))}
             ${safeHtml(th('Time Left', 'timeleft'))}
@@ -466,7 +543,7 @@ export class QueuePage extends BaseComponent {
         <td class="episode-cell" title="${escapeHtml(episodeLabel)}">
           <div>${escapeHtml(this.truncate(episodeLabel, 64))}</div>
         </td>
-        <td>-</td>
+        <td>${escapeHtml(item.quality?.quality?.name ?? '-')}</td>
         <td>
           <span class="protocol-badge ${item.protocol}">${item.protocol}</span>
         </td>
@@ -549,6 +626,8 @@ export class QueuePage extends BaseComponent {
         return (item.series?.title ?? item.title).toLowerCase();
       case 'episode':
         return item.episode ? item.episode.seasonNumber * 10000 + item.episode.episodeNumber : 0;
+      case 'quality':
+        return item.quality?.quality?.name?.toLowerCase() ?? '';
       case 'protocol':
         return item.protocol;
       case 'progress':
@@ -655,5 +734,38 @@ export class QueuePage extends BaseComponent {
       this.sortDirection = 'asc';
     }
     this.requestUpdate();
+  }
+
+  handleTabClick(tab: ContentTab): void {
+    this.activeTab = tab;
+    this.requestUpdate();
+  }
+
+  private renderTab(tab: ContentTab, label: string, count: number): string {
+    const active = this.activeTab === tab;
+    return `<button class="content-tab ${active ? 'active' : ''}" onclick="this.closest('queue-page').handleTabClick('${tab}')">${label}<span class="tab-count">${count}</span></button>`;
+  }
+
+  private isMovie(item: QueueItem): boolean {
+    return item.contentType === 'movie' || (item.movieId != null && item.movieId > 0);
+  }
+
+  private isShow(item: QueueItem): boolean {
+    if (item.contentType === 'anime') return false;
+    if (item.contentType === 'series') return true;
+    return item.seriesId != null && item.seriesId > 0;
+  }
+
+  private filterByTab(items: QueueItem[]): QueueItem[] {
+    switch (this.activeTab) {
+      case 'shows':
+        return items.filter((i) => this.isShow(i));
+      case 'movies':
+        return items.filter((i) => this.isMovie(i));
+      case 'anime':
+        return items.filter((i) => i.contentType === 'anime');
+      default:
+        return items;
+    }
   }
 }
