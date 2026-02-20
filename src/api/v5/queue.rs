@@ -1148,14 +1148,22 @@ async fn import_queue_item(
         use crate::core::datastore::repositories::RemotePathMappingRepository;
         let mapping_repo = RemotePathMappingRepository::new(state.db.clone());
         let mut mapped = raw_output_path.clone();
+        let mut did_map = false;
         if let Ok(mappings) = mapping_repo.get_all().await {
             for m in &mappings {
                 if mapped.starts_with(&m.remote_path) {
                     mapped = mapped.replacen(&m.remote_path, &m.local_path, 1);
                     tracing::debug!("Import: mapped path '{}' -> '{}'", raw_output_path, mapped);
+                    did_map = true;
                     break;
                 }
             }
+        }
+        if !did_map {
+            tracing::warn!(
+                "Import: no remote path mapping matched '{}' — check Settings > Download Clients > Remote Path Mappings",
+                raw_output_path
+            );
         }
         mapped
     };
@@ -1182,7 +1190,20 @@ async fn import_queue_item(
         let dl_title = title.clone();
         tokio::spawn(async move {
             // scan_movie_folder finds the largest video file in the output path
-            if let Some(movie_file) = super::movies::scan_movie_folder(&output_path, movie_id) {
+            if let Some(mut movie_file) = super::movies::scan_movie_folder(&output_path, movie_id) {
+                // Media analysis: probe with FFmpeg + BLAKE3 hash (same as folder import)
+                let file_path = std::path::Path::new(&movie_file.path);
+                if let Ok(info) = crate::core::mediafiles::MediaAnalyzer::analyze(file_path).await {
+                    movie_file.media_info = serde_json::to_string(&info).ok();
+                    let quality =
+                        crate::core::mediafiles::derive_quality_from_media(&info, &movie_file.path);
+                    movie_file.quality = serde_json::to_string(&quality)
+                        .unwrap_or_else(|_| movie_file.quality.clone());
+                }
+                movie_file.file_hash = crate::core::mediafiles::compute_file_hash(file_path)
+                    .await
+                    .ok();
+
                 match movie_file_repo.insert(&movie_file).await {
                     Ok(file_id) => {
                         // Update movie to have a file
