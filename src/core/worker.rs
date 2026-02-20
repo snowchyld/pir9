@@ -263,8 +263,8 @@ impl WorkerRunner {
                 known_files,
             } => {
                 info!(
-                    "Received scan request: job_id={}, type={:?}, series={:?}, known_files={}",
-                    job_id, scan_type, series_ids, known_files.len()
+                    "Received scan request: job_id={}, type={:?}, series={:?}, paths={:?}, known_files={}",
+                    job_id, scan_type, series_ids, paths, known_files.len()
                 );
 
                 // Pair series_ids with paths (1:1 aligned), filter to paths we handle, own the data
@@ -295,6 +295,7 @@ impl WorkerRunner {
                         for (series_id, path_str) in &relevant {
                             let path = PathBuf::from(path_str);
                             if !path.exists() {
+                                warn!("[scan][download] Path does not exist, skipping: {}", path_str);
                                 continue;
                             }
 
@@ -733,6 +734,7 @@ impl WorkerRunner {
                     let path = PathBuf::from(path_str);
 
                     if !path.exists() {
+                        warn!("[scan][download] Path does not exist, skipping: {}", path_str);
                         continue;
                     }
 

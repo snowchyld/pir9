@@ -1,12 +1,12 @@
 [package]
 name = "pir9"
-version = "0.55.1"
+version = "0.55.2"
 edition = "2021"
 rust-version = "1.93"
-authors = ["pir9 Team"]
+authors = ["pir9"]
 description = "pir9 - Smart PVR for TV and anime"
 license = "GPL-3.0"
-repository = "https://github.com/pir9/pir9"
+repository = "https://github.com/snowchyld/pir9"
 
 [dependencies]
 # Async runtime
