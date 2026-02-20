@@ -731,7 +731,7 @@ async fn execute_refresh_movies(
     cancel_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<String, String> {
     use crate::core::datastore::repositories::MovieRepository;
-    use chrono::Utc;
+    use chrono::{Datelike, Utc};
 
     let repo = MovieRepository::new(db.clone());
 
@@ -893,57 +893,75 @@ async fn execute_refresh_movies(
             }
         }
 
+        // Step 3: Derive movie status from year when no release date is set
+        if movie.status == 0 && movie.year > 0 {
+            let current_year = Utc::now().year();
+            if movie.year < current_year {
+                movie.status = 3; // Released
+            } else if movie.year == current_year {
+                movie.status = 2; // InCinemas
+            } else {
+                movie.status = 1; // Announced
+            }
+        }
+
         movie.last_info_sync = Some(Utc::now());
 
-        // Save updated movie — handle unique constraint conflicts by clearing conflicting fields
-        if let Err(e) = repo.update(&movie).await {
-            let err_str = e.to_string();
-            if err_str.contains("duplicate key") {
-                if err_str.contains("tmdb_id") {
-                    tracing::warn!(
-                        "RefreshMovies: tmdb_id {} conflict for '{}', retrying without it",
-                        movie.tmdb_id,
-                        movie.title
+        // Pre-check: if this movie's IMDB ID conflicts with another movie, merge proactively
+        if let Some(ref imdb_id) = movie.imdb_id {
+            if let Ok(Some(existing)) = repo.get_by_imdb_id(imdb_id).await {
+                if existing.id != movie.id {
+                    tracing::info!(
+                        "RefreshMovies: merging duplicate '{}' (id={}) into '{}' (id={}, imdb={})",
+                        movie.title,
+                        movie.id,
+                        existing.title,
+                        existing.id,
+                        imdb_id
                     );
-                    movie.tmdb_id = 0;
-                } else if err_str.contains("imdb_id") {
-                    tracing::warn!(
-                        "RefreshMovies: imdb_id {:?} conflict for '{}', skipping IMDB update",
-                        movie.imdb_id,
-                        movie.title
-                    );
-                    // Another movie already has this IMDB ID — don't overwrite
-                    errors += 1;
-                    continue;
-                }
-                // Retry with cleared field
-                if let Err(e2) = repo.update(&movie).await {
-                    let err2 = e2.to_string();
-                    if err2.contains("duplicate key") && err2.contains("imdb_id") {
+                    let pool = db.pool();
+                    let _ = sqlx::query("UPDATE movie_files SET movie_id = $1 WHERE movie_id = $2")
+                        .bind(existing.id)
+                        .bind(movie.id)
+                        .execute(pool)
+                        .await;
+                    if let Err(del_err) = repo.delete(movie.id).await {
                         tracing::warn!(
-                            "RefreshMovies: imdb_id {:?} also conflicts for '{}', skipping",
-                            movie.imdb_id,
-                            movie.title
-                        );
-                    } else {
-                        tracing::error!(
-                            "RefreshMovies: failed to update movie '{}': {}",
-                            movie.title,
-                            e2
+                            "RefreshMovies: failed to delete duplicate movie {}: {}",
+                            movie.id,
+                            del_err
                         );
                     }
-                    errors += 1;
+                    refreshed += 1;
                     continue;
                 }
-            } else {
-                tracing::error!(
-                    "RefreshMovies: failed to update movie '{}': {}",
-                    movie.title,
-                    e
-                );
-                errors += 1;
-                continue;
             }
+        }
+
+        // Pre-check: if this movie's TMDB ID conflicts with another movie, clear it
+        if movie.tmdb_id > 0 {
+            if let Ok(Some(existing)) = repo.get_by_tmdb_id(movie.tmdb_id).await {
+                if existing.id != movie.id {
+                    tracing::warn!(
+                        "RefreshMovies: tmdb_id {} conflict for '{}' (owned by '{}'), clearing",
+                        movie.tmdb_id,
+                        movie.title,
+                        existing.title
+                    );
+                    movie.tmdb_id = 0;
+                }
+            }
+        }
+
+        // Save updated movie
+        if let Err(e) = repo.update(&movie).await {
+            tracing::error!(
+                "RefreshMovies: failed to update movie '{}': {}",
+                movie.title,
+                e
+            );
+            errors += 1;
+            continue;
         }
 
         refreshed += 1;

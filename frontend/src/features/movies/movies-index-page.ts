@@ -2,7 +2,7 @@
  * Movies index page - main grid/table view
  */
 
-import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
+import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { http, type Movie } from '../../core/http';
 import { useMoviesQuery } from '../../core/query';
 import { navigate } from '../../router';
@@ -519,6 +519,27 @@ export class MoviesIndexPage extends BaseComponent {
           background: var(--bg-card-center);
         }
 
+        .movie-table th.sortable {
+          cursor: pointer;
+          user-select: none;
+          transition: color var(--transition-fast);
+        }
+
+        .movie-table th.sortable:hover {
+          color: var(--pir9-blue);
+          background: var(--bg-input-hover);
+        }
+
+        .movie-table th.sortable.sorted {
+          color: var(--pir9-blue);
+        }
+
+        .movie-table th.sortable svg {
+          display: inline-block;
+          vertical-align: middle;
+          margin-left: 0.25rem;
+        }
+
         .movie-table tr {
           cursor: pointer;
           transition: background var(--transition-fast);
@@ -583,7 +604,7 @@ export class MoviesIndexPage extends BaseComponent {
 
     return html`
       <div class="poster-card"
-           onclick="this.closest('movies-index-page').handleMovieClick(${movie.id})">
+           onclick="this.closest('movies-index-page').handleMovieClick('${escapeHtml(movie.titleSlug)}')">
         <div class="poster-status ${statusClass}"></div>
         ${
           posterImage
@@ -606,30 +627,49 @@ export class MoviesIndexPage extends BaseComponent {
   }
 
   private renderTable(movies: Movie[]): string {
+    const sortKey = movieSortKey.value;
+    const sortDir = movieSortDirection.value;
+    const sortIcon =
+      sortDir === 'ascending'
+        ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>'
+        : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+
     return html`
       <table class="movie-table">
         <thead>
           <tr>
-            <th>Title</th>
-            <th>Year</th>
-            <th>Studio</th>
-            <th>Status</th>
+            <th class="sortable ${sortKey === 'sortTitle' ? 'sorted' : ''}" onclick="this.closest('movies-index-page').handleColumnSort('sortTitle')">
+              Title ${sortKey === 'sortTitle' ? safeHtml(sortIcon) : ''}
+            </th>
+            <th class="sortable ${sortKey === 'year' ? 'sorted' : ''}" onclick="this.closest('movies-index-page').handleColumnSort('year')">
+              Year ${sortKey === 'year' ? safeHtml(sortIcon) : ''}
+            </th>
+            <th class="sortable ${sortKey === 'studio' ? 'sorted' : ''}" onclick="this.closest('movies-index-page').handleColumnSort('studio')">
+              Studio ${sortKey === 'studio' ? safeHtml(sortIcon) : ''}
+            </th>
+            <th class="sortable ${sortKey === 'status' ? 'sorted' : ''}" onclick="this.closest('movies-index-page').handleColumnSort('status')">
+              Status ${sortKey === 'status' ? safeHtml(sortIcon) : ''}
+            </th>
             <th>File</th>
-            <th>Rating</th>
-            <th>Size</th>
+            <th class="sortable ${sortKey === 'ratings' ? 'sorted' : ''}" onclick="this.closest('movies-index-page').handleColumnSort('ratings')">
+              Rating ${sortKey === 'ratings' ? safeHtml(sortIcon) : ''}
+            </th>
+            <th class="sortable ${sortKey === 'sizeOnDisk' ? 'sorted' : ''}" onclick="this.closest('movies-index-page').handleColumnSort('sizeOnDisk')">
+              Size ${sortKey === 'sizeOnDisk' ? safeHtml(sortIcon) : ''}
+            </th>
           </tr>
         </thead>
         <tbody>
           ${movies
             .map(
               (m) => html`
-            <tr onclick="this.closest('movies-index-page').handleMovieClick(${m.id})">
+            <tr onclick="this.closest('movies-index-page').handleMovieClick('${escapeHtml(m.titleSlug)}')">
               <td class="movie-title-cell">${escapeHtml(m.title)}</td>
               <td>${m.year || '-'}</td>
               <td>${escapeHtml(m.studio || '-')}</td>
               <td><span class="status-badge ${m.status}">${m.status}</span></td>
               <td><span class="has-file-badge ${m.hasFile ? 'yes' : 'no'}"></span></td>
-              <td>${m.imdbRating ? m.imdbRating.toFixed(1) : '-'}</td>
+              <td>${this.formatRating(m)}</td>
               <td>${this.formatSize(m.statistics?.sizeOnDisk ?? 0)}</td>
             </tr>
           `,
@@ -717,10 +757,16 @@ export class MoviesIndexPage extends BaseComponent {
       case 'sizeOnDisk':
         return movie.statistics?.sizeOnDisk ?? 0;
       case 'ratings':
-        return movie.imdbRating ?? 0;
+        return movie.ratings?.value ?? movie.imdbRating ?? 0;
       default:
         return movie.sortTitle || '';
     }
+  }
+
+  private formatRating(movie: Movie): string {
+    const rating = movie.ratings?.value ?? movie.imdbRating;
+    if (!rating) return '-';
+    return rating.toFixed(1);
   }
 
   private formatSize(bytes: number): string {
@@ -731,8 +777,8 @@ export class MoviesIndexPage extends BaseComponent {
   }
 
   // Event handlers
-  handleMovieClick(id: number): void {
-    navigate(`/movies/${id}`);
+  handleMovieClick(titleSlug: string): void {
+    navigate(`/movies/${titleSlug}`);
   }
 
   handleFilterChange(event: Event): void {
@@ -743,6 +789,16 @@ export class MoviesIndexPage extends BaseComponent {
   handleSortChange(event: Event): void {
     const select = event.target as HTMLSelectElement;
     setMovieSort(select.value as MovieSortKey);
+  }
+
+  handleColumnSort(key: string): void {
+    if (movieSortKey.value === key) {
+      const current = movieSortDirection.value;
+      movieSortDirection.set(current === 'ascending' ? 'descending' : 'ascending');
+    } else {
+      setMovieSort(key as MovieSortKey);
+      movieSortDirection.set('ascending');
+    }
   }
 
   handleSortDirToggle(): void {

@@ -36,6 +36,15 @@ impl DbRepository {
         let exact_pattern = query.to_string();
         let starts_pattern = format!("{}%", query);
         let contains_pattern = format!("%{}%", query);
+        // Normalize: strip non-alphanumeric, collapse spaces for fuzzy matching
+        let clean_query: String = query
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == ' ' { c } else { ' ' })
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let clean_contains = format!("%{}%", clean_query);
         let limit = limit.min(100) as i64;
 
         let rows = sqlx::query(
@@ -43,7 +52,11 @@ impl DbRepository {
             SELECT imdb_id, title, original_title, start_year, end_year,
                    runtime_minutes, genres, is_adult, title_type, rating, votes, last_synced_at
             FROM imdb_series
-            WHERE (title ILIKE $3 OR original_title ILIKE $3)
+            WHERE (
+                title ILIKE $3 OR original_title ILIKE $3
+                OR regexp_replace(title, '[^a-zA-Z0-9 ]', ' ', 'g') ILIKE $5
+                OR regexp_replace(original_title, '[^a-zA-Z0-9 ]', ' ', 'g') ILIKE $5
+            )
               AND is_adult = false
             ORDER BY
                 CASE
@@ -60,6 +73,7 @@ impl DbRepository {
         .bind(&starts_pattern)
         .bind(&contains_pattern)
         .bind(limit)
+        .bind(&clean_contains)
         .fetch_all(&self.pool)
         .await?;
 
@@ -170,6 +184,15 @@ impl DbRepository {
         let exact_pattern = query.to_string();
         let starts_pattern = format!("{}%", query);
         let contains_pattern = format!("%{}%", query);
+        // Normalize: strip non-alphanumeric, collapse spaces for fuzzy matching
+        let clean_query: String = query
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == ' ' { c } else { ' ' })
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let clean_contains = format!("%{}%", clean_query);
         let limit = limit.min(100) as i64;
 
         let rows = sqlx::query(
@@ -177,7 +200,11 @@ impl DbRepository {
             SELECT imdb_id, title, original_title, year,
                    runtime_minutes, genres, is_adult, rating, votes, last_synced_at
             FROM imdb_movies
-            WHERE (title ILIKE $3 OR original_title ILIKE $3)
+            WHERE (
+                title ILIKE $3 OR original_title ILIKE $3
+                OR regexp_replace(title, '[^a-zA-Z0-9 ]', ' ', 'g') ILIKE $5
+                OR regexp_replace(original_title, '[^a-zA-Z0-9 ]', ' ', 'g') ILIKE $5
+            )
               AND is_adult = false
             ORDER BY
                 CASE
@@ -194,6 +221,7 @@ impl DbRepository {
         .bind(&starts_pattern)
         .bind(&contains_pattern)
         .bind(limit)
+        .bind(&clean_contains)
         .fetch_all(&self.pool)
         .await?;
 

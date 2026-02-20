@@ -69,12 +69,21 @@ async fn list_movies(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch movies: {}", e)))?;
 
-    let mut movies = Vec::with_capacity(db_movies.len());
-    for m in db_movies {
-        let mut response = MovieResponse::from(m);
-        enrich_movie_response(&mut response, &state.db).await;
-        movies.push(response);
-    }
+    // Bulk-load movie file statistics in a single query (avoids N+1)
+    let size_map = bulk_load_movie_sizes(&state.db).await;
+
+    let movies: Vec<MovieResponse> = db_movies
+        .into_iter()
+        .map(|m| {
+            let mut response = MovieResponse::from(m);
+            let size_on_disk = size_map.get(&response.id).copied().unwrap_or(0);
+            response.statistics = Some(MovieStatistics {
+                size_on_disk,
+                has_file: response.has_file,
+            });
+            response
+        })
+        .collect();
 
     Ok(Json(movies))
 }
@@ -98,6 +107,29 @@ async fn get_movie(
     Ok(Json(response))
 }
 
+/// Bulk-load movie file sizes for all movies in a single query
+async fn bulk_load_movie_sizes(
+    db: &crate::core::datastore::Database,
+) -> std::collections::HashMap<i64, i64> {
+    use sqlx::Row;
+
+    let pool = db.pool();
+    let rows = sqlx::query(
+        "SELECT movie_id, COALESCE(SUM(size), 0)::bigint as size_on_disk FROM movie_files GROUP BY movie_id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    rows.iter()
+        .filter_map(|row| {
+            let id: i64 = row.try_get("movie_id").ok()?;
+            let size: i64 = row.try_get("size_on_disk").ok()?;
+            Some((id, size))
+        })
+        .collect()
+}
+
 /// Enrich a MovieResponse with file statistics from the database
 async fn enrich_movie_response(
     response: &mut MovieResponse,
@@ -107,7 +139,7 @@ async fn enrich_movie_response(
 
     let pool = db.pool();
     if let Ok(row) = sqlx::query(
-        "SELECT COALESCE(SUM(size), 0) as size_on_disk FROM movie_files WHERE movie_id = $1",
+        "SELECT COALESCE(SUM(size), 0)::bigint as size_on_disk FROM movie_files WHERE movie_id = $1",
     )
     .bind(response.id)
     .fetch_one(pool)
@@ -1062,6 +1094,23 @@ async fn import_movies(
         if lookup_title.is_empty() {
             tracing::warn!("Skipping movie import: no title or path provided");
             continue;
+        }
+
+        // Check for duplicates by path first (most reliable for folder imports)
+        let full_path_check = import_req.path.as_deref().unwrap_or("");
+        if !full_path_check.is_empty() {
+            if let Ok(Some(existing)) = repo.get_by_path(full_path_check).await {
+                tracing::info!(
+                    "Movie already exists at path, skipping: id={}, path={}",
+                    existing.id,
+                    full_path_check
+                );
+                // Return the existing movie in results
+                let mut response = MovieResponse::from(existing);
+                enrich_movie_response(&mut response, &state.db).await;
+                results.push(response);
+                continue;
+            }
         }
 
         // If imdb_id is provided, check for duplicates

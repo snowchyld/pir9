@@ -104,7 +104,7 @@ pub async fn get_series(State(state): State<Arc<AppState>>) -> Json<Vec<SeriesRe
     let mut result = Vec::with_capacity(series.len());
     for s in series {
         // Fetch episode statistics
-        let (episode_count, episode_file_count, season_count) =
+        let (episode_count, episode_file_count, season_count, total_episode_count) =
             get_series_stats(&state.db, s.id).await;
 
         result.push(SeriesResource {
@@ -170,7 +170,7 @@ pub async fn get_series(State(state): State<Arc<AppState>>) -> Json<Vec<SeriesRe
                 season_count,
                 episode_file_count,
                 episode_count,
-                total_episode_count: episode_count,
+                total_episode_count,
                 size_on_disk: 0,
                 percent_of_episodes: if episode_count > 0 {
                     (episode_file_count as f64 / episode_count as f64) * 100.0
@@ -196,7 +196,7 @@ pub async fn get_series_by_id(
         _ => return Json(None),
     };
 
-    let (episode_count, episode_file_count, season_count) =
+    let (episode_count, episode_file_count, season_count, total_episode_count) =
         get_series_stats(&state.db, series.id).await;
 
     Json(Some(SeriesResource {
@@ -260,7 +260,7 @@ pub async fn get_series_by_id(
             season_count,
             episode_file_count,
             episode_count,
-            total_episode_count: episode_count,
+            total_episode_count,
             size_on_disk: 0,
             percent_of_episodes: if episode_count > 0 {
                 (episode_file_count as f64 / episode_count as f64) * 100.0
@@ -274,16 +274,17 @@ pub async fn get_series_by_id(
 async fn get_series_stats(
     db: &crate::core::datastore::Database,
     series_id: i64,
-) -> (i32, i32, i32) {
+) -> (i32, i32, i32, i32) {
     use sqlx::Row;
 
     let pool = db.pool();
     if let Ok(row) = sqlx::query(
         r#"
         SELECT
-            COUNT(*)::int as episode_count,
-            SUM(CASE WHEN has_file = true THEN 1 ELSE 0 END)::int as episode_file_count,
-            COUNT(DISTINCT season_number)::int as season_count
+            COUNT(CASE WHEN monitored = true THEN 1 END)::int as episode_count,
+            SUM(CASE WHEN has_file = true AND monitored = true THEN 1 ELSE 0 END)::int as episode_file_count,
+            COUNT(DISTINCT season_number)::int as season_count,
+            COUNT(*)::int as total_episode_count
         FROM episodes
         WHERE series_id = $1
         "#,
@@ -296,9 +297,10 @@ async fn get_series_stats(
             row.try_get::<i32, _>("episode_count").unwrap_or(0),
             row.try_get::<i32, _>("episode_file_count").unwrap_or(0),
             row.try_get::<i32, _>("season_count").unwrap_or(0),
+            row.try_get::<i32, _>("total_episode_count").unwrap_or(0),
         );
     }
-    (0, 0, 0)
+    (0, 0, 0, 0)
 }
 
 pub fn routes() -> Router<Arc<AppState>> {

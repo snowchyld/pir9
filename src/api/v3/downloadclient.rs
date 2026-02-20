@@ -128,8 +128,8 @@ fn db_to_resource(model: &DownloadClientDbModel) -> DownloadClientResource {
         enable: model.enable,
         protocol: protocol.to_string(),
         priority: model.priority,
-        remove_completed_downloads: true,
-        remove_failed_downloads: true,
+        remove_completed_downloads: model.remove_completed_downloads,
+        remove_failed_downloads: model.remove_failed_downloads,
     }
 }
 
@@ -154,6 +154,8 @@ fn resource_to_db(resource: &DownloadClientResource, id: Option<i64>) -> Downloa
         config_contract: resource.config_contract.clone(),
         settings: serde_json::to_string(&settings).unwrap_or_default(),
         tags: serde_json::to_string(&resource.tags).unwrap_or_default(),
+        remove_completed_downloads: resource.remove_completed_downloads,
+        remove_failed_downloads: resource.remove_failed_downloads,
     }
 }
 

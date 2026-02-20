@@ -280,25 +280,12 @@ impl QBittorrentClient {
     async fn ensure_session(&self) -> Result<()> {
         // Try a simple API call to check if session is valid
         let url = format!("{}/api/v2/app/version", self.base_url);
-        tracing::debug!("qBittorrent: checking session via {}", url);
         let response = self.http_client.get(&url).send().await;
 
         match response {
-            Ok(r) if r.status().is_success() => {
-                tracing::debug!("qBittorrent: existing session valid");
-                Ok(())
-            }
-            Ok(r) => {
-                tracing::debug!(
-                    "qBittorrent: session check returned HTTP {}, re-logging in",
-                    r.status()
-                );
-                self.login().await
-            }
-            Err(e) => {
-                tracing::debug!("qBittorrent: session check failed: {}, re-logging in", e);
-                self.login().await
-            }
+            Ok(r) if r.status().is_success() => Ok(()),
+            Ok(_r) => self.login().await,
+            Err(_e) => self.login().await,
         }
     }
 
@@ -319,7 +306,7 @@ impl QBittorrentClient {
         tracing::debug!("qBittorrent GET {} -> HTTP {}", endpoint, status);
 
         if status == reqwest::StatusCode::FORBIDDEN {
-            tracing::debug!("qBittorrent: 403 on GET {}, re-logging in", endpoint);
+            // 403 = session expired, re-login and retry
             self.login().await?;
             let response = self
                 .http_client
@@ -329,7 +316,7 @@ impl QBittorrentClient {
                 .context("qBittorrent request failed after re-login")?;
             let retry_status = response.status();
             let body = response.text().await?;
-            tracing::debug!(
+            tracing::trace!(
                 "qBittorrent GET {} (retry) -> HTTP {} ({} bytes)",
                 endpoint,
                 retry_status,
@@ -338,7 +325,7 @@ impl QBittorrentClient {
             Ok(body)
         } else if status.is_success() {
             let body = response.text().await?;
-            tracing::debug!("qBittorrent GET {} -> {} bytes", endpoint, body.len());
+            tracing::trace!("qBittorrent GET {} -> {} bytes", endpoint, body.len());
             Ok(body)
         } else {
             let body = response.text().await.unwrap_or_default();
@@ -357,7 +344,7 @@ impl QBittorrentClient {
         self.ensure_session().await?;
 
         let url = format!("{}{}", self.base_url, endpoint);
-        tracing::debug!("qBittorrent POST {} params={:?}", endpoint, params);
+        tracing::trace!("qBittorrent POST {} params={:?}", endpoint, params);
         let response = self
             .http_client
             .post(&url)
@@ -367,10 +354,10 @@ impl QBittorrentClient {
             .context("qBittorrent request failed")?;
 
         let status = response.status();
-        tracing::debug!("qBittorrent POST {} -> HTTP {}", endpoint, status);
+        tracing::trace!("qBittorrent POST {} -> HTTP {}", endpoint, status);
 
         if status == reqwest::StatusCode::FORBIDDEN {
-            tracing::debug!("qBittorrent: 403 on POST {}, re-logging in", endpoint);
+            // 403 = session expired, re-login and retry
             self.login().await?;
             let response = self
                 .http_client
@@ -563,13 +550,6 @@ impl DownloadClient for QBittorrentClient {
         filename: &str,
         options: DownloadOptions,
     ) -> Result<String> {
-        tracing::debug!(
-            "qBittorrent: adding torrent file={} size={} category={:?} dir={:?}",
-            filename,
-            file_data.len(),
-            options.category,
-            options.download_dir
-        );
         self.ensure_session().await?;
 
         let api_url = format!("{}/api/v2/torrents/add", self.base_url);
@@ -631,7 +611,7 @@ impl DownloadClient for QBittorrentClient {
             torrents.len()
         );
         for t in &torrents {
-            tracing::debug!(
+            tracing::trace!(
                 "qBittorrent:   {} state={} progress={:.1}% size={} left={} category={:?}",
                 &t.hash[..t.hash.len().min(8)],
                 t.state,

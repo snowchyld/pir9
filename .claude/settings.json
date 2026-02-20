@@ -1,0 +1,22 @@
+{
+  "enabledPlugins": {
+    "pm@project-plugins": true
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/drew/dev/pir9/.claude/hooks/check-biome.sh"
+          },
+          {
+            "type": "command",
+            "command": "/home/drew/dev/pir9/.claude/hooks/check-security.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -70,6 +70,8 @@ async fn create_download_client(
         config_contract: body.config_contract,
         settings,
         tags,
+        remove_completed_downloads: true,
+        remove_failed_downloads: true,
     };
 
     let id = repo

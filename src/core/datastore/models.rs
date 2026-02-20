@@ -186,6 +186,8 @@ pub struct DownloadClientDbModel {
     pub config_contract: String,
     pub settings: String, // JSON serialized
     pub tags: String,     // JSON serialized
+    pub remove_completed_downloads: bool,
+    pub remove_failed_downloads: bool,
 }
 
 /// Notification database model

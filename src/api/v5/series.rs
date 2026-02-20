@@ -103,17 +103,22 @@ async fn enrich_series_response(
     let mut total_size: i64 = 0;
 
     // Fetch seasons and episode statistics
+    // episode_count/episode_file_count only count monitored episodes so the
+    // progress bar reflects "what the user cares about". total_episode_count
+    // is the unfiltered count for reference.
     let pool = db.pool();
+    let mut total_all_episodes = 0i32;
     if let Ok(rows) = sqlx::query(
         r#"
         SELECT
             e.season_number,
-            COUNT(DISTINCT e.id)::int as episode_count,
-            COUNT(DISTINCT CASE WHEN e.has_file = true THEN e.id END)::int as episode_file_count,
+            COUNT(DISTINCT e.id)::int as total_episode_count,
+            COUNT(DISTINCT CASE WHEN e.monitored = true THEN e.id END)::int as episode_count,
+            COUNT(DISTINCT CASE WHEN e.has_file = true AND e.monitored = true THEN e.id END)::int as episode_file_count,
             MAX(CASE WHEN e.monitored = true THEN 1 ELSE 0 END)::int as monitored,
-            COALESCE(SUM(ef.size), 0) as size_on_disk
+            COALESCE(SUM(ef.size), 0)::bigint as size_on_disk
         FROM episodes e
-        LEFT JOIN episode_files ef ON ef.series_id = e.series_id AND ef.season_number = e.season_number
+        LEFT JOIN episode_files ef ON ef.id = e.episode_file_id
         WHERE e.series_id = $1
         GROUP BY e.season_number
         ORDER BY e.season_number
@@ -123,9 +128,11 @@ async fn enrich_series_response(
     .fetch_all(pool)
     .await {
         response.seasons = rows.iter().map(|row| {
+            let total_episode_count: i32 = row.try_get("total_episode_count").unwrap_or(0);
             let episode_count: i32 = row.try_get("episode_count").unwrap_or(0);
             let episode_file_count: i32 = row.try_get("episode_file_count").unwrap_or(0);
             let size_on_disk: i64 = row.try_get("size_on_disk").unwrap_or(0);
+            total_all_episodes += total_episode_count;
             total_episodes += episode_count;
             total_episode_files += episode_file_count;
             total_size += size_on_disk;
@@ -136,7 +143,7 @@ async fn enrich_series_response(
                 statistics: Some(SeasonStatistics {
                     episode_file_count,
                     episode_count,
-                    total_episode_count: episode_count,
+                    total_episode_count,
                     percent_of_episodes: if episode_count > 0 {
                         (episode_file_count as f64 / episode_count as f64) * 100.0
                     } else {
@@ -159,7 +166,7 @@ async fn enrich_series_response(
         season_count: response.seasons.len() as i32,
         episode_file_count: total_episode_files,
         episode_count: total_episodes,
-        total_episode_count: total_episodes,
+        total_episode_count: total_all_episodes,
         size_on_disk: total_size,
         release_groups: vec![],
         percent_of_episodes: percent,
@@ -541,6 +548,22 @@ async fn update_series_by_body(
         .map_err(|e| ApiError::Internal(format!("Failed to fetch series: {}", e)))?
         .ok_or(ApiError::NotFound)?;
 
+    // If metadata hasn't been synced yet (year=0), refresh before folder operations
+    // so the path gets the correct year instead of "(0)"
+    if series.year == 0 {
+        tracing::info!("Series {} has year=0, refreshing metadata before edit", id);
+        if let Err(e) = auto_refresh_series(id, &state.db, &state.metadata_service).await {
+            tracing::warn!("Failed to refresh metadata for series {}: {}", id, e);
+        } else {
+            // Re-fetch series with updated metadata (year, title, path may have changed)
+            series = repo
+                .get_by_id(id)
+                .await
+                .map_err(|e| ApiError::Internal(format!("Failed to fetch series: {}", e)))?
+                .ok_or(ApiError::NotFound)?;
+        }
+    }
+
     let old_path = series.path.clone();
 
     // Apply updates from flattened request
@@ -555,7 +578,11 @@ async fn update_series_by_body(
     if let Some(quality_profile_id) = body.update.quality_profile_id {
         series.quality_profile_id = quality_profile_id;
     }
-    if let Some(path) = body.update.path {
+    if let Some(mut path) = body.update.path {
+        // If the incoming path has "(0)" but metadata refresh resolved the year, fix it
+        if series.year > 0 && path.contains("(0)") {
+            path = path.replace("(0)", &format!("({})", series.year));
+        }
         series.path = path;
     }
     if let Some(season_folder) = body.update.season_folder {
@@ -1531,6 +1558,7 @@ async fn auto_refresh_series(
         .map_err(|e| format!("Failed to fetch metadata: {}", e))?;
 
     // Update year first so strip_title_year can use it
+    let old_year = series.year;
     if let Some(year) = metadata.year {
         series.year = year;
     } else if let Some(first_aired) = &metadata.first_aired {
@@ -1539,6 +1567,13 @@ async fn auto_refresh_series(
                 series.year = year;
             }
         }
+    }
+
+    // If year was 0 (unresolved) and we now have a real year, fix the path
+    if old_year == 0 && series.year > 0 && series.path.contains("(0)") {
+        let old_path = series.path.clone();
+        series.path = series.path.replace("(0)", &format!("({})", series.year));
+        tracing::info!("Fixed series path year: {} -> {}", old_path, series.path);
     }
 
     // Update series title from upstream — strip year suffix using local series year

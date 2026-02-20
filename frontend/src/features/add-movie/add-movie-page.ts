@@ -42,7 +42,7 @@ export class AddMoviePage extends BaseComponent {
     onSuccess: (data) => {
       invalidateQueries(['/movie']);
       showSuccess('Movie added successfully');
-      navigate(`/movies/${data.id}`);
+      navigate(`/movies/${data.titleSlug}`);
     },
     onError: () => {
       showError('Failed to add movie');

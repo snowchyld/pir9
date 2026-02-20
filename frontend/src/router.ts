@@ -32,7 +32,7 @@ export const routes: Route[] = [
 
   // Movies
   { path: '/movies', component: 'movies-index-page', title: 'Movies' },
-  { path: '/movies/:id', component: 'movie-detail-page', title: 'Movie' },
+  { path: '/movies/:titleSlug', component: 'movie-detail-page', title: 'Movie' },
 
   // Add Series
   { path: '/add/new', component: 'add-series-page', title: 'Add Series' },

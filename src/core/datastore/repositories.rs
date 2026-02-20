@@ -686,6 +686,17 @@ impl MovieRepository {
         Ok(row)
     }
 
+    pub async fn get_by_path(&self, path: &str) -> Result<Option<super::models::MovieDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::MovieDbModel>(
+            "SELECT * FROM movies WHERE path = $1",
+        )
+        .bind(path)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
     pub async fn insert(&self, movie: &super::models::MovieDbModel) -> Result<i64> {
         let pool = self.db.pool();
         let row: (i64,) = sqlx::query_as(
@@ -1740,8 +1751,8 @@ impl DownloadClientRepository {
         let pool = self.db.pool();
         let row: (i64,) = sqlx::query_as(
             r#"
-            INSERT INTO download_clients (enable, protocol, priority, name, implementation, config_contract, settings, tags)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO download_clients (enable, protocol, priority, name, implementation, config_contract, settings, tags, remove_completed_downloads, remove_failed_downloads)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING id
             "#
         )
@@ -1753,6 +1764,8 @@ impl DownloadClientRepository {
         .bind(&client.config_contract)
         .bind(&client.settings)
         .bind(&client.tags)
+        .bind(client.remove_completed_downloads)
+        .bind(client.remove_failed_downloads)
         .fetch_one(pool)
         .await?;
         Ok(row.0)
@@ -1764,8 +1777,9 @@ impl DownloadClientRepository {
             r#"
             UPDATE download_clients SET
                 enable = $1, protocol = $2, priority = $3, name = $4,
-                implementation = $5, config_contract = $6, settings = $7, tags = $8
-            WHERE id = $9
+                implementation = $5, config_contract = $6, settings = $7, tags = $8,
+                remove_completed_downloads = $9, remove_failed_downloads = $10
+            WHERE id = $11
             "#,
         )
         .bind(client.enable)
@@ -1776,6 +1790,8 @@ impl DownloadClientRepository {
         .bind(&client.config_contract)
         .bind(&client.settings)
         .bind(&client.tags)
+        .bind(client.remove_completed_downloads)
+        .bind(client.remove_failed_downloads)
         .bind(client.id)
         .execute(pool)
         .await?;

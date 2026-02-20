@@ -190,7 +190,7 @@ This project uses semver. **Every commit MUST bump the version.**
    - First line: `type: short description` (under 72 chars)
    - Blank line, then body explaining what changed and why
 
-### Current version: 0.29.0
+### Current version: 0.30.0
 
 ### Commit types
 - `feat:` — new feature or capability
@@ -270,3 +270,12 @@ See `.context/boundaries.md` for full ownership map and modification guidelines.
 | `Series` | `core/tv/models.rs` | Primary domain model |
 | `ParsedEpisodeInfo` | `core/parser/mod.rs` | Release parsing result |
 | `QualityProfile` | `core/profiles/` | Quality selection rules |
+
+## Task Completion
+
+When a task is complete, **always do both** before moving on:
+
+1. **Document**: Update `mental-model.md` with any new patterns, behaviors, or architectural changes discovered during the task
+2. **Commit**: Stage all changes and create a commit following the versioning rules above
+
+Never leave deployed-but-uncommitted work. If `make` succeeded, the code should be committed.

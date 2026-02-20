@@ -16,11 +16,12 @@ import type { MovieMatchDialog } from './movie-match-dialog';
 @customElement('movie-detail-page')
 export class MovieDetailPage extends BaseComponent {
   private movieId = signal<number | null>(null);
+  private titleSlug = signal<string | null>(null);
 
   private movieQuery: ReturnType<typeof createQuery<Movie | null>> | null = null;
 
   static get observedAttributes(): string[] {
-    return ['id'];
+    return ['titleslug'];
   }
 
   private createQueries(id: number): void {
@@ -33,24 +34,45 @@ export class MovieDetailPage extends BaseComponent {
     this.watch(this.movieQuery.isLoading, () => this.requestUpdate());
   }
 
-  protected onInit(): void {
-    // Get movie ID from attribute (set by router)
-    const idAttr = this.getAttribute('id');
-    if (idAttr) {
-      const id = parseInt(idAttr, 10);
-      if (!Number.isNaN(id)) {
-        this.movieId.set(id);
-        this.createQueries(id);
+  private setMovieId(id: number): void {
+    this.movieId.set(id);
+    this.createQueries(id);
+  }
+
+  private async lookupMovieId(slug: string): Promise<void> {
+    try {
+      const moviesList = await http.get<Movie[]>('/movie');
+      if (moviesList) {
+        const movie = moviesList.find((m) => m.titleSlug === slug);
+        if (movie) {
+          this.setMovieId(movie.id);
+        } else {
+          showError(`Movie not found: ${slug}`);
+        }
       }
+    } catch (_error) {
+      showError('Failed to load movie');
     }
   }
 
-  attributeChangedCallback(name: string, _oldValue: string | null, newValue: string | null): void {
-    if (name === 'id' && newValue) {
-      const id = parseInt(newValue, 10);
-      if (!Number.isNaN(id) && id !== this.movieId.value) {
-        this.movieId.set(id);
-        this.createQueries(id);
+  protected onInit(): void {
+    this.watch(this.movieId);
+    this.watch(this.titleSlug);
+  }
+
+  protected onMount(): void {
+    const slug = this.getAttribute('titleslug');
+    if (slug && !this.movieId.value) {
+      this.titleSlug.set(slug);
+      this.lookupMovieId(slug);
+    }
+  }
+
+  attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
+    if (name === 'titleslug' && newValue && newValue !== oldValue) {
+      this.titleSlug.set(newValue);
+      if (this._isConnected) {
+        this.lookupMovieId(newValue);
       }
     }
   }
@@ -541,11 +563,12 @@ export class MovieDetailPage extends BaseComponent {
 
     try {
       await http.post('/command', { name: 'RefreshMovies', movieId: id });
-      showInfo('Refreshing movie metadata from IMDB...');
+      showSuccess('Refreshing movie metadata...');
 
       setTimeout(() => {
+        invalidateQueries(['/movie', id]);
+        invalidateQueries(['/movie']);
         this.movieQuery?.refetch();
-        showSuccess('Movie metadata updated');
       }, 5000);
     } catch {
       showError('Failed to queue metadata refresh');
