@@ -1219,6 +1219,679 @@ impl DownloadClient for NzbgetClient {
 }
 
 // ============================================================================
+// Transmission Client Implementation
+// ============================================================================
+
+/// Transmission RPC client
+/// Uses JSON-RPC with X-Transmission-Session-Id CSRF protection
+pub struct TransmissionClient {
+    rpc_url: String,
+    username: Option<String>,
+    password: Option<String>,
+    session_id: RwLock<Option<String>>,
+    http_client: Client,
+}
+
+impl TransmissionClient {
+    pub fn new(url: String, username: Option<String>, password: Option<String>) -> Self {
+        let http_client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
+
+        let rpc_url = format!("{}/transmission/rpc", url.trim_end_matches('/'));
+
+        Self {
+            rpc_url,
+            username,
+            password,
+            session_id: RwLock::new(None),
+            http_client,
+        }
+    }
+
+    /// Make an RPC request, handling 409 session ID refresh automatically
+    async fn rpc_call(
+        &self,
+        method: &str,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "method": method,
+            "arguments": arguments,
+        });
+
+        // Try with current session ID
+        let response = self.do_request(&body).await?;
+
+        if response.status().as_u16() == 409 {
+            // Extract new session ID from response header
+            if let Some(new_id) = response
+                .headers()
+                .get("X-Transmission-Session-Id")
+                .and_then(|v| v.to_str().ok())
+            {
+                let mut session = self.session_id.write().await;
+                *session = Some(new_id.to_string());
+            }
+            // Retry with new session ID
+            let response = self.do_request(&body).await?;
+            self.parse_response(response).await
+        } else {
+            self.parse_response(response).await
+        }
+    }
+
+    async fn do_request(&self, body: &serde_json::Value) -> Result<reqwest::Response> {
+        let mut req = self.http_client.post(&self.rpc_url).json(body);
+
+        // Add session ID header if available
+        if let Some(ref id) = *self.session_id.read().await {
+            req = req.header("X-Transmission-Session-Id", id);
+        }
+
+        // Add basic auth if credentials provided
+        if let (Some(ref user), Some(ref pass)) = (&self.username, &self.password) {
+            if !user.is_empty() {
+                req = req.basic_auth(user, Some(pass));
+            }
+        }
+
+        req.send()
+            .await
+            .context("Failed to connect to Transmission")
+    }
+
+    async fn parse_response(&self, response: reqwest::Response) -> Result<serde_json::Value> {
+        if !response.status().is_success() {
+            anyhow::bail!("Transmission returned HTTP {}", response.status().as_u16());
+        }
+
+        let json: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse Transmission response")?;
+
+        if json["result"].as_str() != Some("success") {
+            let err = json["result"]
+                .as_str()
+                .unwrap_or("unknown error")
+                .to_string();
+            anyhow::bail!("Transmission RPC error: {}", err);
+        }
+
+        Ok(json["arguments"].clone())
+    }
+
+    fn map_status(status: i64) -> DownloadState {
+        match status {
+            0 => DownloadState::Paused,        // TR_STATUS_STOPPED
+            1 | 2 => DownloadState::Queued,    // CHECK_WAIT / CHECK
+            3 => DownloadState::Queued,        // DOWNLOAD_WAIT
+            4 => DownloadState::Downloading,   // DOWNLOADING
+            5 | 6 => DownloadState::Completed, // SEED_WAIT / SEEDING
+            _ => DownloadState::Queued,
+        }
+    }
+
+    fn torrent_to_status(torrent: &serde_json::Value) -> DownloadStatus {
+        let total_size = torrent["totalSize"].as_i64().unwrap_or(0);
+        let left = torrent["leftUntilDone"].as_i64().unwrap_or(0);
+        let percent = torrent["percentDone"].as_f64().unwrap_or(0.0) * 100.0;
+        let status_code = torrent["status"].as_i64().unwrap_or(0);
+        let error = torrent["error"].as_i64().unwrap_or(0);
+
+        let state = if error > 0 {
+            DownloadState::Failed
+        } else {
+            Self::map_status(status_code)
+        };
+
+        let eta = torrent["eta"].as_i64().filter(|&e| e >= 0);
+        let error_message = if error > 0 {
+            torrent["errorString"].as_str().map(String::from)
+        } else {
+            None
+        };
+
+        DownloadStatus {
+            id: torrent["hashString"].as_str().unwrap_or("").to_string(),
+            name: torrent["name"].as_str().unwrap_or("").to_string(),
+            status: state,
+            size: total_size,
+            size_left: left,
+            progress: percent,
+            download_speed: torrent["rateDownload"].as_i64().unwrap_or(0),
+            upload_speed: torrent["rateUpload"].as_i64().unwrap_or(0),
+            eta,
+            error_message,
+            output_path: torrent["downloadDir"].as_str().map(String::from),
+            category: None,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl DownloadClient for TransmissionClient {
+    fn name(&self) -> &str {
+        "Transmission"
+    }
+
+    fn protocol(&self) -> DownloadProtocol {
+        DownloadProtocol::Torrent
+    }
+
+    async fn test(&self) -> Result<()> {
+        self.rpc_call("session-get", serde_json::json!({ "fields": ["version"] }))
+            .await?;
+        Ok(())
+    }
+
+    async fn get_version(&self) -> Result<String> {
+        let result = self
+            .rpc_call("session-get", serde_json::json!({ "fields": ["version"] }))
+            .await?;
+        Ok(result["version"].as_str().unwrap_or("unknown").to_string())
+    }
+
+    async fn add_from_url(&self, url: &str, options: DownloadOptions) -> Result<String> {
+        let mut args = serde_json::json!({
+            "filename": url,
+            "paused": false,
+        });
+        if let Some(ref dir) = options.download_dir {
+            args["download-dir"] = serde_json::Value::String(dir.clone());
+        }
+
+        let result = self.rpc_call("torrent-add", args).await?;
+
+        // Response has either "torrent-added" or "torrent-duplicate"
+        let torrent = result
+            .get("torrent-added")
+            .or_else(|| result.get("torrent-duplicate"))
+            .ok_or_else(|| anyhow::anyhow!("Transmission did not return torrent info"))?;
+
+        Ok(torrent["hashString"].as_str().unwrap_or("").to_string())
+    }
+
+    async fn add_from_magnet(&self, magnet: &str, options: DownloadOptions) -> Result<String> {
+        self.add_from_url(magnet, options).await
+    }
+
+    async fn add_from_file(
+        &self,
+        file_data: &[u8],
+        _filename: &str,
+        options: DownloadOptions,
+    ) -> Result<String> {
+        use base64::{engine::general_purpose, Engine as _};
+        let encoded = general_purpose::STANDARD.encode(file_data);
+
+        let mut args = serde_json::json!({
+            "metainfo": encoded,
+            "paused": false,
+        });
+        if let Some(ref dir) = options.download_dir {
+            args["download-dir"] = serde_json::Value::String(dir.clone());
+        }
+
+        let result = self.rpc_call("torrent-add", args).await?;
+
+        let torrent = result
+            .get("torrent-added")
+            .or_else(|| result.get("torrent-duplicate"))
+            .ok_or_else(|| anyhow::anyhow!("Transmission did not return torrent info"))?;
+
+        Ok(torrent["hashString"].as_str().unwrap_or("").to_string())
+    }
+
+    async fn get_downloads(&self) -> Result<Vec<DownloadStatus>> {
+        let result = self
+            .rpc_call(
+                "torrent-get",
+                serde_json::json!({
+                    "fields": [
+                        "id", "name", "hashString", "status", "totalSize",
+                        "percentDone", "leftUntilDone", "sizeWhenDone",
+                        "rateDownload", "rateUpload", "eta",
+                        "error", "errorString", "downloadDir",
+                        "isFinished", "addedDate", "doneDate"
+                    ]
+                }),
+            )
+            .await?;
+
+        let torrents = result["torrents"]
+            .as_array()
+            .map(|arr| arr.iter().map(Self::torrent_to_status).collect())
+            .unwrap_or_default();
+
+        Ok(torrents)
+    }
+
+    async fn get_download(&self, id: &str) -> Result<Option<DownloadStatus>> {
+        let result = self
+            .rpc_call(
+                "torrent-get",
+                serde_json::json!({
+                    "ids": [id],
+                    "fields": [
+                        "id", "name", "hashString", "status", "totalSize",
+                        "percentDone", "leftUntilDone", "sizeWhenDone",
+                        "rateDownload", "rateUpload", "eta",
+                        "error", "errorString", "downloadDir",
+                        "isFinished"
+                    ]
+                }),
+            )
+            .await?;
+
+        Ok(result["torrents"]
+            .as_array()
+            .and_then(|arr| arr.first())
+            .map(Self::torrent_to_status))
+    }
+
+    async fn remove(&self, id: &str, delete_files: bool) -> Result<()> {
+        self.rpc_call(
+            "torrent-remove",
+            serde_json::json!({
+                "ids": [id],
+                "delete-local-data": delete_files,
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn pause(&self, id: &str) -> Result<()> {
+        self.rpc_call("torrent-stop", serde_json::json!({ "ids": [id] }))
+            .await?;
+        Ok(())
+    }
+
+    async fn resume(&self, id: &str) -> Result<()> {
+        self.rpc_call("torrent-start", serde_json::json!({ "ids": [id] }))
+            .await?;
+        Ok(())
+    }
+}
+
+// ============================================================================
+// Deluge Client Implementation
+// ============================================================================
+
+/// Deluge Web UI JSON-RPC client
+/// Authenticates via password + session cookie, connects to deluged daemon
+pub struct DelugeClient {
+    base_url: String,
+    password: String,
+    http_client: Client,
+    request_id: std::sync::atomic::AtomicI64,
+}
+
+impl DelugeClient {
+    pub fn new(url: String, password: String) -> Self {
+        let http_client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .cookie_store(true)
+            .build()
+            .unwrap_or_default();
+
+        let base_url = url.trim_end_matches('/').to_string();
+
+        Self {
+            base_url,
+            password,
+            http_client,
+            request_id: std::sync::atomic::AtomicI64::new(1),
+        }
+    }
+
+    fn next_id(&self) -> i64 {
+        self.request_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Make a JSON-RPC call to Deluge Web UI
+    async fn rpc_call(
+        &self,
+        method: &str,
+        params: Vec<serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let id = self.next_id();
+        let body = serde_json::json!({
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+
+        let url = format!("{}/json", self.base_url);
+        let resp = self
+            .http_client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to connect to Deluge")?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("Deluge returned HTTP {}", resp.status().as_u16());
+        }
+
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .context("Failed to parse Deluge response")?;
+
+        if let Some(error) = json.get("error") {
+            if !error.is_null() {
+                let msg = error["message"]
+                    .as_str()
+                    .unwrap_or("unknown error")
+                    .to_string();
+                anyhow::bail!("Deluge RPC error: {}", msg);
+            }
+        }
+
+        Ok(json["result"].clone())
+    }
+
+    /// Authenticate with Deluge and ensure daemon connection
+    async fn ensure_connected(&self) -> Result<()> {
+        // Login
+        let result = self
+            .rpc_call(
+                "auth.login",
+                vec![serde_json::Value::String(self.password.clone())],
+            )
+            .await?;
+
+        if result != serde_json::Value::Bool(true) {
+            anyhow::bail!("Deluge authentication failed");
+        }
+
+        // Check if connected to daemon
+        let connected = self.rpc_call("web.connected", vec![]).await?;
+        if connected == serde_json::Value::Bool(true) {
+            return Ok(());
+        }
+
+        // Get available hosts and connect to first one
+        let hosts = self.rpc_call("web.get_hosts", vec![]).await?;
+        if let Some(host_list) = hosts.as_array() {
+            if let Some(host) = host_list.first() {
+                if let Some(host_id) = host.get(0).and_then(|v| v.as_str()) {
+                    self.rpc_call(
+                        "web.connect",
+                        vec![serde_json::Value::String(host_id.to_string())],
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            }
+        }
+
+        anyhow::bail!("No Deluge daemon hosts available")
+    }
+
+    fn map_state(state: &str) -> DownloadState {
+        match state {
+            "Downloading" => DownloadState::Downloading,
+            "Seeding" => DownloadState::Completed,
+            "Paused" => DownloadState::Paused,
+            "Queued" => DownloadState::Queued,
+            "Checking" => DownloadState::Queued,
+            "Error" => DownloadState::Failed,
+            "Allocating" | "Moving" => DownloadState::Downloading,
+            _ => DownloadState::Queued,
+        }
+    }
+
+    fn torrent_to_status(hash: &str, torrent: &serde_json::Value) -> DownloadStatus {
+        let total_size = torrent["total_size"].as_i64().unwrap_or(0);
+        let total_done = torrent["total_done"].as_i64().unwrap_or(0);
+        let progress = torrent["progress"].as_f64().unwrap_or(0.0);
+        let state_str = torrent["state"].as_str().unwrap_or("Queued");
+        let message = torrent["message"].as_str().unwrap_or("");
+
+        let state = if !message.is_empty() && state_str == "Error" {
+            DownloadState::Failed
+        } else {
+            Self::map_state(state_str)
+        };
+
+        let eta = torrent["eta"].as_i64().filter(|&e| e > 0);
+        let error_message = if !message.is_empty() {
+            Some(message.to_string())
+        } else {
+            None
+        };
+
+        DownloadStatus {
+            id: hash.to_string(),
+            name: torrent["name"].as_str().unwrap_or("").to_string(),
+            status: state,
+            size: total_size,
+            size_left: total_size - total_done,
+            progress,
+            download_speed: torrent["download_payload_rate"].as_i64().unwrap_or(0),
+            upload_speed: torrent["upload_payload_rate"].as_i64().unwrap_or(0),
+            eta,
+            error_message,
+            output_path: torrent["save_path"].as_str().map(String::from),
+            category: torrent["label"].as_str().map(String::from),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl DownloadClient for DelugeClient {
+    fn name(&self) -> &str {
+        "Deluge"
+    }
+
+    fn protocol(&self) -> DownloadProtocol {
+        DownloadProtocol::Torrent
+    }
+
+    async fn test(&self) -> Result<()> {
+        self.ensure_connected().await?;
+        self.rpc_call("daemon.get_version", vec![]).await?;
+        Ok(())
+    }
+
+    async fn get_version(&self) -> Result<String> {
+        self.ensure_connected().await?;
+        let version = self.rpc_call("daemon.get_version", vec![]).await?;
+        Ok(version.as_str().unwrap_or("unknown").to_string())
+    }
+
+    async fn add_from_url(&self, url: &str, options: DownloadOptions) -> Result<String> {
+        self.ensure_connected().await?;
+
+        let mut opts = serde_json::json!({ "add_paused": false });
+        if let Some(ref dir) = options.download_dir {
+            opts["download_location"] = serde_json::Value::String(dir.clone());
+        }
+
+        let result = self
+            .rpc_call(
+                "core.add_torrent_url",
+                vec![
+                    serde_json::Value::String(url.to_string()),
+                    opts,
+                    serde_json::json!({}),
+                ],
+            )
+            .await?;
+
+        result
+            .as_str()
+            .map(String::from)
+            .ok_or_else(|| anyhow::anyhow!("Deluge did not return torrent hash"))
+    }
+
+    async fn add_from_magnet(&self, magnet: &str, options: DownloadOptions) -> Result<String> {
+        self.ensure_connected().await?;
+
+        let mut opts = serde_json::json!({ "add_paused": false });
+        if let Some(ref dir) = options.download_dir {
+            opts["download_location"] = serde_json::Value::String(dir.clone());
+        }
+
+        let result = self
+            .rpc_call(
+                "core.add_torrent_magnet",
+                vec![serde_json::Value::String(magnet.to_string()), opts],
+            )
+            .await?;
+
+        result
+            .as_str()
+            .map(String::from)
+            .ok_or_else(|| anyhow::anyhow!("Deluge did not return torrent hash"))
+    }
+
+    async fn add_from_file(
+        &self,
+        file_data: &[u8],
+        filename: &str,
+        options: DownloadOptions,
+    ) -> Result<String> {
+        self.ensure_connected().await?;
+        use base64::{engine::general_purpose, Engine as _};
+        let encoded = general_purpose::STANDARD.encode(file_data);
+
+        let mut opts = serde_json::json!({ "add_paused": false });
+        if let Some(ref dir) = options.download_dir {
+            opts["download_location"] = serde_json::Value::String(dir.clone());
+        }
+
+        let result = self
+            .rpc_call(
+                "core.add_torrent_file",
+                vec![
+                    serde_json::Value::String(filename.to_string()),
+                    serde_json::Value::String(encoded),
+                    opts,
+                ],
+            )
+            .await?;
+
+        result
+            .as_str()
+            .map(String::from)
+            .ok_or_else(|| anyhow::anyhow!("Deluge did not return torrent hash"))
+    }
+
+    async fn get_downloads(&self) -> Result<Vec<DownloadStatus>> {
+        self.ensure_connected().await?;
+
+        let result = self
+            .rpc_call(
+                "web.update_ui",
+                vec![
+                    serde_json::json!([
+                        "hash",
+                        "name",
+                        "state",
+                        "progress",
+                        "eta",
+                        "message",
+                        "is_finished",
+                        "save_path",
+                        "total_size",
+                        "total_done",
+                        "time_added",
+                        "download_payload_rate",
+                        "upload_payload_rate",
+                        "label"
+                    ]),
+                    serde_json::json!({}),
+                ],
+            )
+            .await?;
+
+        let mut downloads = Vec::new();
+        if let Some(torrents) = result.get("torrents").and_then(|t| t.as_object()) {
+            for (hash, torrent) in torrents {
+                downloads.push(Self::torrent_to_status(hash, torrent));
+            }
+        }
+
+        Ok(downloads)
+    }
+
+    async fn get_download(&self, id: &str) -> Result<Option<DownloadStatus>> {
+        self.ensure_connected().await?;
+
+        let result = self
+            .rpc_call(
+                "web.get_torrent_status",
+                vec![
+                    serde_json::Value::String(id.to_string()),
+                    serde_json::json!([
+                        "hash",
+                        "name",
+                        "state",
+                        "progress",
+                        "eta",
+                        "save_path",
+                        "total_size",
+                        "total_done",
+                        "download_payload_rate",
+                        "upload_payload_rate",
+                        "is_finished",
+                        "message",
+                        "label"
+                    ]),
+                ],
+            )
+            .await?;
+
+        if result.is_null() || result.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            return Ok(None);
+        }
+
+        Ok(Some(Self::torrent_to_status(id, &result)))
+    }
+
+    async fn remove(&self, id: &str, delete_files: bool) -> Result<()> {
+        self.ensure_connected().await?;
+        self.rpc_call(
+            "core.remove_torrent",
+            vec![
+                serde_json::Value::String(id.to_string()),
+                serde_json::Value::Bool(delete_files),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn pause(&self, id: &str) -> Result<()> {
+        self.ensure_connected().await?;
+        self.rpc_call(
+            "core.pause_torrent",
+            vec![serde_json::Value::String(id.to_string())],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn resume(&self, id: &str) -> Result<()> {
+        self.ensure_connected().await?;
+        self.rpc_call(
+            "core.resume_torrent",
+            vec![serde_json::Value::String(id.to_string())],
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+// ============================================================================
 // Download Client Factory
 // ============================================================================
 
@@ -1324,6 +1997,57 @@ pub fn create_client_from_model(
                 username.to_string(),
                 password.to_string(),
             )))
+        }
+        "Transmission" => {
+            let host = settings
+                .get("host")
+                .and_then(|v| v.as_str())
+                .unwrap_or("localhost");
+            let port = parse_port(settings.get("port"));
+            let use_ssl = settings
+                .get("useSsl")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let username = settings
+                .get("username")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            let password = settings
+                .get("password")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+
+            let protocol = if use_ssl { "https" } else { "http" };
+            let url = format!("{}://{}:{}", protocol, host, port);
+
+            tracing::debug!("Creating Transmission client: url={}", url);
+
+            Ok(Box::new(TransmissionClient::new(url, username, password)))
+        }
+        "Deluge" => {
+            let host = settings
+                .get("host")
+                .and_then(|v| v.as_str())
+                .unwrap_or("localhost");
+            let port = parse_port(settings.get("port"));
+            let use_ssl = settings
+                .get("useSsl")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let password = settings
+                .get("password")
+                .and_then(|v| v.as_str())
+                .unwrap_or("deluge")
+                .to_string();
+
+            let protocol = if use_ssl { "https" } else { "http" };
+            let url = format!("{}://{}:{}", protocol, host, port);
+
+            tracing::debug!("Creating Deluge client: url={}", url);
+
+            Ok(Box::new(DelugeClient::new(url, password)))
         }
         _ => {
             anyhow::bail!(
