@@ -205,10 +205,16 @@ fn resolve_season_token(token: &str, season_number: i32) -> String {
 
 /// Format episode numbers with multi-episode handling.
 ///
-/// Styles:
-/// - 0 (Extend): `01-E02-E03`
-/// - 4 (Range):  `01-E03` (first and last)
-/// - Others default to Extend
+/// Styles (Sonarr-compatible integer values):
+/// - 0 (Extend):         `01-02-03`          — bare numbers after dash
+/// - 1 (Duplicate):      `01.S01E02.S01E03`  — full SxxExx repeated with dot separator
+/// - 2 (Repeat):         `01E02E03`           — E-prefixed numbers, no separator
+/// - 3 (Scene):          `01-E02-E03`         — E-prefixed numbers with dash separator
+/// - 4 (Range):          `01-03`              — first and last, bare numbers
+/// - 5 (Prefixed Range): `01-E03`             — first bare, last with E prefix
+///
+/// Note: The leading `E` comes from the format template (`S{season:00}E{episode:00}`),
+/// so the returned string starts with the first episode number, not `E`.
 fn format_episode_numbers(
     episodes: &[EpisodeDbModel],
     pad_spec: Option<&str>,
@@ -224,20 +230,59 @@ fn format_episode_numbers(
         return first;
     }
 
+    let last_ep = episodes.last().expect("checked non-empty");
+
     match multi_episode_style {
-        4 => {
-            // Range: S01E01-E03
-            let last = pad_number(
-                episodes.last().expect("checked non-empty").episode_number,
-                pad_spec,
-            );
-            format!("{}-E{}", first, last)
+        1 => {
+            // Duplicate: S01E01.S01E02.S01E03
+            // Returns "01.S01E02.S01E03" — the leading "S01E" comes from the template
+            let season = pad_number(episodes[0].season_number, Some("00"));
+            let mut result = first;
+            for ep in &episodes[1..] {
+                result.push_str(&format!(
+                    ".S{}E{}",
+                    season,
+                    pad_number(ep.episode_number, pad_spec)
+                ));
+            }
+            result
         }
-        _ => {
-            // Extend (default): S01E01-E02-E03
+        2 => {
+            // Repeat: S01E01E02E03
+            // Returns "01E02E03" — episode numbers joined with E prefix, no separator
+            let mut result = first;
+            for ep in &episodes[1..] {
+                result.push_str(&format!("E{}", pad_number(ep.episode_number, pad_spec)));
+            }
+            result
+        }
+        3 => {
+            // Scene: S01E01-E02-E03
+            // Returns "01-E02-E03" — E-prefixed numbers with dash separator
             let mut result = first;
             for ep in &episodes[1..] {
                 result.push_str(&format!("-E{}", pad_number(ep.episode_number, pad_spec)));
+            }
+            result
+        }
+        4 => {
+            // Range: S01E01-03
+            // Returns "01-03" — bare numbers, first and last only
+            let last = pad_number(last_ep.episode_number, pad_spec);
+            format!("{}-{}", first, last)
+        }
+        5 => {
+            // Prefixed Range: S01E01-E03
+            // Returns "01-E03" — first bare, last with E prefix
+            let last = pad_number(last_ep.episode_number, pad_spec);
+            format!("{}-E{}", first, last)
+        }
+        _ => {
+            // Extend (default, style 0): S01E01-02-03
+            // Returns "01-02-03" — bare numbers with dash separator
+            let mut result = first;
+            for ep in &episodes[1..] {
+                result.push_str(&format!("-{}", pad_number(ep.episode_number, pad_spec)));
             }
             result
         }
@@ -446,7 +491,7 @@ mod tests {
 
     #[test]
     fn test_multi_episode_extend() {
-        let config = test_config();
+        let config = test_config(); // multi_episode_style = 0
         let series = test_series();
         let episodes = vec![test_episode(1, 1), test_episode(1, 2), test_episode(1, 3)];
         let quality = test_quality();
@@ -458,6 +503,73 @@ mod tests {
         };
 
         let result = build_episode_filename(&config, &ctx);
+        // Extend: bare numbers after dash (S01E01-02-03)
+        assert_eq!(
+            result,
+            "The Flash - S01E01-02-03 - Fastest Man Alive [WEBDL-1080p]"
+        );
+    }
+
+    #[test]
+    fn test_multi_episode_duplicate() {
+        let mut config = test_config();
+        config.multi_episode_style = 1;
+        let series = test_series();
+        let episodes = vec![test_episode(1, 1), test_episode(1, 2), test_episode(1, 3)];
+        let quality = test_quality();
+        let ctx = EpisodeNamingContext {
+            series: &series,
+            episodes: &episodes,
+            quality: &quality,
+            release_group: None,
+        };
+
+        let result = build_episode_filename(&config, &ctx);
+        // Duplicate: full SxxExx repeated with dot separator
+        assert_eq!(
+            result,
+            "The Flash - S01E01.S01E02.S01E03 - Fastest Man Alive [WEBDL-1080p]"
+        );
+    }
+
+    #[test]
+    fn test_multi_episode_repeat() {
+        let mut config = test_config();
+        config.multi_episode_style = 2;
+        let series = test_series();
+        let episodes = vec![test_episode(1, 1), test_episode(1, 2), test_episode(1, 3)];
+        let quality = test_quality();
+        let ctx = EpisodeNamingContext {
+            series: &series,
+            episodes: &episodes,
+            quality: &quality,
+            release_group: None,
+        };
+
+        let result = build_episode_filename(&config, &ctx);
+        // Repeat: E-prefixed numbers, no separator (S01E01E02E03)
+        assert_eq!(
+            result,
+            "The Flash - S01E01E02E03 - Fastest Man Alive [WEBDL-1080p]"
+        );
+    }
+
+    #[test]
+    fn test_multi_episode_scene() {
+        let mut config = test_config();
+        config.multi_episode_style = 3;
+        let series = test_series();
+        let episodes = vec![test_episode(1, 1), test_episode(1, 2), test_episode(1, 3)];
+        let quality = test_quality();
+        let ctx = EpisodeNamingContext {
+            series: &series,
+            episodes: &episodes,
+            quality: &quality,
+            release_group: None,
+        };
+
+        let result = build_episode_filename(&config, &ctx);
+        // Scene: E-prefixed numbers with dash separator (S01E01-E02-E03)
         assert_eq!(
             result,
             "The Flash - S01E01-E02-E03 - Fastest Man Alive [WEBDL-1080p]"
@@ -467,7 +579,7 @@ mod tests {
     #[test]
     fn test_multi_episode_range() {
         let mut config = test_config();
-        config.multi_episode_style = 4; // Range
+        config.multi_episode_style = 4;
         let series = test_series();
         let episodes = vec![test_episode(1, 1), test_episode(1, 2), test_episode(1, 3)];
         let quality = test_quality();
@@ -479,6 +591,29 @@ mod tests {
         };
 
         let result = build_episode_filename(&config, &ctx);
+        // Range: bare numbers, first and last (S01E01-03)
+        assert_eq!(
+            result,
+            "The Flash - S01E01-03 - Fastest Man Alive [WEBDL-1080p]"
+        );
+    }
+
+    #[test]
+    fn test_multi_episode_prefixed_range() {
+        let mut config = test_config();
+        config.multi_episode_style = 5;
+        let series = test_series();
+        let episodes = vec![test_episode(1, 1), test_episode(1, 2), test_episode(1, 3)];
+        let quality = test_quality();
+        let ctx = EpisodeNamingContext {
+            series: &series,
+            episodes: &episodes,
+            quality: &quality,
+            release_group: None,
+        };
+
+        let result = build_episode_filename(&config, &ctx);
+        // Prefixed Range: first bare, last with E prefix (S01E01-E03)
         assert_eq!(
             result,
             "The Flash - S01E01-E03 - Fastest Man Alive [WEBDL-1080p]"

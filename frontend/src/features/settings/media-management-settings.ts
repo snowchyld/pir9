@@ -166,8 +166,12 @@ export class MediaManagementSettings extends BaseComponent {
             class="form-input"
             onchange="this.closest('media-management-settings').handleNamingChange('multiEpisodeStyle', parseInt(this.value))"
           >
-            <option value="0" ${naming?.multiEpisodeStyle === 0 ? 'selected' : ''}>Extend (S01E01-E02-E03)</option>
-            <option value="4" ${naming?.multiEpisodeStyle === 4 ? 'selected' : ''}>Range (S01E01-E03)</option>
+            <option value="0" ${naming?.multiEpisodeStyle === 0 ? 'selected' : ''}>Extend (S01E01-02-03)</option>
+            <option value="1" ${naming?.multiEpisodeStyle === 1 ? 'selected' : ''}>Duplicate (S01E01.S01E02.S01E03)</option>
+            <option value="2" ${naming?.multiEpisodeStyle === 2 ? 'selected' : ''}>Repeat (S01E01E02E03)</option>
+            <option value="3" ${naming?.multiEpisodeStyle === 3 ? 'selected' : ''}>Scene (S01E01-E02-E03)</option>
+            <option value="4" ${naming?.multiEpisodeStyle === 4 ? 'selected' : ''}>Range (S01E01-03)</option>
+            <option value="5" ${naming?.multiEpisodeStyle === 5 ? 'selected' : ''}>Prefixed Range (S01E01-E03)</option>
           </select>
         </div>
 
