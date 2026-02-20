@@ -1,7 +1,7 @@
 # pir9 Mental Model
 
 > Living document — updated as the codebase evolves.
-> **Version**: 0.37.2 | **Last updated**: 2026-02-16
+> **Version**: 0.40.0 | **Last updated**: 2026-02-17
 
 ## 1. What Is pir9?
 
@@ -265,12 +265,12 @@ Character-by-character template scanner (no regex). O(n) single-pass.
 
 ### 6.10 Scanner (`core/scanner/`)
 
-- `mod.rs` — Core scanning logic (directory walk, video extension filter). **Canonical `VIDEO_EXTENSIONS` constant** (16 formats: mkv, mp4, avi, wmv, m4v, ts, webm, mov, flv, mpg, mpeg, vob, ogm, divx, m2ts, mts) — all other modules reference this single list
-- `jobs.rs` — JobTrackerService (timeout, retries). **NOTE**: Jobs are not currently registered with the tracker — dispatch is fire-and-forget. Fallback relies on path-accessibility check in `execute_rescan_series` (v0.39.2)
-- `consumer.rs` — ScanResultConsumer (imports results from workers)
+- `mod.rs` — Core scanning logic (directory walk, video extension filter). **Canonical `VIDEO_EXTENSIONS` constant** (16 formats: mkv, mp4, avi, wmv, m4v, ts, webm, mov, flv, mpg, mpeg, vob, ogm, divx, m2ts, mts) — all other modules reference this single list. Also `scan_movie_directory()` for movie folders (max depth 2, returns largest video file as `ScannedFile`)
+- `jobs.rs` — JobTrackerService (timeout, retries). **NOTE**: Jobs are not currently registered with the tracker — dispatch is fire-and-forget
+- `consumer.rs` — ScanResultConsumer (imports results from workers). Routes results by `ScanType` (series vs movie). Uses worker-enriched `media_info`/`quality`/`file_hash` when present, falls back to local FFmpeg+BLAKE3 otherwise. `create_movie_scan_request()` for movie scans
 - `registry.rs` — WorkerRegistryService (tracks online workers, heartbeats)
 
-**Scan dispatch logic** (v0.39.2): `execute_rescan_series` checks `Path::new(&path).exists()` for each series. Locally-accessible paths scan directly (server-side FFmpeg + BLAKE3 + DB insert). Only paths not mounted on the server are dispatched to Redis workers. This avoids the fire-and-forget gap where worker scans silently fail.
+**Scan dispatch logic** (v0.40.0 — worker-first): When Redis is enabled, ALL scans (series + movies) are dispatched to workers. Workers do file discovery, FFmpeg probe, and BLAKE3 hash locally (fast), then send enriched `ScannedFile` results back. The server only does DB inserts. Local scanning is the fallback when no Redis/workers are configured. `ScannedFile` has optional `media_info`, `quality`, `file_hash` fields (`#[serde(default)]` for backwards compat). `ScanType` enum: `RescanSeries`, `DownloadedEpisodesScan`, `RescanMovie`.
 
 ### 6.11 Notifications (`core/notifications/`)
 - **Structure**: `mod.rs`, `providers.rs`, `service.rs`

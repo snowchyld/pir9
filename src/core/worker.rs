@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-use crate::core::messaging::{Message, ScanType};
+use crate::core::messaging::{Message, ScannedFile, ScanType};
 use crate::core::scanner;
 
 /// Get a human-readable name for a message type (for logging)
@@ -323,6 +323,7 @@ impl WorkerRunner {
     ///
     /// Each entry in `series_paths` is a `(series_id, path)` pair — the dispatcher
     /// keeps these aligned so the worker can tag each result with the correct series.
+    /// For `RescanMovie`, series_id is actually movie_id (reused field).
     async fn execute_scan(
         &self,
         job_id: &str,
@@ -350,10 +351,15 @@ impl WorkerRunner {
                     }
 
                     info!("Scanning path: {} (series_id={})", path_str, series_id);
-                    let files = scanner::scan_series_directory(&path);
-                    total_files_found += files.len() as u64;
+                    let mut files = scanner::scan_series_directory(&path);
 
-                    info!("Found {} video files in {}", files.len(), path_str);
+                    // Enrich each file with FFmpeg probe + BLAKE3 hash (LOCAL disk = fast)
+                    for file in &mut files {
+                        enrich_scanned_file(file).await;
+                    }
+
+                    total_files_found += files.len() as u64;
+                    info!("Found and enriched {} video files in {}", files.len(), path_str);
 
                     results.push(Message::ScanResult {
                         job_id: job_id.to_string(),
@@ -362,6 +368,51 @@ impl WorkerRunner {
                         files_found: files,
                         errors: vec![],
                     });
+                }
+            }
+            ScanType::RescanMovie => {
+                for &(movie_id, path_str) in series_paths {
+                    let path = PathBuf::from(path_str);
+
+                    if !path.exists() {
+                        warn!("Movie scan path does not exist: {}", path_str);
+                        results.push(Message::ScanResult {
+                            job_id: job_id.to_string(),
+                            series_id: movie_id,
+                            worker_id: self.worker_id.clone(),
+                            files_found: vec![],
+                            errors: vec![format!("Path does not exist: {}", path_str)],
+                        });
+                        continue;
+                    }
+
+                    info!("Scanning movie path: {} (movie_id={})", path_str, movie_id);
+                    if let Some(mut file) = scanner::scan_movie_directory(&path) {
+                        enrich_scanned_file(&mut file).await;
+                        total_files_found += 1;
+                        info!(
+                            "Found movie file: {} ({} bytes, hash={})",
+                            file.filename,
+                            file.size,
+                            file.file_hash.as_deref().unwrap_or("none")
+                        );
+                        results.push(Message::ScanResult {
+                            job_id: job_id.to_string(),
+                            series_id: movie_id,
+                            worker_id: self.worker_id.clone(),
+                            files_found: vec![file],
+                            errors: vec![],
+                        });
+                    } else {
+                        info!("No video files found in movie path: {}", path_str);
+                        results.push(Message::ScanResult {
+                            job_id: job_id.to_string(),
+                            series_id: movie_id,
+                            worker_id: self.worker_id.clone(),
+                            files_found: vec![],
+                            errors: vec![],
+                        });
+                    }
                 }
             }
             ScanType::DownloadedEpisodesScan => {
@@ -374,7 +425,12 @@ impl WorkerRunner {
                     }
 
                     info!("Scanning download path: {}", path_str);
-                    let files = scanner::scan_series_directory(&path);
+                    let mut files = scanner::scan_series_directory(&path);
+
+                    for file in &mut files {
+                        enrich_scanned_file(file).await;
+                    }
+
                     total_files_found += files.len() as u64;
 
                     results.push(Message::ScanResult {
@@ -392,6 +448,43 @@ impl WorkerRunner {
         self.record_scan(total_files_found);
 
         results
+    }
+}
+
+/// Enrich a scanned file with FFmpeg media info and BLAKE3 content hash.
+///
+/// This runs on the worker with LOCAL disk access, making it fast (seconds
+/// instead of minutes over NFS). The enriched data travels back to the server
+/// via Redis so the server can skip redundant I/O.
+async fn enrich_scanned_file(file: &mut ScannedFile) {
+    use crate::core::mediafiles::compute_file_hash;
+
+    let path = std::path::Path::new(&file.path);
+
+    // FFmpeg probe (feature-gated)
+    #[cfg(feature = "media-probe")]
+    {
+        use crate::core::mediafiles::{derive_quality_from_media, MediaAnalyzer};
+        match MediaAnalyzer::analyze(path).await {
+            Ok(info) => {
+                let quality = derive_quality_from_media(&info, &file.filename);
+                file.quality = serde_json::to_string(&quality).ok();
+                file.media_info = serde_json::to_string(&info).ok();
+            }
+            Err(e) => {
+                debug!("FFmpeg probe failed for {}: {}", file.filename, e);
+            }
+        }
+    }
+
+    // BLAKE3 content hash (pure Rust, no feature gate needed)
+    match compute_file_hash(path).await {
+        Ok(hash) => {
+            file.file_hash = Some(hash);
+        }
+        Err(e) => {
+            debug!("BLAKE3 hash failed for {}: {}", file.filename, e);
+        }
     }
 }
 

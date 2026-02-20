@@ -18,7 +18,7 @@ use tracing::{debug, warn};
 use crate::core::messaging::ScannedFile;
 use crate::core::parser::normalize_title;
 
-pub use consumer::{create_scan_request, ScanResultConsumer};
+pub use consumer::{create_movie_scan_request, create_scan_request, ScanResultConsumer};
 pub use jobs::JobTrackerService;
 pub use registry::WorkerRegistryService;
 
@@ -303,10 +303,84 @@ pub fn scan_series_directory(series_path: &Path) -> Vec<ScannedFile> {
             episode_numbers,
             release_group,
             filename,
+            media_info: None,
+            quality: None,
+            file_hash: None,
         });
     }
 
     results
+}
+
+/// Scan a movie folder for the largest video file (max depth 2).
+///
+/// Returns at most one ScannedFile — the largest video file found.
+/// This mirrors `scan_movie_folder()` in `api/v5/movies.rs` but returns
+/// a transport-friendly `ScannedFile` instead of a `MovieFileDbModel`.
+pub fn scan_movie_directory(dir: &Path) -> Option<ScannedFile> {
+    if !dir.exists() {
+        return None;
+    }
+
+    // Handle single-file case: path points directly to a video file
+    if dir.is_file() {
+        if !is_video_file(dir) {
+            return None;
+        }
+        let size = std::fs::metadata(dir).map(|m| m.len() as i64).unwrap_or(0);
+        let filename = dir.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        let release_group = extract_release_group(&filename);
+        return Some(ScannedFile {
+            path: dir.to_path_buf(),
+            size,
+            season_number: None,
+            episode_numbers: vec![],
+            release_group,
+            filename,
+            media_info: None,
+            quality: None,
+            file_hash: None,
+        });
+    }
+
+    let mut best: Option<(PathBuf, i64)> = None;
+
+    fn walk_movie_dir(dir: &Path, best: &mut Option<(PathBuf, i64)>, depth: usize) {
+        if depth > 2 {
+            return;
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk_movie_dir(&path, best, depth + 1);
+                } else if is_video_file(&path) {
+                    let size = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
+                    if best.as_ref().is_none_or(|(_, s)| size > *s) {
+                        *best = Some((path, size));
+                    }
+                }
+            }
+        }
+    }
+
+    walk_movie_dir(dir, &mut best, 0);
+
+    best.map(|(file_path, size)| {
+        let filename = file_path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        let release_group = extract_release_group(&filename);
+        ScannedFile {
+            path: file_path,
+            size,
+            season_number: None,
+            episode_numbers: vec![],
+            release_group,
+            filename,
+            media_info: None,
+            quality: None,
+            file_hash: None,
+        }
+    })
 }
 
 /// Scan multiple paths and aggregate results
@@ -335,6 +409,9 @@ pub fn scan_paths(paths: &[PathBuf]) -> Vec<(PathBuf, Vec<ScannedFile>)> {
                         episode_numbers: parsed_episodes.iter().map(|(_, e)| *e).collect(),
                         release_group: extract_release_group(filename),
                         filename: filename.to_string(),
+                        media_info: None,
+                        quality: None,
+                        file_hash: None,
                     };
                     results.push((path.clone(), vec![scanned]));
                 }

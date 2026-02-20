@@ -15,13 +15,15 @@ pub use redis_bus::HybridEventBus;
 // ============================================================================
 
 /// Type of scan operation for distributed scanning
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanType {
     /// Rescan series directories for episode files
     RescanSeries,
     /// Scan download directory for completed downloads
     DownloadedEpisodesScan,
+    /// Rescan movie directories for video files
+    RescanMovie,
 }
 
 /// A file discovered during scanning
@@ -40,6 +42,15 @@ pub struct ScannedFile {
     pub release_group: Option<String>,
     /// Original filename
     pub filename: String,
+    /// FFmpeg media info JSON (set by worker if available)
+    #[serde(default)]
+    pub media_info: Option<String>,
+    /// Quality JSON derived from resolution (set by worker if available)
+    #[serde(default)]
+    pub quality: Option<String>,
+    /// BLAKE3 content hash (set by worker if available)
+    #[serde(default)]
+    pub file_hash: Option<String>,
 }
 
 /// Event bus for publishing and subscribing to events

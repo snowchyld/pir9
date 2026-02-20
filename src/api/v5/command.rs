@@ -360,7 +360,9 @@ pub async fn execute_command_with_options(
             )
             .await
         }
-        "RescanMovie" => execute_rescan_movie(body, db).await,
+        "RescanMovie" => {
+            execute_rescan_movie(body, db, options.hybrid_event_bus.as_ref()).await
+        }
         "RefreshMonitoredDownloads" => {
             let service = crate::core::queue::TrackedDownloadService::new(db.clone());
             match service.reconcile_downloads().await {
@@ -1038,46 +1040,16 @@ async fn execute_rescan_series(
         tracing::info!("RescanSeries: found {} series to rescan", series_ids.len());
     }
 
-    // Check if we should use distributed scanning
-    // Prefer local scanning for paths accessible to this server — only dispatch
-    // to workers for paths that aren't locally mounted (e.g., remote NAS paths).
+    // Prefer worker scanning when Redis is available — workers have local disk
+    // access and can do FFmpeg probe + BLAKE3 hash much faster than NFS.
+    // Only fall back to local scanning when no Redis/workers are configured.
     if let Some(hybrid_bus) = hybrid_event_bus {
         if hybrid_bus.is_redis_enabled() {
-            let series_repo_check =
-                crate::core::datastore::repositories::SeriesRepository::new(db.clone());
-            let mut local_series_ids = Vec::new();
-            let mut remote_series_ids = Vec::new();
-
-            for &sid in &series_ids {
-                if let Ok(Some(s)) = series_repo_check.get_by_id(sid).await {
-                    if Path::new(&s.path).exists() {
-                        local_series_ids.push(sid);
-                    } else {
-                        remote_series_ids.push(sid);
-                    }
-                }
-            }
-
-            // Dispatch non-local paths to workers
-            if !remote_series_ids.is_empty() {
-                let _ =
-                    execute_rescan_series_distributed(&remote_series_ids, db, hybrid_bus).await;
-            }
-
-            // If nothing to scan locally, we're done
-            if local_series_ids.is_empty() {
-                return Ok(format!(
-                    "Dispatched {} series to workers for scanning",
-                    remote_series_ids.len()
-                ));
-            }
-
-            tracing::info!(
-                "RescanSeries: scanning {} series locally ({} dispatched to workers)",
-                local_series_ids.len(),
-                remote_series_ids.len()
-            );
-            series_ids = local_series_ids;
+            let _ = execute_rescan_series_distributed(&series_ids, db, hybrid_bus).await;
+            return Ok(format!(
+                "Dispatched {} series to workers for scanning",
+                series_ids.len()
+            ));
         }
     }
 
@@ -1864,9 +1836,12 @@ async fn execute_series_search(
 
 /// Execute RescanMovie command — scans a movie's folder for video files.
 /// If a movie has no file or the file path changed, re-scans and updates.
+/// When a worker is available (Redis enabled), dispatches the scan to the worker
+/// for local FFmpeg probe + BLAKE3 hash — much faster than NFS.
 async fn execute_rescan_movie(
     body: &serde_json::Value,
     db: &crate::core::datastore::Database,
+    hybrid_event_bus: Option<&crate::core::messaging::HybridEventBus>,
 ) -> Result<String, String> {
     let movie_id = body
         .get("movieId")
@@ -1884,6 +1859,27 @@ async fn execute_rescan_movie(
 
     tracing::info!("RescanMovie: scanning '{}' at {}", movie.title, movie.path);
 
+    // Prefer worker scanning when Redis is available
+    if let Some(hybrid_bus) = hybrid_event_bus {
+        if hybrid_bus.is_redis_enabled() {
+            let (job_id, message) = crate::core::scanner::create_movie_scan_request(
+                vec![movie_id],
+                vec![movie.path.clone()],
+            );
+            tracing::info!(
+                "RescanMovie: dispatching '{}' to worker (job_id={})",
+                movie.title,
+                job_id
+            );
+            hybrid_bus.publish(message).await;
+            return Ok(format!(
+                "Dispatched movie scan for '{}' to worker (job_id: {})",
+                movie.title, job_id
+            ));
+        }
+    }
+
+    // No Redis/workers — scan locally (fallback)
     let mut folder_path = movie.path.clone();
 
     // If the expected path doesn't exist, try to find a matching folder

@@ -9,6 +9,7 @@ services:
     command: ["--mode", "worker", "--redis-url", "redis://10.0.0.13:6311", "--worker-path", "/volume1/Movies", "--worker-path", "/volume1/Shows"]
     volumes:
       - /volume1/Shows:/volume1/Shows:ro
+      - /volume1/Movies:/volume1/Movies:ro
     environment:
       - TZ=America/New_York
       - RUST_LOG=info,pir9=debug

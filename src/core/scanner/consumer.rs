@@ -1,7 +1,7 @@
 //! Scan result consumer service
 //!
 //! This service runs on the server and processes scan results from distributed workers.
-//! It updates the database with discovered files and links them to episodes.
+//! It updates the database with discovered files and links them to episodes/movies.
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -12,22 +12,25 @@ use tracing::{debug, error, info, warn};
 
 use crate::core::datastore::models::EpisodeFileDbModel;
 use crate::core::datastore::repositories::{
-    EpisodeFileRepository, EpisodeRepository, SeriesRepository,
+    EpisodeFileRepository, EpisodeRepository, MovieFileRepository, MovieRepository,
+    SeriesRepository,
 };
 use crate::core::datastore::Database;
 use crate::core::mediafiles::{compute_file_hash, derive_quality_from_media, MediaAnalyzer};
-use crate::core::messaging::{HybridEventBus, Message, ScannedFile};
+use crate::core::messaging::{HybridEventBus, Message, ScanType, ScannedFile};
 
 /// Tracks pending scan jobs and their results
 #[derive(Debug, Default)]
 pub struct PendingScanJobs {
-    /// Maps job_id -> (series_id, expected results, received results)
+    /// Maps job_id -> pending job state
     jobs: HashMap<String, PendingJob>,
 }
 
 #[derive(Debug)]
 struct PendingJob {
-    series_ids: Vec<i64>,
+    scan_type: ScanType,
+    /// series_ids for RescanSeries, movie_ids for RescanMovie
+    entity_ids: Vec<i64>,
     results_received: usize,
     completed: bool,
 }
@@ -49,18 +52,25 @@ impl ScanResultConsumer {
         }
     }
 
-    /// Register a pending scan job
-    pub async fn register_job(&self, job_id: &str, series_ids: Vec<i64>) {
+    /// Register a pending scan job with its scan type
+    pub async fn register_job(&self, job_id: &str, scan_type: ScanType, entity_ids: Vec<i64>) {
         let mut jobs = self.pending_jobs.write().await;
         jobs.jobs.insert(
             job_id.to_string(),
             PendingJob {
-                series_ids,
+                scan_type,
+                entity_ids,
                 results_received: 0,
                 completed: false,
             },
         );
-        debug!("Registered scan job: {}", job_id);
+        debug!("Registered scan job: {} (type={:?})", job_id, scan_type);
+    }
+
+    /// Get the scan type for a pending job
+    async fn get_job_scan_type(&self, job_id: &str) -> Option<ScanType> {
+        let jobs = self.pending_jobs.read().await;
+        jobs.jobs.get(job_id).map(|j| j.scan_type.clone())
     }
 
     /// Start the consumer loop
@@ -83,14 +93,31 @@ impl ScanResultConsumer {
                         errors,
                     } = message
                     {
-                        self.handle_scan_result(
-                            &job_id,
-                            series_id,
-                            &worker_id,
-                            files_found,
-                            errors,
-                        )
-                        .await;
+                        // Check scan type to route to the right processor
+                        let scan_type = self.get_job_scan_type(&job_id).await;
+                        match scan_type {
+                            Some(ScanType::RescanMovie) => {
+                                self.handle_movie_scan_result(
+                                    &job_id,
+                                    series_id, // actually movie_id
+                                    &worker_id,
+                                    files_found,
+                                    errors,
+                                )
+                                .await;
+                            }
+                            _ => {
+                                // Default: series scan (RescanSeries, DownloadedEpisodesScan, or unknown)
+                                self.handle_scan_result(
+                                    &job_id,
+                                    series_id,
+                                    &worker_id,
+                                    files_found,
+                                    errors,
+                                )
+                                .await;
+                            }
+                        }
                     }
                     // Ignore other message types
                 }
@@ -107,7 +134,7 @@ impl ScanResultConsumer {
         Ok(())
     }
 
-    /// Handle a scan result from a worker
+    /// Handle a series scan result from a worker
     async fn handle_scan_result(
         &self,
         job_id: &str,
@@ -153,12 +180,174 @@ impl ScanResultConsumer {
         }
 
         // Update job tracking
-        {
-            let mut jobs = self.pending_jobs.write().await;
-            if let Some(job) = jobs.jobs.get_mut(job_id) {
-                job.results_received += 1;
-                debug!("Job {} received result {}", job_id, job.results_received);
+        self.mark_job_result_received(job_id).await;
+    }
+
+    /// Handle a movie scan result from a worker
+    async fn handle_movie_scan_result(
+        &self,
+        job_id: &str,
+        movie_id: i64,
+        worker_id: &str,
+        files_found: Vec<ScannedFile>,
+        errors: Vec<String>,
+    ) {
+        info!(
+            "Received movie scan result: job_id={}, movie_id={}, worker={}, files={}, errors={}",
+            job_id,
+            movie_id,
+            worker_id,
+            files_found.len(),
+            errors.len()
+        );
+
+        for error in &errors {
+            warn!(
+                "Worker {} reported error for movie job {}: {}",
+                worker_id, job_id, error
+            );
+        }
+
+        if let Some(file) = files_found.into_iter().next() {
+            if let Err(e) = self.process_movie_scan_result(movie_id, file).await {
+                error!(
+                    "Failed to process movie scan result for movie {}: {}",
+                    movie_id, e
+                );
             }
+        } else {
+            info!("No video files found for movie {} by worker", movie_id);
+            // Clear file reference if movie thought it had one
+            let movie_repo = MovieRepository::new(self.db.clone());
+            if let Ok(Some(movie)) = movie_repo.get_by_id(movie_id).await {
+                if movie.has_file {
+                    let pool = self.db.pool();
+                    let _ = sqlx::query(
+                        "UPDATE movies SET has_file = false, movie_file_id = NULL WHERE id = $1",
+                    )
+                    .bind(movie_id)
+                    .execute(pool)
+                    .await;
+                }
+            }
+        }
+
+        self.mark_job_result_received(job_id).await;
+    }
+
+    /// Process a single movie file from a worker scan result
+    async fn process_movie_scan_result(&self, movie_id: i64, file: ScannedFile) -> Result<()> {
+        let movie_repo = MovieRepository::new(self.db.clone());
+        let file_repo = MovieFileRepository::new(self.db.clone());
+
+        let movie = movie_repo
+            .get_by_id(movie_id)
+            .await
+            .context("Failed to fetch movie")?
+            .ok_or_else(|| anyhow::anyhow!("Movie {} not found", movie_id))?;
+
+        let file_path_str = file.path.to_string_lossy().to_string();
+
+        // Check if file already tracked
+        let existing_files = file_repo.get_by_movie_id(movie_id).await?;
+        if existing_files.iter().any(|f| f.path == file_path_str) {
+            info!(
+                "Movie file already tracked for '{}': {}",
+                movie.title, file_path_str
+            );
+            return Ok(());
+        }
+
+        let relative_path = file
+            .path
+            .strip_prefix(&movie.path)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| file.filename.clone());
+
+        // Use worker-provided enrichment or fall back to local analysis
+        let (media_info, quality_str, file_hash) = if file.media_info.is_some() {
+            // Worker already enriched — use directly
+            let quality = file.quality.unwrap_or_else(|| {
+                serde_json::to_string(&serde_json::json!({
+                    "quality": {"id": 1, "name": "SDTV", "source": "unknown", "resolution": 0},
+                    "revision": {"version": 1, "real": 0, "isRepack": false}
+                }))
+                .expect("static JSON")
+            });
+            (file.media_info, quality, file.file_hash)
+        } else {
+            // No enrichment — run locally (fallback for non-worker scans)
+            let file_path = std::path::Path::new(&file_path_str);
+            let media_info_result = MediaAnalyzer::analyze(file_path).await;
+            let media_info = media_info_result
+                .as_ref()
+                .ok()
+                .and_then(|info| serde_json::to_string(info).ok());
+            let quality = match &media_info_result {
+                Ok(info) => {
+                    serde_json::to_string(&derive_quality_from_media(info, &file.filename))
+                        .unwrap_or_default()
+                }
+                Err(_) => serde_json::to_string(&serde_json::json!({
+                    "quality": {"id": 1, "name": "SDTV", "source": "unknown", "resolution": 0},
+                    "revision": {"version": 1, "real": 0, "isRepack": false}
+                }))
+                .expect("static JSON"),
+            };
+            let file_hash = compute_file_hash(file_path).await.ok();
+            (media_info, quality, file_hash)
+        };
+
+        use crate::core::datastore::models::MovieFileDbModel;
+        let movie_file = MovieFileDbModel {
+            id: 0,
+            movie_id,
+            relative_path,
+            path: file_path_str.clone(),
+            size: file.size,
+            date_added: Utc::now(),
+            scene_name: Some(file.filename.clone()),
+            release_group: file.release_group.clone(),
+            quality: quality_str,
+            languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
+            media_info,
+            original_file_path: Some(file_path_str.clone()),
+            edition: None,
+            file_hash,
+        };
+
+        match file_repo.insert(&movie_file).await {
+            Ok(file_id) => {
+                let pool = self.db.pool();
+                let _ = sqlx::query(
+                    "UPDATE movies SET has_file = true, movie_file_id = $1 WHERE id = $2",
+                )
+                .bind(file_id)
+                .bind(movie_id)
+                .execute(pool)
+                .await;
+                info!(
+                    "Movie scan: found file for '{}': {} ({} bytes)",
+                    movie.title, file_path_str, file.size
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to insert movie file for '{}': {}",
+                    movie.title, e
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Mark a job result as received in the pending jobs tracker
+    async fn mark_job_result_received(&self, job_id: &str) {
+        let mut jobs = self.pending_jobs.write().await;
+        if let Some(job) = jobs.jobs.get_mut(job_id) {
+            job.results_received += 1;
+            debug!("Job {} received result {}", job_id, job.results_received);
         }
     }
 
@@ -187,7 +376,10 @@ impl ScanResultConsumer {
         files
     }
 
-    /// Process scanned files and update the database
+    /// Process scanned files and update the database.
+    ///
+    /// If the worker already enriched files with media_info/quality/file_hash,
+    /// those values are used directly — no local FFmpeg/hash I/O needed.
     async fn process_scanned_files(&self, series_id: i64, files: Vec<ScannedFile>) -> Result<()> {
         if files.is_empty() {
             return Ok(());
@@ -246,33 +438,54 @@ impl ScanResultConsumer {
                     "name": "English"
                 }]);
 
-                // Real media analysis via FFmpeg probe
-                let media_info_result =
-                    MediaAnalyzer::analyze(std::path::Path::new(&file_path_str)).await;
-                let media_info = media_info_result
-                    .as_ref()
-                    .ok()
-                    .and_then(|info| serde_json::to_string(info).ok());
+                // Use worker-provided enrichment or fall back to local analysis
+                let (media_info, quality_json, file_hash) = if file.media_info.is_some() {
+                    // Worker already enriched — use directly (no local disk I/O)
+                    let quality: serde_json::Value = file
+                        .quality
+                        .as_deref()
+                        .and_then(|q| serde_json::from_str(q).ok())
+                        .unwrap_or_else(|| {
+                            serde_json::json!({
+                                "quality": {"id": 1, "name": "SDTV", "source": "unknown", "resolution": 0},
+                                "revision": {"version": 1, "real": 0, "isRepack": false}
+                            })
+                        });
+                    info!(
+                        "Using worker-enriched data for {} (hash={})",
+                        file.filename,
+                        file.file_hash.as_deref().unwrap_or("none")
+                    );
+                    (file.media_info.clone(), quality, file.file_hash.clone())
+                } else {
+                    // No enrichment — FFmpeg probe + hash locally (fallback for local scans)
+                    let media_info_result =
+                        MediaAnalyzer::analyze(std::path::Path::new(&file_path_str)).await;
+                    let media_info = media_info_result
+                        .as_ref()
+                        .ok()
+                        .and_then(|info| serde_json::to_string(info).ok());
 
-                // Quality derived from actual resolution (falls back to SDTV if probe fails)
-                let quality_json = match &media_info_result {
-                    Ok(info) => derive_quality_from_media(info, &file.filename),
-                    Err(e) => {
-                        debug!(
-                            "Media probe failed for {}, using SDTV default: {}",
-                            file_path_str, e
-                        );
-                        serde_json::json!({
-                            "quality": {"id": 1, "name": "SDTV", "source": "unknown", "resolution": 0},
-                            "revision": {"version": 1, "real": 0, "isRepack": false}
-                        })
-                    }
+                    let quality_json = match &media_info_result {
+                        Ok(info) => derive_quality_from_media(info, &file.filename),
+                        Err(e) => {
+                            debug!(
+                                "Media probe failed for {}, using SDTV default: {}",
+                                file_path_str, e
+                            );
+                            serde_json::json!({
+                                "quality": {"id": 1, "name": "SDTV", "source": "unknown", "resolution": 0},
+                                "revision": {"version": 1, "real": 0, "isRepack": false}
+                            })
+                        }
+                    };
+
+                    let file_hash = compute_file_hash(std::path::Path::new(&file_path_str))
+                        .await
+                        .ok();
+
+                    (media_info, quality_json, file_hash)
                 };
-
-                // BLAKE3 content hash
-                let file_hash = compute_file_hash(std::path::Path::new(&file_path_str))
-                    .await
-                    .ok();
 
                 let episode_file = EpisodeFileDbModel {
                     id: 0,
@@ -360,14 +573,28 @@ impl ScanResultConsumer {
     }
 }
 
-/// Create a scan request message
+/// Create a scan request message for series
 pub fn create_scan_request(series_ids: Vec<i64>, paths: Vec<String>) -> (String, Message) {
     let job_id = uuid::Uuid::new_v4().to_string();
 
     let message = Message::ScanRequest {
         job_id: job_id.clone(),
-        scan_type: crate::core::messaging::ScanType::RescanSeries,
+        scan_type: ScanType::RescanSeries,
         series_ids: series_ids.clone(),
+        paths,
+    };
+
+    (job_id, message)
+}
+
+/// Create a scan request message for movies
+pub fn create_movie_scan_request(movie_ids: Vec<i64>, paths: Vec<String>) -> (String, Message) {
+    let job_id = uuid::Uuid::new_v4().to_string();
+
+    let message = Message::ScanRequest {
+        job_id: job_id.clone(),
+        scan_type: ScanType::RescanMovie,
+        series_ids: movie_ids.clone(), // reused field for movie IDs
         paths,
     };
 
