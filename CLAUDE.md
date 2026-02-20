@@ -4,14 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Pir9 is a Smart PVR (Personal Video Recorder) for TV and anime, written in Rust. It's a rewrite of Sonarr that maintains API compatibility while leveraging Rust's performance and safety.
+pir9 is a Smart PVR (Personal Video Recorder) for TV and anime, written in Rust. It's a rewrite of Sonarr that maintains API compatibility while leveraging Rust's performance and safety.
 
 ## Build & Development Commands
 
 ```bash
 # Build
-cargo build --release                    # Release build
-cargo build --release --features "redis-events"  # With Redis event bus
+cargo build --release                    # Release build (includes postgres + redis-events)
 
 # Test
 cargo test                               # Run all tests

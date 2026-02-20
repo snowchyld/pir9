@@ -1,6 +1,6 @@
 # Distributed Scanning
 
-Pir9 supports distributed file scanning where workers run on machines with direct disk access to media files. This eliminates network I/O overhead when the main server accesses files over NFS/SMB mounts.
+pir9 supports distributed file scanning where workers run on machines with direct disk access to media files. This eliminates network I/O overhead when the main server accesses files over NFS/SMB mounts.
 
 ## Architecture
 
@@ -29,10 +29,10 @@ Pir9 supports distributed file scanning where workers run on machines with direc
 
 ## Quick Start
 
-### 1. Build with Redis Support
+### 1. Build
 
 ```bash
-cargo build --release --features redis-events
+cargo build --release  # redis-events is included by default
 # or
 make release
 ```
@@ -258,7 +258,7 @@ services:
    redis-cli -h your-server-ip ping
    ```
 
-2. Verify worker paths match series paths in Pir9
+2. Verify worker paths match series paths in pir9
 
 3. Check worker logs:
    ```bash

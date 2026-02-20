@@ -1,4 +1,4 @@
-# Dockerfile for Pir9 API server
+# Dockerfile for pir9 API server
 # Multi-stage build for minimal final image
 
 # ============================================================================
@@ -25,7 +25,7 @@ RUN mkdir src && \
     echo "fn main() {}" > src/cli.rs
 
 # Build dependencies only (this layer will be cached)
-RUN cargo build --release --features "redis-events" && \
+RUN cargo build --release && \
     rm -rf src target/release/.fingerprint/pir9-*
 
 # Copy the actual source code
@@ -33,7 +33,7 @@ COPY src ./src
 COPY migrations ./migrations
 
 # Build the application
-RUN cargo build --release --features "redis-events"
+RUN cargo build --release
 
 # ============================================================================
 # Stage 2: Create minimal runtime image

@@ -20,7 +20,7 @@ COPY src ./src
 COPY migrations ./migrations
 
 # Build release binary with Redis support for distributed scanning
-RUN cargo build --release --features redis-events
+RUN cargo build --release
 
 # Runtime stage
 FROM debian:bookworm-slim

@@ -88,7 +88,7 @@ impl AppState {
         _scheduler: JobScheduler,
         _redis_url: &str,
     ) -> anyhow::Result<Arc<Self>> {
-        anyhow::bail!("Redis support requires the 'redis-events' feature to be enabled. Build with: cargo build --features redis-events")
+        anyhow::bail!("Redis support requires the 'redis-events' feature (enabled by default). Was this built with --no-default-features?")
     }
 }
 
@@ -203,7 +203,7 @@ pub async fn initialize_json(
         api_key: state.config.security.secret_key.chars().take(32).collect(),
         release: "develop".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        instance_name: "Pir9".to_string(),
+        instance_name: "pir9".to_string(),
         theme: "auto".to_string(),
         branch: "develop".to_string(),
         analytics: false,

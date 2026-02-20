@@ -224,7 +224,7 @@ impl WorkerRunner {
     /// Fallback when redis-events feature is not enabled
     #[cfg(not(feature = "redis-events"))]
     pub async fn run(self) -> Result<()> {
-        anyhow::bail!("Worker mode requires the 'redis-events' feature. Build with: cargo build --features redis-events")
+        anyhow::bail!("Worker mode requires the 'redis-events' feature (enabled by default). Was this built with --no-default-features?")
     }
 
     /// Handle an incoming message

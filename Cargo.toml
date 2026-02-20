@@ -1,6 +1,6 @@
 [package]
 name = "pir9"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2021"
 rust-version = "1.93"
 authors = ["pir9 Team"]
@@ -182,7 +182,7 @@ insta = { version = "1.46", features = ["json", "redactions"] }
 pretty_assertions = "1.4"
 
 [features]
-default = ["postgres"]
+default = ["postgres", "redis-events"]
 postgres = ["sqlx/postgres"]
 seaorm = ["sea-orm"]
 torrent = ["librqbit"]

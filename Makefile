@@ -1,4 +1,4 @@
-# Pir9 Makefile
+# pir9 Makefile
 # Simplifies Docker operations for development and deployment
 
 # Registry configuration
@@ -20,7 +20,7 @@ FULL_IMAGE = $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
 
 # Default target
 help:
-	@echo "Pir9 Development Commands"
+	@echo "pir9 Development Commands"
 	@echo "=============================="
 	@echo ""
 	@echo "Docker Operations:"
@@ -120,7 +120,7 @@ build-all:
 
 dev-api:
 	@echo "Building Rust API (release)..."
-	cargo build --release --features "redis-events"
+	cargo build --release
 	@echo "Binary ready at: target/release/pir9"
 
 dev-frontend:
@@ -199,7 +199,7 @@ watch-frontend:
 
 # Run API locally (without Docker)
 run-api:
-	RUST_LOG=debug cargo run --release --features "redis-events"
+	RUST_LOG=debug cargo run --release
 
 # Database migrations
 migrate:
@@ -207,7 +207,7 @@ migrate:
 
 # Check what would be built
 check:
-	cargo check --features "redis-events"
+	cargo check
 
 # =============================================================================
 # Registry Operations
