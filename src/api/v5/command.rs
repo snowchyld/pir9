@@ -118,6 +118,7 @@ pub async fn create_command(
         let db = state.db.clone();
         let event_bus = state.event_bus.clone();
         let hybrid_event_bus = state.hybrid_event_bus.clone();
+        let metadata_service = state.metadata_service.clone();
         let cmd_id = id;
         let cmd_name = name.to_string();
         let cmd_body = body.clone();
@@ -140,6 +141,7 @@ pub async fn create_command(
             // Execute command based on type (with distributed scanning support)
             let options = CommandExecutionOptions {
                 hybrid_event_bus,
+                metadata_service: Some(metadata_service),
             };
             let result = execute_command_with_options(&cmd_name, &cmd_body, &db, &event_bus, options).await;
 
@@ -234,28 +236,20 @@ pub fn routes() -> Router<Arc<AppState>> {
 pub struct CommandExecutionOptions {
     /// Hybrid event bus for distributed scanning (if in server mode)
     pub hybrid_event_bus: Option<crate::core::messaging::HybridEventBus>,
+    /// Metadata service for IMDB-first metadata fetching
+    pub metadata_service: Option<crate::core::metadata::MetadataService>,
 }
 
 impl Default for CommandExecutionOptions {
     fn default() -> Self {
         Self {
             hybrid_event_bus: None,
+            metadata_service: None,
         }
     }
 }
 
-/// Execute a command based on its type
-/// Public so v3 API can reuse the same implementation
-pub async fn execute_command(
-    name: &str,
-    body: &serde_json::Value,
-    db: &crate::core::datastore::Database,
-    event_bus: &crate::core::messaging::EventBus,
-) -> Result<String, String> {
-    execute_command_with_options(name, body, db, event_bus, CommandExecutionOptions::default()).await
-}
-
-/// Execute a command with additional options (for distributed mode)
+/// Execute a command with additional options (for distributed mode and IMDB metadata)
 pub async fn execute_command_with_options(
     name: &str,
     body: &serde_json::Value,
@@ -264,7 +258,7 @@ pub async fn execute_command_with_options(
     options: CommandExecutionOptions,
 ) -> Result<String, String> {
     match name {
-        "RefreshSeries" => execute_refresh_series(body, db, event_bus).await,
+        "RefreshSeries" => execute_refresh_series(body, db, event_bus, options.metadata_service.as_ref()).await,
         "RescanSeries" => execute_rescan_series(body, db, event_bus, options.hybrid_event_bus.as_ref()).await,
         "DownloadedEpisodesScan" | "ProcessMonitoredDownloads" => {
             execute_process_downloads(body, db, event_bus).await
@@ -301,14 +295,16 @@ pub async fn execute_command_with_options(
     }
 }
 
-/// Execute RefreshSeries command - fetches metadata from Skyhook for each series
+/// Execute RefreshSeries command - fetches metadata using MetadataService (IMDB-first + Skyhook fallback)
 async fn execute_refresh_series(
     body: &serde_json::Value,
     db: &crate::core::datastore::Database,
     event_bus: &crate::core::messaging::EventBus,
+    metadata_service: Option<&crate::core::metadata::MetadataService>,
 ) -> Result<String, String> {
     use crate::core::datastore::models::EpisodeDbModel;
     use crate::core::datastore::repositories::{EpisodeRepository, SeriesRepository};
+    use crate::core::metadata::EpisodeEnrichment;
     use chrono::{NaiveDate, Utc};
 
     let series_repo = SeriesRepository::new(db.clone());
@@ -348,8 +344,6 @@ async fn execute_refresh_series(
 
     tracing::info!("RefreshSeries: refreshing {} series", series_ids.len());
 
-    let client = reqwest::Client::new();
-
     let mut refreshed = 0;
     let mut errors = 0;
 
@@ -370,70 +364,69 @@ async fn execute_refresh_series(
 
         tracing::info!("RefreshSeries: refreshing {} (TVDB: {})", series.title, series.tvdb_id);
 
-        // Fetch from Skyhook
-        let url = format!("http://skyhook.sonarr.tv/v1/tvdb/shows/en/{}", series.tvdb_id);
-        let response = match client
-            .get(&url)
-            .header("User-Agent", "Sonarr-rs/0.1.0")
-            .send()
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("RefreshSeries: failed to fetch from Skyhook for {}: {}", series.title, e);
-                errors += 1;
-                continue;
+        // Fetch metadata using MetadataService (IMDB-first) or fall back to direct Skyhook
+        let metadata = if let Some(svc) = metadata_service {
+            match svc.fetch_series_metadata(series.tvdb_id, series.imdb_id.as_deref()).await {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!("RefreshSeries: failed to fetch metadata for {}: {}", series.title, e);
+                    errors += 1;
+                    continue;
+                }
+            }
+        } else {
+            // Fallback: direct Skyhook call (when MetadataService not available)
+            match crate::core::metadata::MetadataService::fetch_skyhook_only(series.tvdb_id).await {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!("RefreshSeries: failed to fetch from Skyhook for {}: {}", series.title, e);
+                    errors += 1;
+                    continue;
+                }
             }
         };
 
-        if !response.status().is_success() {
-            tracing::error!("RefreshSeries: Skyhook returned {} for {}", response.status(), series.title);
-            errors += 1;
-            continue;
-        }
-
-        let skyhook: SkyhookShowResponse = match response.json().await {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("RefreshSeries: failed to parse Skyhook response for {}: {}", series.title, e);
-                errors += 1;
-                continue;
-            }
-        };
-
-        // Update series metadata
+        // Update series metadata from merged result
         let mut series = series;
-        series.overview = skyhook.overview;
-        series.status = match skyhook.status.as_deref().map(|s| s.to_lowercase()).as_deref() {
+        series.overview = metadata.overview;
+        series.status = match metadata.status.as_deref().map(|s| s.to_lowercase()).as_deref() {
             Some("continuing") => 0,
             Some("ended") => 1,
             Some("upcoming") => 2,
             _ => series.status,
         };
-        series.network = skyhook.network;
-        series.runtime = skyhook.runtime.unwrap_or(series.runtime);
-        series.certification = skyhook.content_rating;
-        // Update year from Skyhook, or derive from firstAired if not provided
+        series.network = metadata.network;
+        series.runtime = metadata.runtime.unwrap_or(series.runtime);
+        series.certification = metadata.certification;
+
+        // Update year (IMDB-preferred via metadata merge)
         let old_year = series.year;
-        if let Some(year) = skyhook.year {
+        if let Some(year) = metadata.year {
             series.year = year;
-            tracing::debug!("RefreshSeries: {} - using Skyhook year: {}", series.title, year);
-        } else if let Some(first_aired) = &skyhook.first_aired {
-            // Derive year from firstAired date (e.g., "2000-12-30" -> 2000)
+        } else if let Some(first_aired) = &metadata.first_aired {
             if let Some(year_str) = first_aired.split('-').next() {
                 if let Ok(year) = year_str.parse::<i32>() {
                     series.year = year;
-                    tracing::debug!("RefreshSeries: {} - derived year {} from firstAired {}", series.title, year, first_aired);
                 }
             }
         }
         if series.year != old_year {
             tracing::info!("RefreshSeries: {} - year updated from {} to {}", series.title, old_year, series.year);
         }
-        if let Some(first_aired) = &skyhook.first_aired {
+        if let Some(first_aired) = &metadata.first_aired {
             series.first_aired = NaiveDate::parse_from_str(first_aired, "%Y-%m-%d").ok();
         }
         series.last_info_sync = Some(Utc::now());
+
+        // Capture IMDB data
+        if let Some(ref imdb_id) = metadata.imdb_id {
+            if series.imdb_id.is_none() {
+                tracing::info!("RefreshSeries: {} - captured imdb_id: {}", series.title, imdb_id);
+            }
+            series.imdb_id = Some(imdb_id.clone());
+        }
+        series.imdb_rating = metadata.imdb_rating;
+        series.imdb_votes = metadata.imdb_votes;
 
         // Update series in database
         if let Err(e) = series_repo.update(&series).await {
@@ -442,11 +435,11 @@ async fn execute_refresh_series(
             continue;
         }
 
-        // Sync episodes
+        // Sync episodes from Skyhook data
         let mut episodes_added = 0;
         let mut episodes_updated = 0;
 
-        for ep in skyhook.episodes.unwrap_or_default() {
+        for ep in &metadata.episodes {
             let air_date = ep.air_date.as_ref()
                 .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
             let air_date_utc = ep.air_date_utc.as_ref()
@@ -462,8 +455,8 @@ async fn execute_refresh_series(
 
             match existing {
                 Some(mut episode) => {
-                    episode.title = ep.title.unwrap_or_else(|| format!("Episode {}", ep.episode_number));
-                    episode.overview = ep.overview;
+                    episode.title = ep.title.clone().unwrap_or_else(|| format!("Episode {}", ep.episode_number));
+                    episode.overview = ep.overview.clone();
                     episode.air_date = air_date;
                     episode.air_date_utc = air_date_utc;
                     episode.runtime = ep.runtime.unwrap_or(0);
@@ -488,8 +481,8 @@ async fn execute_refresh_series(
                         scene_absolute_episode_number: None,
                         scene_episode_number: None,
                         scene_season_number: None,
-                        title: ep.title.unwrap_or_else(|| format!("Episode {}", ep.episode_number)),
-                        overview: ep.overview,
+                        title: ep.title.clone().unwrap_or_else(|| format!("Episode {}", ep.episode_number)),
+                        overview: ep.overview.clone(),
                         air_date,
                         air_date_utc,
                         runtime: ep.runtime.unwrap_or(0),
@@ -498,10 +491,41 @@ async fn execute_refresh_series(
                         unverified_scene_numbering: false,
                         added: Utc::now(),
                         last_search_time: None,
+                        imdb_id: None,
+                        imdb_rating: None,
+                        imdb_votes: None,
                     };
 
                     if episode_repo.insert(&episode).await.is_ok() {
                         episodes_added += 1;
+                    }
+                }
+            }
+        }
+
+        // Enrich episodes with IMDB ratings
+        if let (Some(svc), Some(ref imdb_id)) = (metadata_service, &series.imdb_id) {
+            let all_episodes = episode_repo.get_by_series_id(*series_id).await
+                .unwrap_or_default();
+            let mut enrichments: Vec<EpisodeEnrichment> = all_episodes.iter().map(|e| EpisodeEnrichment {
+                season_number: e.season_number,
+                episode_number: e.episode_number,
+                imdb_id: None,
+                imdb_rating: None,
+                imdb_votes: None,
+            }).collect();
+
+            if let Ok(enriched) = svc.enrich_episodes_with_imdb(imdb_id, &mut enrichments).await {
+                if enriched > 0 {
+                    // Write enriched data back to DB
+                    for (ep_model, enrichment) in all_episodes.iter().zip(enrichments.iter()) {
+                        if enrichment.imdb_id.is_some() {
+                            let mut updated = ep_model.clone();
+                            updated.imdb_id = enrichment.imdb_id.clone();
+                            updated.imdb_rating = enrichment.imdb_rating;
+                            updated.imdb_votes = enrichment.imdb_votes;
+                            let _ = episode_repo.update(&updated).await;
+                        }
                     }
                 }
             }
@@ -522,9 +546,6 @@ async fn execute_refresh_series(
     }
 
     // After refreshing metadata, also run a disk scan to update file status
-    // This mimics Sonarr's behavior where RefreshSeries also rescans files
-    // Note: This always scans locally since RefreshSeries doesn't have hybrid_event_bus context
-    // For distributed scanning, use RescanSeries command directly
     if !series_ids.is_empty() {
         tracing::info!("RefreshSeries: triggering disk rescan for {} series", series_ids.len());
         if let Err(e) = execute_rescan_series(body, db, event_bus, None).await {
@@ -981,38 +1002,6 @@ fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
     episodes
 }
 
-
-/// Skyhook show response for command execution
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-struct SkyhookShowResponse {
-    tvdb_id: i64,
-    title: String,
-    overview: Option<String>,
-    status: Option<String>,
-    year: Option<i32>,
-    first_aired: Option<String>,
-    runtime: Option<i32>,
-    network: Option<String>,
-    content_rating: Option<String>,
-    genres: Option<Vec<String>>,
-    episodes: Option<Vec<SkyhookEpisodeResponse>>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SkyhookEpisodeResponse {
-    tvdb_id: i64,
-    season_number: i32,
-    episode_number: i32,
-    absolute_episode_number: Option<i32>,
-    title: Option<String>,
-    overview: Option<String>,
-    air_date: Option<String>,
-    air_date_utc: Option<String>,
-    runtime: Option<i32>,
-}
 
 /// Execute EpisodeSearch command - search indexers for specific episodes
 async fn execute_episode_search(

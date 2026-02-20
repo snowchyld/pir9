@@ -17,6 +17,8 @@ use tracing::{info, error};
 use crate::core::{
     configuration::AppConfig,
     datastore::Database,
+    imdb::ImdbClient,
+    metadata::MetadataService,
     scheduler::JobScheduler,
     messaging::{EventBus, HybridEventBus},
 };
@@ -27,6 +29,10 @@ pub struct AppState {
     pub config: AppConfig,
     pub db: Database,
     pub scheduler: JobScheduler,
+    /// IMDB microservice client
+    pub imdb_client: ImdbClient,
+    /// Unified metadata service (IMDB + Skyhook)
+    pub metadata_service: MetadataService,
     /// Event bus for real-time updates (local or Redis-backed)
     pub event_bus: EventBus,
     /// Hybrid event bus for distributed scanning (if Redis enabled)
@@ -40,10 +46,14 @@ impl AppState {
         db: Database,
         scheduler: JobScheduler,
     ) -> anyhow::Result<Arc<Self>> {
+        let imdb_client = ImdbClient::from_env();
+        let metadata_service = MetadataService::new(imdb_client.clone());
         Ok(Arc::new(Self {
             config,
             db,
             scheduler,
+            imdb_client,
+            metadata_service,
             event_bus: EventBus::new(),
             hybrid_event_bus: None,
         }))
@@ -72,10 +82,14 @@ impl AppState {
 
         info!("Redis event bus initialized");
 
+        let imdb_client = ImdbClient::from_env();
+        let metadata_service = MetadataService::new(imdb_client.clone());
         Ok(Arc::new(Self {
             config,
             db,
             scheduler,
+            imdb_client,
+            metadata_service,
             event_bus: EventBus::new(),
             hybrid_event_bus: Some(hybrid_bus),
         }))

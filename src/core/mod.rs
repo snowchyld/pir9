@@ -4,7 +4,9 @@
 pub mod configuration;
 pub mod datastore;
 pub mod download;
+pub mod imdb;
 pub mod indexers;
+pub mod metadata;
 pub mod logging;
 pub mod mediafiles;
 pub mod messaging;

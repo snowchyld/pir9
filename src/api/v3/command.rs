@@ -142,6 +142,7 @@ pub async fn create_command(
     tokio::spawn({
         let db = state.db.clone();
         let event_bus = state.event_bus.clone();
+        let metadata_service = state.metadata_service.clone();
         let cmd_id = id;
         let cmd_name = name.to_string();
         let cmd_body = body.clone();
@@ -161,8 +162,12 @@ pub async fn create_command(
                 message: Some(format!("Starting {}", cmd_name)),
             }).await;
 
-            // Execute command based on type (reuse v5 execute_command)
-            let result = crate::api::v5::command::execute_command(&cmd_name, &cmd_body, &db, &event_bus).await;
+            // Execute command based on type (reuse v5 with metadata service)
+            let options = crate::api::v5::command::CommandExecutionOptions {
+                hybrid_event_bus: None,
+                metadata_service: Some(metadata_service),
+            };
+            let result = crate::api::v5::command::execute_command_with_options(&cmd_name, &cmd_body, &db, &event_bus, options).await;
 
             // Mark as completed or failed
             match result {

@@ -37,6 +37,8 @@ pub struct SeriesDbModel {
     pub use_scene_numbering: bool,
     pub added: DateTime<Utc>,
     pub last_info_sync: Option<DateTime<Utc>>,
+    pub imdb_rating: Option<f32>,
+    pub imdb_votes: Option<i32>,
 }
 
 /// Episode database model
@@ -62,6 +64,9 @@ pub struct EpisodeDbModel {
     pub unverified_scene_numbering: bool,
     pub added: DateTime<Utc>,
     pub last_search_time: Option<DateTime<Utc>>,
+    pub imdb_id: Option<String>,
+    pub imdb_rating: Option<f32>,
+    pub imdb_votes: Option<i32>,
 }
 
 /// Episode file database model

@@ -143,9 +143,14 @@ async fn run_server_mode(args: &Args) -> Result<()> {
         }
     }
 
-    // Initialize job scheduler
-    let scheduler = JobScheduler::new(database.clone())
+    // Initialize job scheduler with metadata service for IMDB-enriched refreshes
+    let mut scheduler = JobScheduler::new(database.clone())
         .context("Failed to initialize job scheduler")?;
+    {
+        let imdb_client = crate::core::imdb::ImdbClient::from_env();
+        let metadata_service = crate::core::metadata::MetadataService::new(imdb_client);
+        scheduler.set_metadata_service(metadata_service);
+    }
 
     // Create application state (with Redis event bus if in server mode)
     let state = if args.mode == RunMode::Server {

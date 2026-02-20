@@ -21,6 +21,7 @@ use crate::core::indexers::create_client_from_model as create_indexer_client;
 pub struct JobScheduler {
     db: Database,
     jobs: Arc<RwLock<Vec<ScheduledJob>>>,
+    metadata_service: Option<crate::core::metadata::MetadataService>,
 }
 
 impl JobScheduler {
@@ -28,7 +29,13 @@ impl JobScheduler {
         Ok(Self {
             db,
             jobs: Arc::new(RwLock::new(Vec::new())),
+            metadata_service: None,
         })
+    }
+
+    /// Set the metadata service for IMDB-enriched refreshes
+    pub fn set_metadata_service(&mut self, service: crate::core::metadata::MetadataService) {
+        self.metadata_service = Some(service);
     }
     
     /// Initialize default scheduled jobs
@@ -116,8 +123,9 @@ impl JobScheduler {
         for job in jobs {
             if job.enabled && job.interval_minutes > 0 {
                 let db = self.db.clone();
+                let metadata_service = self.metadata_service.clone();
                 tokio::spawn(async move {
-                    run_job_loop(job, db).await;
+                    run_job_loop(job, db, metadata_service).await;
                 });
             }
         }
@@ -136,10 +144,10 @@ impl JobScheduler {
         let job = jobs.iter()
             .find(|j| j.id == job_id)
             .context("Job not found")?;
-        
+
         info!("Executing job: {}", job.name);
-        execute_job_command(&job.command, &self.db).await?;
-        
+        execute_job_command(&job.command, &self.db, self.metadata_service.as_ref()).await?;
+
         Ok(())
     }
     
@@ -155,29 +163,37 @@ impl JobScheduler {
 }
 
 /// Run a job in a loop with its interval
-async fn run_job_loop(job: ScheduledJob, db: Database) {
+async fn run_job_loop(
+    job: ScheduledJob,
+    db: Database,
+    metadata_service: Option<crate::core::metadata::MetadataService>,
+) {
     let interval = tokio::time::Duration::from_secs(job.interval_minutes as u64 * 60);
     let mut interval_timer = tokio::time::interval(interval);
-    
+
     info!("Started job loop for: {} (every {} minutes)", job.name, job.interval_minutes);
-    
+
     loop {
         interval_timer.tick().await;
-        
-        if let Err(e) = execute_job_command(&job.command, &db).await {
+
+        if let Err(e) = execute_job_command(&job.command, &db, metadata_service.as_ref()).await {
             error!("Job '{}' failed: {}", job.name, e);
         }
     }
 }
 
 /// Execute a job command
-async fn execute_job_command(command: &JobCommand, db: &Database) -> Result<()> {
+async fn execute_job_command(
+    command: &JobCommand,
+    db: &Database,
+    metadata_service: Option<&crate::core::metadata::MetadataService>,
+) -> Result<()> {
     match command {
         JobCommand::RssSync => {
             execute_rss_sync(db).await?;
         }
         JobCommand::RefreshSeries => {
-            execute_refresh_series(db).await?;
+            execute_refresh_series(db, metadata_service).await?;
         }
         JobCommand::DownloadedEpisodesScan => {
             execute_downloaded_episodes_scan(db).await?;
@@ -238,7 +254,10 @@ async fn execute_rss_sync(db: &Database) -> Result<()> {
 }
 
 /// Refresh Series: Update metadata for all series that need it
-async fn execute_refresh_series(db: &Database) -> Result<()> {
+async fn execute_refresh_series(
+    db: &Database,
+    metadata_service: Option<&crate::core::metadata::MetadataService>,
+) -> Result<()> {
     info!("Executing series refresh...");
 
     let series_repo = SeriesRepository::new(db.clone());
@@ -261,19 +280,37 @@ async fn execute_refresh_series(db: &Database) -> Result<()> {
 
         info!("Refreshing series: {} (TVDB: {})", series.title, series.tvdb_id);
 
-        // Fetch updated metadata from Skyhook
-        let url = format!("http://skyhook.sonarr.tv/v1/tvdb/shows/en/{}", series.tvdb_id);
-        let client = reqwest::Client::new();
+        // Fetch metadata using MetadataService (IMDB-first) or Skyhook-only fallback
+        let metadata = if let Some(svc) = metadata_service {
+            svc.fetch_series_metadata(series.tvdb_id, series.imdb_id.as_deref()).await
+        } else {
+            crate::core::metadata::MetadataService::fetch_skyhook_only(series.tvdb_id).await
+        };
 
-        match client.get(&url)
-            .header("User-Agent", "pir9/0.1.0")
-            .send()
-            .await
-        {
-            Ok(response) if response.status().is_success() => {
-                // Update series in database
+        match metadata {
+            Ok(m) => {
                 let mut updated_series = series.clone();
                 updated_series.last_info_sync = Some(chrono::Utc::now());
+
+                // Apply merged metadata
+                updated_series.overview = m.overview;
+                updated_series.status = match m.status.as_deref().map(|s| s.to_lowercase()).as_deref() {
+                    Some("continuing") => 0,
+                    Some("ended") => 1,
+                    Some("upcoming") => 2,
+                    _ => updated_series.status,
+                };
+                updated_series.network = m.network;
+                updated_series.runtime = m.runtime.unwrap_or(updated_series.runtime);
+                updated_series.certification = m.certification;
+                if let Some(year) = m.year {
+                    updated_series.year = year;
+                }
+                if let Some(ref imdb_id) = m.imdb_id {
+                    updated_series.imdb_id = Some(imdb_id.clone());
+                }
+                updated_series.imdb_rating = m.imdb_rating;
+                updated_series.imdb_votes = m.imdb_votes;
 
                 if let Err(e) = series_repo.update(&updated_series).await {
                     error!("Failed to update series {}: {}", series.title, e);
@@ -281,10 +318,6 @@ async fn execute_refresh_series(db: &Database) -> Result<()> {
                 } else {
                     refreshed += 1;
                 }
-            }
-            Ok(response) => {
-                warn!("Skyhook returned {} for series {}", response.status(), series.title);
-                errors += 1;
             }
             Err(e) => {
                 warn!("Failed to fetch metadata for series {}: {}", series.title, e);

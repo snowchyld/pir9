@@ -213,6 +213,8 @@ async fn create_series(
         use_scene_numbering: false,
         added: Utc::now(),
         last_info_sync: None,
+        imdb_rating: None,
+        imdb_votes: None,
     };
 
     let id = repo.insert(&db_series).await
@@ -222,13 +224,14 @@ async fn create_series(
 
     // Spawn background task to refresh series (fetch episodes) and rescan disk
     let db_clone = state.db.clone();
+    let metadata_svc = state.metadata_service.clone();
     let series_id = id;
     let series_title = options.title.clone();
     tokio::spawn(async move {
         tracing::info!("Auto-refreshing new series: {} (id={})", series_title, series_id);
 
-        // Trigger refresh to fetch episodes from Skyhook
-        if let Err(e) = auto_refresh_series(series_id, &db_clone).await {
+        // Trigger refresh to fetch episodes from IMDB + Skyhook
+        if let Err(e) = auto_refresh_series(series_id, &db_clone, &metadata_svc).await {
             tracing::error!("Failed to auto-refresh series {}: {}", series_id, e);
         }
 
@@ -382,6 +385,8 @@ async fn import_series(
             use_scene_numbering: false,
             added: Utc::now(),
             last_info_sync: None,
+            imdb_rating: None,
+            imdb_votes: None,
         };
 
         match repo.insert(&db_series).await {
@@ -392,10 +397,11 @@ async fn import_series(
 
                     // Queue auto-refresh for this series
                     let db_clone = state.db.clone();
+                    let metadata_svc = state.metadata_service.clone();
                     let series_title = options.title.clone();
                     tokio::spawn(async move {
                         tracing::info!("Auto-refreshing imported series: {} (id={})", series_title, id);
-                        if let Err(e) = auto_refresh_series(id, &db_clone).await {
+                        if let Err(e) = auto_refresh_series(id, &db_clone, &metadata_svc).await {
                             tracing::error!("Failed to auto-refresh series {}: {}", id, e);
                         }
                         if let Err(e) = auto_scan_series(id, &db_clone).await {
@@ -601,13 +607,14 @@ async fn delete_series(
     Ok(())
 }
 
-/// Refresh series from metadata source (Skyhook)
+/// Refresh series from metadata sources (IMDB + Skyhook)
 async fn refresh_series(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<SeriesResponse>, ApiError> {
     use crate::core::datastore::models::EpisodeDbModel;
     use crate::core::datastore::repositories::EpisodeRepository;
+    use crate::core::metadata::EpisodeEnrichment;
 
     let repo = SeriesRepository::new(state.db.clone());
     let episode_repo = EpisodeRepository::new(state.db.clone());
@@ -618,74 +625,59 @@ async fn refresh_series(
 
     tracing::info!("Refreshing series: {} (TVDB: {})", series.title, series.tvdb_id);
 
-    // Fetch metadata from Skyhook
-    let url = format!(
-        "http://skyhook.sonarr.tv/v1/tvdb/shows/en/{}",
-        series.tvdb_id
-    );
-
-    let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .header("User-Agent", "Sonarr-rs/0.1.0")
-        .send()
+    // Fetch merged metadata from IMDB + Skyhook
+    let metadata = state.metadata_service
+        .fetch_series_metadata(series.tvdb_id, series.imdb_id.as_deref())
         .await
-        .map_err(|e| ApiError::Internal(format!("Failed to fetch from Skyhook: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch metadata: {}", e)))?;
 
-    if !response.status().is_success() {
-        return Err(ApiError::Internal(format!(
-            "Skyhook returned status: {}",
-            response.status()
-        )));
-    }
-
-    let skyhook: SkyhookShowResponse = response
-        .json()
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to parse Skyhook response: {}", e)))?;
-
-    // Update series metadata
-    series.overview = skyhook.overview;
-    series.status = match skyhook.status.as_deref().map(|s| s.to_lowercase()).as_deref() {
+    // Update series metadata from merged result
+    series.overview = metadata.overview;
+    series.status = match metadata.status.as_deref().map(|s| s.to_lowercase()).as_deref() {
         Some("continuing") => 0,
         Some("ended") => 1,
         Some("upcoming") => 2,
         _ => 0,
     };
-    series.network = skyhook.network;
-    series.runtime = skyhook.runtime.unwrap_or(series.runtime);
-    series.certification = skyhook.content_rating;
-    // Update year from Skyhook, or derive from firstAired if not provided
-    if let Some(year) = skyhook.year {
+    series.network = metadata.network;
+    series.runtime = metadata.runtime.unwrap_or(series.runtime);
+    series.certification = metadata.certification;
+    if let Some(year) = metadata.year {
         series.year = year;
-    } else if let Some(first_aired) = &skyhook.first_aired {
+    } else if let Some(first_aired) = &metadata.first_aired {
         if let Some(year_str) = first_aired.split('-').next() {
             if let Ok(year) = year_str.parse::<i32>() {
                 series.year = year;
             }
         }
     }
-    if let Some(first_aired) = &skyhook.first_aired {
+    if let Some(first_aired) = &metadata.first_aired {
         series.first_aired = NaiveDate::parse_from_str(first_aired, "%Y-%m-%d").ok();
     }
+    // Capture imdb_id from metadata if we don't have one
+    if series.imdb_id.is_none() {
+        series.imdb_id = metadata.imdb_id.clone();
+    }
+    // Apply IMDB ratings
+    series.imdb_rating = metadata.imdb_rating;
+    series.imdb_votes = metadata.imdb_votes;
     series.last_info_sync = Some(Utc::now());
 
     // Update series in database
     repo.update(&series).await
         .map_err(|e| ApiError::Internal(format!("Failed to update series: {}", e)))?;
 
-    // Sync episodes from Skyhook
+    // Sync episodes from Skyhook (episodes always come from Skyhook for tvdb_id matching)
     let mut episodes_added = 0;
     let mut episodes_updated = 0;
 
-    for ep in skyhook.episodes.unwrap_or_default() {
+    for ep in metadata.episodes {
         let air_date = ep.air_date.as_ref()
             .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
         let air_date_utc = ep.air_date_utc.as_ref()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc));
 
-        // Check if episode exists by tvdb_id or by series/season/episode
         let existing = if ep.tvdb_id > 0 {
             episode_repo.get_by_tvdb_id(ep.tvdb_id).await.ok().flatten()
         } else {
@@ -694,7 +686,6 @@ async fn refresh_series(
 
         match existing {
             Some(mut episode) => {
-                // Update existing episode
                 episode.title = ep.title.unwrap_or_else(|| format!("Episode {}", ep.episode_number));
                 episode.overview = ep.overview;
                 episode.air_date = air_date;
@@ -710,7 +701,6 @@ async fn refresh_series(
                 episodes_updated += 1;
             }
             None => {
-                // Create new episode
                 let episode = EpisodeDbModel {
                     id: 0,
                     series_id: id,
@@ -728,15 +718,50 @@ async fn refresh_series(
                     air_date_utc,
                     runtime: ep.runtime.unwrap_or(0),
                     has_file: false,
-                    monitored: series.monitored, // inherit from series
+                    monitored: series.monitored,
                     unverified_scene_numbering: false,
                     added: Utc::now(),
                     last_search_time: None,
+                    imdb_id: None,
+                    imdb_rating: None,
+                    imdb_votes: None,
                 };
 
                 episode_repo.insert(&episode).await
                     .map_err(|e| ApiError::Internal(format!("Failed to insert episode: {}", e)))?;
                 episodes_added += 1;
+            }
+        }
+    }
+
+    // Enrich episodes with IMDB ratings after Skyhook sync
+    if let Some(imdb_id) = &series.imdb_id {
+        let all_episodes = episode_repo.get_by_series_id(id).await
+            .map_err(|e| ApiError::Internal(format!("Failed to fetch episodes: {}", e)))?;
+        let mut enrichments: Vec<EpisodeEnrichment> = all_episodes.iter().map(|ep| {
+            EpisodeEnrichment {
+                season_number: ep.season_number,
+                episode_number: ep.episode_number,
+                imdb_id: None,
+                imdb_rating: None,
+                imdb_votes: None,
+            }
+        }).collect();
+
+        if let Ok(enriched) = state.metadata_service
+            .enrich_episodes_with_imdb(imdb_id, &mut enrichments).await
+        {
+            if enriched > 0 {
+                // Apply enrichments back to DB
+                for (ep, enr) in all_episodes.iter().zip(enrichments.iter()) {
+                    if enr.imdb_id.is_some() {
+                        let mut updated_ep = ep.clone();
+                        updated_ep.imdb_id = enr.imdb_id.clone();
+                        updated_ep.imdb_rating = enr.imdb_rating;
+                        updated_ep.imdb_votes = enr.imdb_votes;
+                        let _ = episode_repo.update(&updated_ep).await;
+                    }
+                }
             }
         }
     }
@@ -921,10 +946,15 @@ async fn lookup_series_by_title(title: &str) -> Result<Option<SkyhookSearchResul
     Ok(results.into_iter().next())
 }
 
-/// Auto-refresh a series: fetch episodes from Skyhook
-async fn auto_refresh_series(series_id: i64, db: &crate::core::datastore::Database) -> Result<(), String> {
+/// Auto-refresh a series: fetch episodes from IMDB + Skyhook
+async fn auto_refresh_series(
+    series_id: i64,
+    db: &crate::core::datastore::Database,
+    metadata_service: &crate::core::metadata::MetadataService,
+) -> Result<(), String> {
     use crate::core::datastore::models::EpisodeDbModel;
     use crate::core::datastore::repositories::{EpisodeRepository, SeriesRepository};
+    use crate::core::metadata::EpisodeEnrichment;
 
     let series_repo = SeriesRepository::new(db.clone());
     let episode_repo = EpisodeRepository::new(db.clone());
@@ -935,74 +965,41 @@ async fn auto_refresh_series(series_id: i64, db: &crate::core::datastore::Databa
 
     tracing::info!("Fetching episodes for {} (TVDB: {})", series.title, series.tvdb_id);
 
-    // Fetch from Skyhook
-    let url = format!("http://skyhook.sonarr.tv/v1/tvdb/shows/en/{}", series.tvdb_id);
-    let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .header("User-Agent", "Sonarr-rs/0.1.0")
-        .send()
+    // Fetch merged metadata from IMDB + Skyhook
+    let metadata = metadata_service
+        .fetch_series_metadata(series.tvdb_id, series.imdb_id.as_deref())
         .await
-        .map_err(|e| format!("Failed to fetch from Skyhook: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("Skyhook returned status: {}", response.status()));
-    }
-
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct SkyhookShow {
-        overview: Option<String>,
-        status: Option<String>,
-        year: Option<i32>,
-        first_aired: Option<String>,
-        runtime: Option<i32>,
-        network: Option<String>,
-        content_rating: Option<String>,
-        episodes: Option<Vec<SkyhookEp>>,
-    }
-
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct SkyhookEp {
-        tvdb_id: i64,
-        season_number: i32,
-        episode_number: i32,
-        absolute_episode_number: Option<i32>,
-        title: Option<String>,
-        overview: Option<String>,
-        air_date: Option<String>,
-        air_date_utc: Option<String>,
-        runtime: Option<i32>,
-    }
-
-    let skyhook: SkyhookShow = response.json().await
-        .map_err(|e| format!("Failed to parse Skyhook response: {}", e))?;
+        .map_err(|e| format!("Failed to fetch metadata: {}", e))?;
 
     // Update series metadata
-    series.overview = skyhook.overview;
-    series.status = match skyhook.status.as_deref().map(|s| s.to_lowercase()).as_deref() {
+    series.overview = metadata.overview;
+    series.status = match metadata.status.as_deref().map(|s| s.to_lowercase()).as_deref() {
         Some("continuing") => 0,
         Some("ended") => 1,
         Some("upcoming") => 2,
         _ => series.status,
     };
-    series.network = skyhook.network;
-    series.runtime = skyhook.runtime.unwrap_or(series.runtime);
-    series.certification = skyhook.content_rating;
-    // Update year from Skyhook, or derive from firstAired if not provided
-    if let Some(year) = skyhook.year {
+    series.network = metadata.network;
+    series.runtime = metadata.runtime.unwrap_or(series.runtime);
+    series.certification = metadata.certification;
+    if let Some(year) = metadata.year {
         series.year = year;
-    } else if let Some(first_aired) = &skyhook.first_aired {
+    } else if let Some(first_aired) = &metadata.first_aired {
         if let Some(year_str) = first_aired.split('-').next() {
             if let Ok(year) = year_str.parse::<i32>() {
                 series.year = year;
             }
         }
     }
-    if let Some(first_aired) = &skyhook.first_aired {
+    if let Some(first_aired) = &metadata.first_aired {
         series.first_aired = NaiveDate::parse_from_str(first_aired, "%Y-%m-%d").ok();
     }
+    // Capture imdb_id if discovered
+    if series.imdb_id.is_none() {
+        series.imdb_id = metadata.imdb_id.clone();
+    }
+    series.imdb_rating = metadata.imdb_rating;
+    series.imdb_votes = metadata.imdb_votes;
     series.last_info_sync = Some(Utc::now());
 
     series_repo.update(&series).await
@@ -1010,14 +1007,13 @@ async fn auto_refresh_series(series_id: i64, db: &crate::core::datastore::Databa
 
     // Sync episodes
     let mut added = 0;
-    for ep in skyhook.episodes.unwrap_or_default() {
+    for ep in metadata.episodes {
         let air_date = ep.air_date.as_ref()
             .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
         let air_date_utc = ep.air_date_utc.as_ref()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc));
 
-        // Check if exists
         let existing = episode_repo.get_by_series_season_episode(series_id, ep.season_number, ep.episode_number)
             .await.ok().flatten();
 
@@ -1043,9 +1039,43 @@ async fn auto_refresh_series(series_id: i64, db: &crate::core::datastore::Databa
                 unverified_scene_numbering: false,
                 added: Utc::now(),
                 last_search_time: None,
+                imdb_id: None,
+                imdb_rating: None,
+                imdb_votes: None,
             };
             if episode_repo.insert(&episode).await.is_ok() {
                 added += 1;
+            }
+        }
+    }
+
+    // Enrich episodes with IMDB ratings
+    if let Some(imdb_id) = &series.imdb_id {
+        let all_episodes = episode_repo.get_by_series_id(series_id).await
+            .map_err(|e| format!("Failed to fetch episodes: {}", e))?;
+        let mut enrichments: Vec<EpisodeEnrichment> = all_episodes.iter().map(|ep| {
+            EpisodeEnrichment {
+                season_number: ep.season_number,
+                episode_number: ep.episode_number,
+                imdb_id: None,
+                imdb_rating: None,
+                imdb_votes: None,
+            }
+        }).collect();
+
+        if let Ok(enriched) = metadata_service
+            .enrich_episodes_with_imdb(imdb_id, &mut enrichments).await
+        {
+            if enriched > 0 {
+                for (ep, enr) in all_episodes.iter().zip(enrichments.iter()) {
+                    if enr.imdb_id.is_some() {
+                        let mut updated_ep = ep.clone();
+                        updated_ep.imdb_id = enr.imdb_id.clone();
+                        updated_ep.imdb_rating = enr.imdb_rating;
+                        updated_ep.imdb_votes = enr.imdb_votes;
+                        let _ = episode_repo.update(&updated_ep).await;
+                    }
+                }
             }
         }
     }
@@ -1557,6 +1587,10 @@ pub struct SeriesResponse {
     pub add_options: Option<AddOptionsResource>,
     pub ratings: Ratings,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub imdb_rating: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub imdb_votes: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub statistics: Option<SeriesStatistics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub episodes_changed: Option<bool>,
@@ -1696,7 +1730,12 @@ impl From<SeriesDbModel> for SeriesResponse {
             tags: vec![],    // TODO: populate from database
             added: s.added.to_rfc3339(),
             add_options: None,
-            ratings: Ratings { votes: 0, value: 0.0 },
+            ratings: Ratings {
+                votes: s.imdb_votes.map(|v| v as i64).unwrap_or(0),
+                value: s.imdb_rating.map(|r| r as f64).unwrap_or(0.0),
+            },
+            imdb_rating: s.imdb_rating,
+            imdb_votes: s.imdb_votes,
             statistics: Some(SeriesStatistics::default()),
             episodes_changed: None,
             language_profile_id: s.language_profile_id,

@@ -467,6 +467,17 @@ impl SeriesRepository {
         Ok(row)
     }
 
+    pub async fn get_by_imdb_id(&self, imdb_id: &str) -> Result<Option<super::models::SeriesDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::SeriesDbModel>(
+            "SELECT * FROM series WHERE imdb_id = $1"
+        )
+        .bind(imdb_id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
     pub async fn insert(&self, series: &super::models::SeriesDbModel) -> Result<i64> {
         let pool = self.db.pool();
         let row: (i64,) = sqlx::query_as(
@@ -477,14 +488,16 @@ impl SeriesRepository {
                 monitored, monitor_new_items, quality_profile_id, language_profile_id,
                 season_folder, series_type, title_slug, path, root_folder_path,
                 year, first_aired, last_aired, runtime, network, certification,
-                use_scene_numbering, added, last_info_sync
+                use_scene_numbering, added, last_info_sync,
+                imdb_rating, imdb_votes
             ) VALUES (
                 $1, $2, $3, $4, $5,
                 $6, $7, $8, $9, $10,
                 $11, $12, $13, $14,
                 $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25,
-                $26, $27, $28
+                $26, $27, $28,
+                $29, $30
             ) RETURNING id
             "#
         )
@@ -516,6 +529,8 @@ impl SeriesRepository {
         .bind(series.use_scene_numbering)
         .bind(series.added)
         .bind(series.last_info_sync)
+        .bind(series.imdb_rating)
+        .bind(series.imdb_votes)
         .fetch_one(pool)
         .await?;
         Ok(row.0)
@@ -531,8 +546,9 @@ impl SeriesRepository {
                 monitored = $11, monitor_new_items = $12, quality_profile_id = $13, language_profile_id = $14,
                 season_folder = $15, series_type = $16, title_slug = $17, path = $18, root_folder_path = $19,
                 year = $20, first_aired = $21, last_aired = $22, runtime = $23, network = $24, certification = $25,
-                use_scene_numbering = $26, last_info_sync = $27
-            WHERE id = $28
+                use_scene_numbering = $26, last_info_sync = $27,
+                imdb_rating = $28, imdb_votes = $29
+            WHERE id = $30
             "#
         )
         .bind(series.tvdb_id)
@@ -562,6 +578,8 @@ impl SeriesRepository {
         .bind(&series.certification)
         .bind(series.use_scene_numbering)
         .bind(series.last_info_sync)
+        .bind(series.imdb_rating)
+        .bind(series.imdb_votes)
         .bind(series.id)
         .execute(pool)
         .await?;
@@ -620,6 +638,17 @@ impl EpisodeRepository {
         Ok(rows)
     }
 
+    pub async fn get_by_imdb_id(&self, imdb_id: &str) -> Result<Option<super::models::EpisodeDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::EpisodeDbModel>(
+            "SELECT * FROM episodes WHERE imdb_id = $1"
+        )
+        .bind(imdb_id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
     pub async fn insert(&self, episode: &super::models::EpisodeDbModel) -> Result<i64> {
         let pool = self.db.pool();
         let row: (i64,) = sqlx::query_as(
@@ -628,12 +657,14 @@ impl EpisodeRepository {
                 series_id, tvdb_id, episode_file_id, season_number, episode_number,
                 absolute_episode_number, scene_absolute_episode_number, scene_episode_number,
                 scene_season_number, title, overview, air_date, air_date_utc, runtime,
-                has_file, monitored, unverified_scene_numbering, added, last_search_time
+                has_file, monitored, unverified_scene_numbering, added, last_search_time,
+                imdb_id, imdb_rating, imdb_votes
             ) VALUES (
                 $1, $2, $3, $4, $5,
                 $6, $7, $8,
                 $9, $10, $11, $12, $13, $14,
-                $15, $16, $17, $18, $19
+                $15, $16, $17, $18, $19,
+                $20, $21, $22
             ) RETURNING id
             "#
         )
@@ -656,6 +687,9 @@ impl EpisodeRepository {
         .bind(episode.unverified_scene_numbering)
         .bind(episode.added)
         .bind(episode.last_search_time)
+        .bind(&episode.imdb_id)
+        .bind(episode.imdb_rating)
+        .bind(episode.imdb_votes)
         .fetch_one(pool)
         .await?;
         Ok(row.0)
@@ -669,8 +703,9 @@ impl EpisodeRepository {
                 series_id = $1, tvdb_id = $2, episode_file_id = $3, season_number = $4, episode_number = $5,
                 absolute_episode_number = $6, scene_absolute_episode_number = $7, scene_episode_number = $8,
                 scene_season_number = $9, title = $10, overview = $11, air_date = $12, air_date_utc = $13, runtime = $14,
-                has_file = $15, monitored = $16, unverified_scene_numbering = $17, last_search_time = $18
-            WHERE id = $19
+                has_file = $15, monitored = $16, unverified_scene_numbering = $17, last_search_time = $18,
+                imdb_id = $19, imdb_rating = $20, imdb_votes = $21
+            WHERE id = $22
             "#
         )
         .bind(episode.series_id)
@@ -691,6 +726,9 @@ impl EpisodeRepository {
         .bind(episode.monitored)
         .bind(episode.unverified_scene_numbering)
         .bind(episode.last_search_time)
+        .bind(&episode.imdb_id)
+        .bind(episode.imdb_rating)
+        .bind(episode.imdb_votes)
         .bind(episode.id)
         .execute(pool)
         .await?;
