@@ -27,7 +27,8 @@ interface SystemStatus {
   mode: string;
   branch: string;
   authentication: string;
-  sqliteVersion: string;
+  databaseType: string;
+  databaseVersion: string;
   migrationVersion: number;
   urlBase: string;
   runtimeVersion: string;
@@ -172,8 +173,8 @@ export class SystemStatusPage extends BaseComponent {
               <span class="info-value">${status?.isDocker ? 'Yes' : 'No'}</span>
             </div>
             <div class="info-row">
-              <span class="info-label">SQLite</span>
-              <span class="info-value">${escapeHtml(status?.sqliteVersion ?? '-')}</span>
+              <span class="info-label">Database</span>
+              <span class="info-value">${escapeHtml(status?.databaseType ?? '-')} ${escapeHtml(status?.databaseVersion ?? '')}</span>
             </div>
           </div>
         </div>
