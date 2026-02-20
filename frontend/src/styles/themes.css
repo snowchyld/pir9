@@ -1,0 +1,338 @@
+/**
+ * Theme CSS variables
+ * Modern glassmorphism design with smooth animations
+ */
+
+:root {
+  /* Brand colors */
+  --pir9-blue: #35c5f4;
+  --pir9-blue-alt: #2193b5;
+
+  /* Base colors */
+  --color-black: #000;
+  --color-white: #fff;
+  --color-off-white: #f5f7fa;
+
+  /* Grays */
+  --color-gray-100: #f5f5f5;
+  --color-gray-200: #eee;
+  --color-gray-300: #ddd;
+  --color-gray-400: #ccc;
+  --color-gray-500: #adadad;
+  --color-gray-600: #999;
+  --color-gray-700: #888;
+  --color-gray-800: #555;
+  --color-gray-900: #333;
+
+  /* Semantic colors */
+  --color-primary: #5d9cec;
+  --color-primary-hover: #4b91ea;
+  --color-primary-rgb: 93, 156, 236;
+  --color-selected: #f9be03;
+  --color-success: #27c24c;
+  --color-success-hover: #24b145;
+  --color-success-rgb: 39, 194, 76;
+  --color-danger: #f05050;
+  --color-danger-hover: #ee3d3d;
+  --color-danger-rgb: 240, 80, 80;
+  --color-warning: #ff902b;
+  --color-warning-hover: #ff8517;
+  --color-warning-rgb: 255, 144, 43;
+  --color-info: #5d9cec;
+  --color-purple: #7a43b6;
+  --color-pink: #ff69b4;
+
+  /* Protocol colors */
+  --color-torrent: #00853d;
+  --color-usenet: #17b1d9;
+
+  /* Animation timings */
+  --transition-fast: 150ms;
+  --transition-normal: 250ms;
+  --transition-slow: 400ms;
+  --transition-page: 300ms;
+
+  /* Easing curves */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-back: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+
+  /* Glassmorphism base values */
+  --glass-blur: 16px;
+  --glass-blur-strong: 24px;
+  --glass-saturation: 180%;
+}
+
+/* Dark theme (default) - Glassmorphism */
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* Text */
+  --text-color: rgba(255, 255, 255, 0.9);
+  --text-color-muted: rgba(255, 255, 255, 0.6);
+  --text-color-dim: rgba(255, 255, 255, 0.4);
+  --text-color-inverse: #333;
+  --text-help: rgba(255, 255, 255, 0.5);
+
+  /* Glassmorphism Backgrounds */
+  --bg-page: #0f0f11;
+  --bg-page-gradient: linear-gradient(135deg, #0f0f11 0%, #1a1a2e 50%, #16213e 100%);
+
+  --bg-header: rgba(30, 30, 40, 0.8);
+  --bg-sidebar: rgba(25, 25, 35, 0.85);
+
+  --bg-card: rgba(255, 255, 255, 0.05);
+  --bg-card-hover: rgba(255, 255, 255, 0.08);
+  --bg-card-alt: rgba(255, 255, 255, 0.03);
+  --bg-card-center: rgba(255, 255, 255, 0.02);
+
+  --bg-modal: rgba(30, 30, 40, 0.95);
+  --bg-input: rgba(255, 255, 255, 0.08);
+  --bg-input-readonly: rgba(255, 255, 255, 0.03);
+  --bg-input-hover: rgba(255, 255, 255, 0.12);
+  --bg-input-selected: rgba(93, 156, 236, 0.15);
+  --bg-input-focus: rgba(93, 156, 236, 0.2);
+
+  --bg-toolbar: rgba(30, 30, 40, 0.7);
+  --bg-toolbar-menu: rgba(40, 40, 55, 0.95);
+  --bg-toolbar-menu-hover: rgba(255, 255, 255, 0.1);
+
+  --bg-popover: rgba(35, 35, 50, 0.95);
+  --bg-popover-title: rgba(255, 255, 255, 0.05);
+
+  --bg-table-row-hover: rgba(255, 255, 255, 0.06);
+  --bg-progress: rgba(255, 255, 255, 0.15);
+  --bg-footer: rgba(0, 0, 0, 0.3);
+
+  --bg-season: rgba(255, 255, 255, 0.05);
+  --bg-episodes: rgba(255, 255, 255, 0.02);
+  --bg-calendar-today: rgba(93, 156, 236, 0.15);
+  --bg-calendar: rgba(255, 255, 255, 0.03);
+
+  /* Glass borders */
+  --border-color: rgba(255, 255, 255, 0.1);
+  --border-color-light: rgba(255, 255, 255, 0.06);
+  --border-glass: rgba(255, 255, 255, 0.15);
+  --border-input: rgba(255, 255, 255, 0.15);
+  --border-input-focus: rgba(93, 156, 236, 0.5);
+  --border-input-error: rgba(240, 80, 80, 0.5);
+  --border-input-warning: rgba(255, 165, 0, 0.5);
+  --border-calendar: rgba(255, 255, 255, 0.08);
+  --border-popover: rgba(255, 255, 255, 0.1);
+
+  /* Glow effects */
+  --glow-primary: 0 0 20px rgba(93, 156, 236, 0.3);
+  --glow-success: 0 0 20px rgba(39, 194, 76, 0.3);
+  --glow-danger: 0 0 20px rgba(240, 80, 80, 0.3);
+  --glow-warning: 0 0 20px rgba(255, 144, 43, 0.3);
+
+  /* Sidebar */
+  --sidebar-color: rgba(255, 255, 255, 0.85);
+  --sidebar-active-bg: rgba(93, 156, 236, 0.2);
+  --sidebar-hover-bg: rgba(255, 255, 255, 0.08);
+
+  /* Toolbar */
+  --toolbar-color: rgba(255, 255, 255, 0.9);
+  --toolbar-hover: #35c5f4;
+  --toolbar-selected: #35c5f4;
+
+  /* Buttons - Glass effect */
+  --btn-default-text: rgba(255, 255, 255, 0.9);
+  --btn-default-bg: rgba(255, 255, 255, 0.1);
+  --btn-default-border: rgba(255, 255, 255, 0.15);
+  --btn-default-bg-hover: rgba(255, 255, 255, 0.15);
+  --btn-default-border-hover: rgba(255, 255, 255, 0.25);
+
+  --btn-primary-bg: rgba(93, 156, 236, 0.9);
+  --btn-primary-border: rgba(93, 156, 236, 0.5);
+  --btn-primary-bg-hover: rgba(93, 156, 236, 1);
+  --btn-primary-border-hover: rgba(93, 156, 236, 0.7);
+
+  --btn-success-bg: rgba(39, 194, 76, 0.9);
+  --btn-success-border: rgba(39, 194, 76, 0.5);
+  --btn-success-bg-hover: rgba(39, 194, 76, 1);
+  --btn-success-border-hover: rgba(39, 194, 76, 0.7);
+
+  --btn-warning-bg: rgba(255, 144, 43, 0.9);
+  --btn-warning-border: rgba(255, 144, 43, 0.5);
+  --btn-warning-bg-hover: rgba(255, 144, 43, 1);
+  --btn-warning-border-hover: rgba(255, 144, 43, 0.7);
+
+  --btn-danger-bg: rgba(240, 80, 80, 0.9);
+  --btn-danger-border: rgba(240, 80, 80, 0.5);
+  --btn-danger-bg-hover: rgba(240, 80, 80, 1);
+  --btn-danger-border-hover: rgba(240, 80, 80, 0.7);
+
+  --btn-icon-disabled: rgba(255, 255, 255, 0.3);
+  --btn-icon-hover: rgba(255, 255, 255, 0.6);
+  --btn-icon-hover-light: rgba(255, 255, 255, 0.9);
+
+  /* Links */
+  --link-color: #5d9cec;
+  --link-hover: #7cb3f4;
+  --link-hover-default: #fff;
+
+  /* Alerts - Glass */
+  --alert-danger-border: rgba(240, 80, 80, 0.3);
+  --alert-danger-bg: rgba(240, 80, 80, 0.1);
+  --alert-danger-text: rgba(255, 255, 255, 0.9);
+
+  --alert-info-border: rgba(93, 156, 236, 0.3);
+  --alert-info-bg: rgba(93, 156, 236, 0.1);
+  --alert-info-text: rgba(255, 255, 255, 0.9);
+
+  --alert-success-border: rgba(39, 194, 76, 0.3);
+  --alert-success-bg: rgba(39, 194, 76, 0.1);
+  --alert-success-text: rgba(255, 255, 255, 0.9);
+
+  --alert-warning-border: rgba(255, 144, 43, 0.3);
+  --alert-warning-bg: rgba(255, 144, 43, 0.1);
+  --alert-warning-text: rgba(255, 255, 255, 0.9);
+
+  /* Menu */
+  --menu-item-color: rgba(255, 255, 255, 0.85);
+  --menu-item-hover: #35c5f4;
+  --menu-item-hover-bg: rgba(255, 255, 255, 0.1);
+
+  /* Modal */
+  --modal-backdrop: rgba(0, 0, 0, 0.7);
+  --modal-close-hover: rgba(255, 255, 255, 0.6);
+
+  /* Scrollbar */
+  --scrollbar-bg: rgba(255, 255, 255, 0.2);
+  --scrollbar-hover: rgba(255, 255, 255, 0.35);
+
+  /* Shadows - Softer for glass */
+  --shadow-card: 0 4px 30px rgba(0, 0, 0, 0.3);
+  --shadow-card-hover: 0 8px 40px rgba(0, 0, 0, 0.4);
+  --shadow-popover: 0 10px 40px rgba(0, 0, 0, 0.4);
+  --shadow-input: 0 2px 10px rgba(0, 0, 0, 0.2);
+  --shadow-input-focus: 0 0 0 3px rgba(93, 156, 236, 0.25);
+  --shadow-input-error: 0 0 0 3px rgba(240, 80, 80, 0.25);
+  --shadow-input-warning: 0 0 0 3px rgba(255, 165, 0, 0.25);
+  --shadow-glow: 0 0 30px rgba(93, 156, 236, 0.15);
+
+  /* Slider */
+  --slider-accent: #5d9cec;
+
+  /* Form */
+  --form-advanced-label: #ff902b;
+  --form-check-disabled: rgba(255, 255, 255, 0.3);
+  --form-input-disabled: rgba(255, 255, 255, 0.4);
+
+  /* Labels */
+  --label-inverse: rgba(255, 255, 255, 0.9);
+  --label-inverse-text: #333;
+  --label-disabled: rgba(255, 255, 255, 0.4);
+
+  /* Color impaired */
+  --gradient-impaired: #707070;
+  --gradient-impaired-dark: #424242;
+  --gradient-impaired-danger: #d84848;
+  --gradient-impaired-warning: #e59400;
+  --gradient-impaired-primary: #538cd4;
+  --gradient-impaired-gray: #9b9b9b;
+
+  /* Calendar */
+  --calendar-text-dim: rgba(255, 255, 255, 0.9);
+  --calendar-text-dim-alt: #fff;
+  --calendar-filter: grayscale(90%) contrast(200%) saturate(50%);
+
+  /* Progress indicators */
+  --progress-ring-bg: rgba(255, 255, 255, 0.1);
+  --progress-ring-fill: var(--color-primary);
+  --progress-bar-shimmer: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.1) 50%,
+    transparent 100%
+  );
+}
+
+/* Light theme - Glassmorphism */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --text-color: rgba(0, 0, 0, 0.85);
+  --text-color-muted: rgba(0, 0, 0, 0.55);
+  --text-color-dim: rgba(0, 0, 0, 0.35);
+  --text-color-inverse: #fff;
+  --text-help: rgba(0, 0, 0, 0.45);
+
+  --bg-page: #e8ecf3;
+  --bg-page-gradient: linear-gradient(135deg, #e8ecf3 0%, #dfe4ed 50%, #d4dce8 100%);
+
+  --bg-header: rgba(255, 255, 255, 0.75);
+  --bg-sidebar: rgba(255, 255, 255, 0.8);
+
+  --bg-card: rgba(255, 255, 255, 0.6);
+  --bg-card-hover: rgba(255, 255, 255, 0.75);
+  --bg-card-alt: rgba(255, 255, 255, 0.4);
+  --bg-card-center: rgba(255, 255, 255, 0.3);
+
+  --bg-modal: rgba(255, 255, 255, 0.95);
+  --bg-input: rgba(255, 255, 255, 0.8);
+  --bg-input-readonly: rgba(255, 255, 255, 0.5);
+  --bg-input-hover: rgba(255, 255, 255, 0.95);
+  --bg-input-selected: rgba(93, 156, 236, 0.15);
+  --bg-input-focus: rgba(93, 156, 236, 0.1);
+
+  --bg-toolbar: rgba(255, 255, 255, 0.7);
+  --bg-toolbar-menu: rgba(255, 255, 255, 0.95);
+  --bg-toolbar-menu-hover: rgba(0, 0, 0, 0.05);
+
+  --bg-popover: rgba(255, 255, 255, 0.95);
+  --bg-popover-title: rgba(0, 0, 0, 0.03);
+
+  --bg-table-row-hover: rgba(0, 0, 0, 0.03);
+  --bg-progress: rgba(0, 0, 0, 0.1);
+  --bg-footer: rgba(0, 0, 0, 0.05);
+
+  --bg-season: rgba(255, 255, 255, 0.6);
+  --bg-episodes: rgba(255, 255, 255, 0.4);
+  --bg-calendar-today: rgba(93, 156, 236, 0.1);
+  --bg-calendar: rgba(255, 255, 255, 0.6);
+
+  --border-color: rgba(0, 0, 0, 0.1);
+  --border-color-light: rgba(0, 0, 0, 0.05);
+  --border-glass: rgba(255, 255, 255, 0.5);
+  --border-input: rgba(0, 0, 0, 0.15);
+  --border-calendar: rgba(0, 0, 0, 0.08);
+  --border-popover: rgba(0, 0, 0, 0.1);
+
+  --sidebar-color: rgba(0, 0, 0, 0.75);
+  --sidebar-active-bg: rgba(93, 156, 236, 0.15);
+  --sidebar-hover-bg: rgba(0, 0, 0, 0.05);
+
+  --toolbar-color: rgba(0, 0, 0, 0.8);
+
+  --btn-default-text: rgba(0, 0, 0, 0.8);
+  --btn-default-bg: rgba(255, 255, 255, 0.8);
+  --btn-default-border: rgba(0, 0, 0, 0.1);
+  --btn-default-bg-hover: rgba(255, 255, 255, 0.95);
+  --btn-default-border-hover: rgba(0, 0, 0, 0.15);
+
+  --menu-item-color: rgba(0, 0, 0, 0.75);
+  --menu-item-hover-bg: rgba(0, 0, 0, 0.05);
+
+  --modal-backdrop: rgba(0, 0, 0, 0.4);
+  --modal-close-hover: rgba(0, 0, 0, 0.6);
+
+  --scrollbar-bg: rgba(0, 0, 0, 0.15);
+  --scrollbar-hover: rgba(0, 0, 0, 0.25);
+
+  --shadow-card: 0 4px 30px rgba(0, 0, 0, 0.1);
+  --shadow-card-hover: 0 8px 40px rgba(0, 0, 0, 0.15);
+  --shadow-popover: 0 10px 40px rgba(0, 0, 0, 0.15);
+
+  --label-inverse: rgba(0, 0, 0, 0.8);
+  --label-inverse-text: #fff;
+
+  --calendar-text-dim: rgba(0, 0, 0, 0.65);
+  --calendar-text-dim-alt: rgba(0, 0, 0, 0.85);
+  --calendar-filter: none;
+
+  --progress-ring-bg: rgba(0, 0, 0, 0.1);
+}

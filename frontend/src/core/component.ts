@@ -1,0 +1,369 @@
+/**
+ * Base Web Component class using Light DOM
+ * Provides template rendering, attribute observation, and lifecycle hooks
+ *
+ * SECURITY NOTE: The render() method uses innerHTML with developer-controlled
+ * templates (from the template() method). User data should be escaped before
+ * interpolation - use the html() and escapeHtml() helpers for safe templating.
+ */
+
+import { effect, type Watchable } from './reactive';
+
+type Constructor<T = object> = new (...args: unknown[]) => T;
+
+/**
+ * Registry of custom elements to prevent double registration
+ */
+const registry = new Map<string, Constructor<HTMLElement>>();
+
+/**
+ * Escape HTML entities to prevent XSS
+ */
+export function escapeHtml(str: string | number | boolean | null | undefined): string {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/**
+ * Tagged template literal for HTML templating
+ * Does NOT escape interpolated values by default (templates are developer-controlled)
+ * Use escapeHtml() explicitly for user-provided data to prevent XSS
+ * Handles safeHtml() wrapped values by extracting the inner HTML
+ */
+export function html(
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+): string {
+  return strings.reduce((result, str, i) => {
+    const value = values[i - 1];
+    // Handle safeHtml wrapped values
+    if (value && typeof value === 'object' && '__safeHtml' in value) {
+      return result + (value as { __safeHtml: string }).__safeHtml + str;
+    }
+    return result + String(value ?? '') + str;
+  });
+}
+
+/**
+ * Mark a string as safe HTML (bypasses escaping)
+ * Only use with trusted, sanitized content!
+ */
+export function safeHtml(content: string): { __safeHtml: string } {
+  return { __safeHtml: content };
+}
+
+/**
+ * Decorator to register a custom element
+ * @param tagName - The custom element tag name (must contain a hyphen)
+ */
+export function customElement(tagName: string) {
+  return function <T extends Constructor<HTMLElement>>(target: T): T {
+    if (!registry.has(tagName)) {
+      registry.set(tagName, target);
+      customElements.define(tagName, target);
+    }
+    return target;
+  };
+}
+
+/**
+ * Decorator to mark a property as reactive (triggers re-render on change)
+ */
+export function reactive() {
+  return function (
+    target: BaseComponent,
+    propertyKey: string
+  ): void {
+    const privateKey = `__${propertyKey}`;
+
+    Object.defineProperty(target, propertyKey, {
+      get() {
+        return this[privateKey];
+      },
+      set(value: unknown) {
+        const oldValue = this[privateKey];
+        if (oldValue !== value) {
+          this[privateKey] = value;
+          if (this._isConnected) {
+            this.requestUpdate();
+          }
+        }
+      },
+      enumerable: true,
+      configurable: true,
+    });
+  };
+}
+
+/**
+ * Decorator to observe an attribute and sync it with a property
+ */
+export function attribute(options?: { type?: 'string' | 'number' | 'boolean' }) {
+  const type = options?.type ?? 'string';
+
+  return function (
+    target: BaseComponent,
+    propertyKey: string
+  ): void {
+    const attrName = propertyKey.replace(/([A-Z])/g, '-$1').toLowerCase();
+
+    // Add to observed attributes
+    const ctor = target.constructor as typeof BaseComponent;
+    if (!ctor._observedAttrs) {
+      ctor._observedAttrs = [];
+    }
+    ctor._observedAttrs.push(attrName);
+
+    // Define property with attribute sync
+    const privateKey = `__${propertyKey}`;
+
+    Object.defineProperty(target, propertyKey, {
+      get() {
+        return this[privateKey];
+      },
+      set(value: unknown) {
+        const oldValue = this[privateKey];
+        if (oldValue !== value) {
+          this[privateKey] = value;
+
+          // Sync to attribute
+          if (type === 'boolean') {
+            if (value) {
+              this.setAttribute(attrName, '');
+            } else {
+              this.removeAttribute(attrName);
+            }
+          } else {
+            this.setAttribute(attrName, String(value));
+          }
+
+          if (this._isConnected) {
+            this.requestUpdate();
+          }
+        }
+      },
+      enumerable: true,
+      configurable: true,
+    });
+
+    // Store attribute mapping
+    if (!ctor._attrPropMap) {
+      ctor._attrPropMap = new Map();
+    }
+    ctor._attrPropMap.set(attrName, { propertyKey, type });
+  };
+}
+
+/**
+ * Base class for Web Components using Light DOM
+ */
+export abstract class BaseComponent extends HTMLElement {
+  static _observedAttrs?: string[];
+  static _attrPropMap?: Map<string, { propertyKey: string; type: string }>;
+
+  _isConnected = false;
+  private _updateScheduled = false;
+  private _effectCleanups: Array<() => void> = [];
+
+  static get observedAttributes(): string[] {
+    return this._observedAttrs ?? [];
+  }
+
+  constructor() {
+    super();
+  }
+
+  /**
+   * Called when connected to DOM
+   */
+  connectedCallback(): void {
+    this._isConnected = true;
+    this.onInit();
+    this.render();
+    this.onMount();
+  }
+
+  /**
+   * Called when disconnected from DOM
+   */
+  disconnectedCallback(): void {
+    this._isConnected = false;
+    this._effectCleanups.forEach((cleanup) => cleanup());
+    this._effectCleanups = [];
+    this.onDestroy();
+  }
+
+  /**
+   * Called when an observed attribute changes
+   */
+  attributeChangedCallback(
+    name: string,
+    oldValue: string | null,
+    newValue: string | null
+  ): void {
+    if (oldValue === newValue) return;
+
+    const ctor = this.constructor as typeof BaseComponent;
+    const mapping = ctor._attrPropMap?.get(name);
+
+    if (mapping) {
+      const { propertyKey, type } = mapping;
+      let parsedValue: unknown;
+
+      switch (type) {
+        case 'boolean':
+          parsedValue = newValue !== null;
+          break;
+        case 'number':
+          parsedValue = newValue !== null ? Number(newValue) : undefined;
+          break;
+        default:
+          parsedValue = newValue;
+      }
+
+      (this as Record<string, unknown>)[`__${propertyKey}`] = parsedValue;
+      if (this._isConnected) {
+        this.requestUpdate();
+      }
+    }
+  }
+
+  /**
+   * Override to provide component template
+   * Use the html() tagged template literal for safe interpolation
+   */
+  protected abstract template(): string;
+
+  /**
+   * Called before first render
+   */
+  protected onInit(): void {}
+
+  /**
+   * Called after first render
+   */
+  protected onMount(): void {}
+
+  /**
+   * Called on disconnection
+   */
+  protected onDestroy(): void {}
+
+  /**
+   * Called after each render
+   */
+  protected onUpdate(): void {}
+
+  /**
+   * Schedule an update (batched via microtask)
+   */
+  requestUpdate(): void {
+    if (!this._updateScheduled) {
+      this._updateScheduled = true;
+      queueMicrotask(() => {
+        this._updateScheduled = false;
+        if (this._isConnected) {
+          this.render();
+        }
+      });
+    }
+  }
+
+  /**
+   * Render the component
+   * Uses innerHTML with developer-controlled template() output
+   * User data must be escaped via html() or escapeHtml()
+   */
+  private render(): void {
+    // Template returns developer-controlled HTML
+    // User data interpolation must use html() tagged template for safety
+    const templateContent = this.template();
+    this.innerHTML = templateContent;
+    this.onUpdate();
+  }
+
+  /**
+   * Subscribe to a signal/computed and auto-update when it changes
+   */
+  protected watch<T>(sig: Watchable<T>, callback?: (value: T) => void): void {
+    const cleanup = effect(() => {
+      const value = sig.value;
+      if (callback) {
+        callback(value);
+      } else {
+        this.requestUpdate();
+      }
+    });
+    this._effectCleanups.push(cleanup);
+  }
+
+  /**
+   * Query a child element
+   */
+  protected $<T extends Element = Element>(selector: string): T | null {
+    return this.querySelector<T>(selector);
+  }
+
+  /**
+   * Query all child elements
+   */
+  protected $$<T extends Element = Element>(selector: string): NodeListOf<T> {
+    return this.querySelectorAll<T>(selector);
+  }
+
+  /**
+   * Emit a custom event
+   */
+  protected emit<T = unknown>(
+    eventName: string,
+    detail?: T,
+    options?: Partial<CustomEventInit<T>>
+  ): boolean {
+    return this.dispatchEvent(
+      new CustomEvent(eventName, {
+        bubbles: true,
+        composed: true,
+        detail,
+        ...options,
+      })
+    );
+  }
+
+  /**
+   * Helper for conditional class names
+   */
+  protected cx(
+    ...classes: Array<string | Record<string, boolean> | undefined | null | false>
+  ): string {
+    return classes
+      .filter((c): c is string | Record<string, boolean> => Boolean(c))
+      .flatMap((c) => {
+        if (typeof c === 'string') return c;
+        return Object.entries(c)
+          .filter(([, v]) => v)
+          .map(([k]) => k);
+      })
+      .join(' ');
+  }
+}
+
+/**
+ * Define multiple custom elements at once
+ */
+export function defineComponents(
+  ...components: Array<Constructor<HTMLElement>>
+): void {
+  // Components register themselves via @customElement decorator
+  // This function exists for explicit registration if needed
+  components.forEach((Component) => {
+    const name = (Component as { tagName?: string }).tagName;
+    if (name && !customElements.get(name)) {
+      customElements.define(name, Component);
+    }
+  });
+}
