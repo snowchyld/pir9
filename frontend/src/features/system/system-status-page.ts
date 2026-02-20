@@ -61,6 +61,7 @@ interface RunningTask {
   started?: string;
   message?: string;
   detail?: string;
+  workerId?: string;
 }
 
 @customElement('system-status-page')
@@ -86,11 +87,18 @@ export class SystemStatusPage extends BaseComponent {
     refetchInterval: 3000,
   });
 
-  private cancelMutation = createMutation({
+  private cancelCommandMutation = createMutation({
     mutationFn: (id: string) => http.delete<void>(`/command/${id}`),
     onSuccess: () => {
       invalidateQueries(['/system/task/running']);
       invalidateQueries(['/command']);
+    },
+  });
+
+  private cancelScanMutation = createMutation({
+    mutationFn: (id: string) => http.delete<void>(`/system/task/scan/${id}`),
+    onSuccess: () => {
+      invalidateQueries(['/system/task/running']);
     },
   });
 
@@ -155,23 +163,22 @@ export class SystemStatusPage extends BaseComponent {
                     <div class="running-detail">
                       <span class="running-status">${task.status === 'queued' ? 'Queued' : 'Running'}</span>
                       ${task.started ? html`<span class="running-elapsed">${this.formatElapsed(task.started)}</span>` : ''}
+                      ${task.workerId ? html`<span class="running-worker" title="Worker ID: ${escapeHtml(task.workerId)}">worker:${escapeHtml(task.workerId.substring(0, 8))}</span>` : ''}
                       ${task.detail ? html`<span class="running-message">${escapeHtml(task.detail)}</span>` : ''}
                       ${task.message ? html`<span class="running-message">${escapeHtml(task.message)}</span>` : ''}
                     </div>
                   </div>
-                  ${task.taskType === 'command' ? html`
-                    <button
-                      class="cancel-btn"
-                      onclick="this.closest('system-status-page').handleCancelTask('${escapeHtml(task.id)}')"
-                      title="Cancel task"
-                    >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <line x1="15" y1="9" x2="9" y2="15"></line>
-                        <line x1="9" y1="9" x2="15" y2="15"></line>
-                      </svg>
-                    </button>
-                  ` : ''}
+                  <button
+                    class="cancel-btn"
+                    onclick="this.closest('system-status-page').handleCancelTask('${escapeHtml(task.id)}', '${escapeHtml(task.taskType)}')"
+                    title="Cancel task"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <line x1="15" y1="9" x2="9" y2="15"></line>
+                      <line x1="9" y1="9" x2="15" y2="15"></line>
+                    </svg>
+                  </button>
                 </div>
               `).join('')}
             </div>
@@ -399,6 +406,15 @@ export class SystemStatusPage extends BaseComponent {
           font-size: 0.75rem;
         }
 
+        .running-worker {
+          font-family: monospace;
+          font-size: 0.6875rem;
+          padding: 0.0625rem 0.375rem;
+          background: var(--bg-color-elevated, rgba(255, 255, 255, 0.05));
+          border-radius: 0.1875rem;
+          color: var(--text-color-muted);
+        }
+
         .running-message {
           overflow: hidden;
           text-overflow: ellipsis;
@@ -566,8 +582,12 @@ export class SystemStatusPage extends BaseComponent {
     `;
   }
 
-  handleCancelTask(id: string): void {
-    this.cancelMutation.mutate(id);
+  handleCancelTask(id: string, taskType: string): void {
+    if (taskType === 'scan') {
+      this.cancelScanMutation.mutate(id);
+    } else {
+      this.cancelCommandMutation.mutate(id);
+    }
   }
 
   private formatTaskName(task: RunningTask): string {

@@ -2,8 +2,8 @@
 //! System API endpoints
 
 use axum::{
-    extract::Query,
-    routing::{get, post},
+    extract::{Path, Query},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/health", get(get_health))
         .route("/diskspace", get(get_disk_space))
         .route("/task/running", get(get_running_tasks))
+        .route("/task/scan/{id}", delete(cancel_scan_job))
         .route("/backup", get(list_backups).post(create_backup))
         .route("/backup/restore", post(restore_backup))
         .route("/logs", get(get_logs))
@@ -96,6 +97,7 @@ async fn get_running_tasks(
                     started: cmd.started.map(|t| t.to_rfc3339()),
                     message: cmd.message,
                     detail: None,
+                    worker_id: None,
                 });
             }
         }
@@ -129,9 +131,10 @@ async fn get_running_tasks(
                 task_type: "scan".to_string(),
                 name,
                 status: "started".to_string(),
-                started: None,
+                started: job.started_at,
                 message: None,
                 detail,
+                worker_id: job.worker_id,
             });
         }
     }
@@ -149,6 +152,21 @@ pub struct RunningTask {
     pub started: Option<String>,
     pub message: Option<String>,
     pub detail: Option<String>,
+    pub worker_id: Option<String>,
+}
+
+/// DELETE /api/v5/system/task/scan/{id} - Cancel a running scan job
+async fn cancel_scan_job(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Path(job_id): Path<String>,
+) -> axum::http::StatusCode {
+    if let Some(consumer) = state.scan_result_consumer.get() {
+        if consumer.cancel_job(&job_id).await {
+            tracing::info!("Cancelled scan job via API: {}", job_id);
+            return axum::http::StatusCode::OK;
+        }
+    }
+    axum::http::StatusCode::NOT_FOUND
 }
 
 async fn get_health() -> Json<Vec<HealthCheck>> {

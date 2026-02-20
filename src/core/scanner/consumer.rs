@@ -42,6 +42,10 @@ struct PendingJob {
     entity_ids: Vec<i64>,
     results_received: usize,
     completed: bool,
+    /// Which worker is handling this job (set on first ScanResult)
+    worker_id: Option<String>,
+    /// When the job was registered
+    started_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Metadata needed to complete a download import after the worker moves files.
@@ -114,6 +118,8 @@ pub struct RunningJobInfo {
     pub scan_type: ScanType,
     pub entity_ids: Vec<i64>,
     pub results_received: usize,
+    pub worker_id: Option<String>,
+    pub started_at: Option<String>,
 }
 
 /// Service that consumes scan results from workers and updates the database
@@ -154,8 +160,22 @@ impl ScanResultConsumer {
                 scan_type: job.scan_type,
                 entity_ids: job.entity_ids.clone(),
                 results_received: job.results_received,
+                worker_id: job.worker_id.clone(),
+                started_at: Some(job.started_at.to_rfc3339()),
             })
             .collect()
+    }
+
+    /// Cancel a running scan job. Marks it as completed so incoming results are ignored.
+    pub async fn cancel_job(&self, job_id: &str) -> bool {
+        let mut jobs = self.pending_jobs.write().await;
+        if let Some(job) = jobs.jobs.get_mut(job_id) {
+            job.completed = true;
+            info!("Cancelled scan job: {} (type={:?})", job_id, job.scan_type);
+            true
+        } else {
+            false
+        }
     }
 
     /// Register a pending scan job with its scan type
@@ -168,6 +188,8 @@ impl ScanResultConsumer {
                 entity_ids,
                 results_received: 0,
                 completed: false,
+                worker_id: None,
+                started_at: Utc::now(),
             },
         );
         debug!("Registered scan job: {} (type={:?})", job_id, scan_type);
@@ -242,6 +264,9 @@ impl ScanResultConsumer {
                             files_found,
                             errors,
                         } => {
+                            // Track which worker is handling this job
+                            self.set_job_worker_id(&job_id, &worker_id).await;
+
                             // Check scan type to route to the right processor
                             let scan_type = self.get_job_scan_type(&job_id).await;
                             match scan_type {
@@ -1004,6 +1029,16 @@ impl ScanResultConsumer {
 
     /// Mark a job result as received in the pending jobs tracker.
     /// Auto-completes the job when all expected results have arrived.
+    /// Set the worker_id on a job (captured from first ScanResult)
+    async fn set_job_worker_id(&self, job_id: &str, worker_id: &str) {
+        let mut jobs = self.pending_jobs.write().await;
+        if let Some(job) = jobs.jobs.get_mut(job_id) {
+            if job.worker_id.is_none() {
+                job.worker_id = Some(worker_id.to_string());
+            }
+        }
+    }
+
     async fn mark_job_result_received(&self, job_id: &str) {
         let mut jobs = self.pending_jobs.write().await;
         if let Some(job) = jobs.jobs.get_mut(job_id) {
