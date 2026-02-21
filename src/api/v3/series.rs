@@ -472,6 +472,18 @@ async fn add_series(
 
     tracing::info!("Created series via v3: id={}, title={}, tvdb_id={}", id, body.title, tvdb_id);
 
+    // Create series folder on disk
+    let series_path = &db_series.path;
+    if !series_path.is_empty() {
+        let path = std::path::Path::new(series_path);
+        if !path.exists() {
+            match tokio::fs::create_dir_all(path).await {
+                Ok(()) => tracing::info!("Created series folder: {}", series_path),
+                Err(e) => tracing::warn!("Failed to create series folder {}: {}", series_path, e),
+            }
+        }
+    }
+
     // Spawn background refresh (fetch episodes + metadata from Skyhook/IMDB)
     let db_clone = state.db.clone();
     let metadata_svc = state.metadata_service.clone();

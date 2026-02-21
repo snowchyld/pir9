@@ -531,7 +531,7 @@ export class AddSeriesPage extends BaseComponent {
         <div class="form-grid">
           <div class="form-group">
             <label class="form-label">Root Folder</label>
-            <select class="form-select" id="rootFolder">
+            <select class="form-select" id="rootFolder" onchange="this.closest('add-series-page').updateSeriesPath()">
               ${rootFolders
                 .map(
                   (folder) => html`
@@ -540,6 +540,12 @@ export class AddSeriesPage extends BaseComponent {
                 )
                 .join('')}
             </select>
+          </div>
+
+          <div class="form-group" style="grid-column: 1 / -1">
+            <label class="form-label">Path</label>
+            <input type="text" class="form-input" id="seriesPath"
+              value="${escapeHtml(this.computeSeriesPath(rootFolders[0]?.path ?? '', series))}" />
           </div>
 
           <div class="form-group">
@@ -642,20 +648,26 @@ export class AddSeriesPage extends BaseComponent {
     this.selectedSeries.set(null);
   }
 
+  private computeSeriesPath(rootPath: string, series: SearchResult): string {
+    const root = rootPath.replace(/\/+$/, '');
+    const year = series.year || 0;
+    return `${root}/${series.title} (${year})`;
+  }
+
+  updateSeriesPath(): void {
+    const series = this.selectedSeries.value;
+    if (!series) return;
+    const form = this.querySelector('.add-form');
+    const rootFolderEl = form?.querySelector('#rootFolder') as HTMLSelectElement | null;
+    const pathEl = form?.querySelector('#seriesPath') as HTMLInputElement | null;
+    if (rootFolderEl && pathEl) {
+      pathEl.value = this.computeSeriesPath(rootFolderEl.value, series);
+    }
+  }
+
   handleAddSeries(): void {
     const series = this.selectedSeries.value;
     if (!series) return;
-
-    const rootFolder = (this.shadowRoot?.getElementById('rootFolder') as HTMLSelectElement)?.value;
-    const qualityProfileId = parseInt(
-      (this.shadowRoot?.getElementById('qualityProfile') as HTMLSelectElement)?.value ?? '0',
-      10,
-    );
-    const seriesType = (this.shadowRoot?.getElementById('seriesType') as HTMLSelectElement)?.value;
-    const seasonFolder =
-      (this.shadowRoot?.getElementById('seasonFolder') as HTMLInputElement)?.checked ?? true;
-    const searchOnAdd =
-      (this.shadowRoot?.getElementById('searchOnAdd') as HTMLInputElement)?.checked ?? true;
 
     // Using querySelector on the component itself since we use Light DOM
     const form = this.querySelector('.add-form');
@@ -664,17 +676,19 @@ export class AddSeriesPage extends BaseComponent {
     const seriesTypeEl = form?.querySelector('#seriesType') as HTMLSelectElement | null;
     const seasonFolderEl = form?.querySelector('#seasonFolder') as HTMLInputElement | null;
     const searchOnAddEl = form?.querySelector('#searchOnAdd') as HTMLInputElement | null;
+    const pathEl = form?.querySelector('#seriesPath') as HTMLInputElement | null;
 
     this.addSeriesMutation.mutate({
       tvdbId: series.tvdbId,
       title: series.title,
-      qualityProfileId: qualityProfileEl ? parseInt(qualityProfileEl.value, 10) : qualityProfileId,
-      rootFolderPath: rootFolderEl?.value ?? rootFolder,
-      seriesType: seriesTypeEl?.value ?? seriesType,
-      seasonFolder: seasonFolderEl?.checked ?? seasonFolder,
+      path: pathEl?.value ?? '',
+      qualityProfileId: qualityProfileEl ? parseInt(qualityProfileEl.value, 10) : 0,
+      rootFolderPath: rootFolderEl?.value ?? '',
+      seriesType: seriesTypeEl?.value ?? 'standard',
+      seasonFolder: seasonFolderEl?.checked ?? true,
       monitored: true,
       addOptions: {
-        searchForMissingEpisodes: searchOnAddEl?.checked ?? searchOnAdd,
+        searchForMissingEpisodes: searchOnAddEl?.checked ?? true,
       },
     } as Partial<Series>);
   }

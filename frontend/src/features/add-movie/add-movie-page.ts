@@ -551,7 +551,7 @@ export class AddMoviePage extends BaseComponent {
         <div class="form-grid">
           <div class="form-group">
             <label class="form-label">Root Folder</label>
-            <select class="form-select" id="rootFolder">
+            <select class="form-select" id="rootFolder" onchange="this.closest('add-movie-page').updateMoviePath()">
               ${rootFolders
                 .map(
                   (folder) => html`
@@ -560,6 +560,12 @@ export class AddMoviePage extends BaseComponent {
                 )
                 .join('')}
             </select>
+          </div>
+
+          <div class="form-group" style="grid-column: 1 / -1">
+            <label class="form-label">Path</label>
+            <input type="text" class="form-input" id="moviePath"
+              value="${escapeHtml(this.computeMoviePath(rootFolders[0]?.path ?? '', movie))}" />
           </div>
 
           <div class="form-group">
@@ -639,6 +645,23 @@ export class AddMoviePage extends BaseComponent {
     this.selectedMovie.set(null);
   }
 
+  private computeMoviePath(rootPath: string, movie: MovieLookupResult): string {
+    const root = rootPath.replace(/\/+$/, '');
+    const year = movie.year || 0;
+    return `${root}/${movie.title} (${year})`;
+  }
+
+  updateMoviePath(): void {
+    const movie = this.selectedMovie.value;
+    if (!movie) return;
+    const form = this.querySelector('.add-form');
+    const rootFolderEl = form?.querySelector('#rootFolder') as HTMLSelectElement | null;
+    const pathEl = form?.querySelector('#moviePath') as HTMLInputElement | null;
+    if (rootFolderEl && pathEl) {
+      pathEl.value = this.computeMoviePath(rootFolderEl.value, movie);
+    }
+  }
+
   handleAddMovie(): void {
     const movie = this.selectedMovie.value;
     if (!movie) return;
@@ -648,10 +671,12 @@ export class AddMoviePage extends BaseComponent {
     const qualityProfileEl = form?.querySelector('#qualityProfile') as HTMLSelectElement | null;
     const monitoredEl = form?.querySelector('#monitored') as HTMLInputElement | null;
     const searchOnAddEl = form?.querySelector('#searchOnAdd') as HTMLInputElement | null;
+    const pathEl = form?.querySelector('#moviePath') as HTMLInputElement | null;
 
     this.addMovieMutation.mutate({
       title: movie.title,
       imdbId: movie.imdbId,
+      path: pathEl?.value ?? '',
       qualityProfileId: qualityProfileEl ? parseInt(qualityProfileEl.value, 10) : 0,
       rootFolderPath: rootFolderEl?.value ?? '',
       monitored: monitoredEl?.checked ?? true,
