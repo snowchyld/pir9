@@ -324,6 +324,8 @@ pub struct AddSeriesRequest {
     pub root_folder_path: Option<String>,
     pub path: Option<String>,
     #[serde(default)]
+    pub year: i32,
+    #[serde(default)]
     pub monitored: bool,
     #[serde(default = "default_series_type")]
     pub series_type: String,
@@ -393,10 +395,13 @@ async fn add_series(
             .into_response();
     }
 
-    // Build path: rootFolderPath/Title or explicit path
+    // Build path: rootFolderPath + series_folder_format, or explicit path
     let full_path = body.path.clone().unwrap_or_else(|| {
         let root = body.root_folder_path.as_deref().unwrap_or("/data/series");
-        format!("{}/{}", root.trim_end_matches('/'), body.title)
+        let media_config = &state.config.read().media;
+        let folder_name =
+            crate::core::naming::build_series_folder_name(media_config, &body.title, body.year);
+        format!("{}/{}", root.trim_end_matches('/'), folder_name)
     });
     let root_folder_path = body.root_folder_path.clone().unwrap_or_default();
 

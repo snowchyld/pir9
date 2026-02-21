@@ -232,7 +232,7 @@ async fn create_series(
     let title_slug = generate_slug(&options.title);
 
     // Get paths using helper methods
-    let full_path = options.get_full_path();
+    let full_path = options.get_full_path(&state.config.read().media);
     let root_folder_path = options.get_root_folder_path();
 
     // Parse first_aired date if provided
@@ -460,7 +460,7 @@ async fn import_series(
         let title_slug = generate_slug(&options.title);
 
         // Get paths using helper methods
-        let full_path = options.get_full_path();
+        let full_path = options.get_full_path(&state.config.read().media);
         let root_folder_path = options.get_root_folder_path();
 
         // Parse first_aired date if provided
@@ -2220,15 +2220,19 @@ impl CreateSeriesRequest {
     }
 
     /// Get the full path for this series (either from path field or constructed from rootFolderPath)
-    fn get_full_path(&self) -> String {
+    fn get_full_path(&self, media_config: &crate::core::configuration::MediaConfig) -> String {
         if let Some(path) = &self.path {
             if !path.is_empty() {
                 return path.clone();
             }
         }
-        // Construct from rootFolderPath
+        // Construct from rootFolderPath using series_folder_format from config
         let root = self.root_folder_path.as_deref().unwrap_or("");
-        let folder_name = format!("{} ({})", self.title, self.year.unwrap_or(0));
+        let folder_name = crate::core::naming::build_series_folder_name(
+            media_config,
+            &self.title,
+            self.year.unwrap_or(0),
+        );
         format!("{}/{}", root.trim_end_matches('/'), folder_name)
     }
 

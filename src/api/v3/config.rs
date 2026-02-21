@@ -215,7 +215,7 @@ pub async fn get_naming_config(State(state): State<Arc<AppState>>) -> Json<Namin
         standard_episode_format: media.episode_naming_pattern.clone(),
         daily_episode_format: media.daily_episode_format.clone(),
         anime_episode_format: media.anime_episode_format.clone(),
-        series_folder_format: "{Series Title}".to_string(),
+        series_folder_format: media.series_folder_format.clone(),
         season_folder_format: media.season_folder_format.clone(),
         specials_folder_format: media.specials_folder_format.clone(),
         include_series_title: None,
@@ -242,6 +242,7 @@ pub async fn update_naming_config(
         app_config.media.episode_naming_pattern = body.standard_episode_format.clone();
         app_config.media.daily_episode_format = body.daily_episode_format.clone();
         app_config.media.anime_episode_format = body.anime_episode_format.clone();
+        app_config.media.series_folder_format = body.series_folder_format.clone();
         app_config.media.season_folder_format = body.season_folder_format.clone();
         app_config.media.specials_folder_format = body.specials_folder_format.clone();
 

@@ -182,6 +182,9 @@ pub struct MediaConfig {
     #[validate(length(min = 1))]
     pub season_folder_format: String,
 
+    #[serde(default = "default_series_folder_format")]
+    pub series_folder_format: String,
+
     #[serde(default = "default_specials_folder_format")]
     pub specials_folder_format: String,
 
@@ -209,6 +212,7 @@ impl Default for MediaConfig {
             daily_episode_format: default_daily_episode_format(),
             anime_episode_format: default_anime_episode_format(),
             season_folder_format: "Season {season:00}".to_string(),
+            series_folder_format: default_series_folder_format(),
             specials_folder_format: default_specials_folder_format(),
             multi_episode_style: 0,
             create_empty_series_folders: false,
@@ -226,6 +230,10 @@ fn default_daily_episode_format() -> String {
 fn default_anime_episode_format() -> String {
     "{Series Title} - S{season:00}E{episode:00} - {absolute:000} - {Episode Title} [{Quality Full}]"
         .to_string()
+}
+
+fn default_series_folder_format() -> String {
+    "{Series TitleYear}".to_string()
 }
 
 fn default_specials_folder_format() -> String {

@@ -33,6 +33,54 @@ pub fn build_episode_filename(config: &MediaConfig, ctx: &EpisodeNamingContext) 
     sanitize_filename(&cleaned)
 }
 
+/// Build series folder name from the `series_folder_format` config template.
+///
+/// Resolves `{Series Title}`, `{Series TitleYear}`, and `{Series CleanTitle}` tokens.
+pub fn build_series_folder_name(config: &MediaConfig, title: &str, year: i32) -> String {
+    let template = &config.series_folder_format;
+    let mut result = String::new();
+    let chars: Vec<char> = template.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        if chars[i] == '{' {
+            if let Some(end) = chars[i + 1..].iter().position(|&c| c == '}') {
+                let token = &template[i + 1..i + 1 + end];
+                let resolved = match token {
+                    "Series Title" => title.to_string(),
+                    "Series CleanTitle" => title
+                        .to_lowercase()
+                        .replace(|c: char| !c.is_alphanumeric() && c != ' ', "")
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(""),
+                    "Series TitleYear" => {
+                        if year > 0 {
+                            let year_suffix = format!("({})", year);
+                            if title.ends_with(&year_suffix) {
+                                title.to_string()
+                            } else {
+                                format!("{} ({})", title, year)
+                            }
+                        } else {
+                            title.to_string()
+                        }
+                    }
+                    _ => format!("{{{}}}", token),
+                };
+                result.push_str(&resolved);
+                i += end + 2;
+                continue;
+            }
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    sanitize_filename(&result)
+}
+
 /// Build season folder name from config template.
 ///
 /// Uses `specials_folder_format` for season 0, `season_folder_format` otherwise.
