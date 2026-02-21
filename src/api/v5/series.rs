@@ -1650,11 +1650,38 @@ pub async fn auto_refresh_series(
         }
     }
 
-    // If year was 0 (unresolved) and we now have a real year, fix the path
-    if old_year == 0 && series.year > 0 && series.path.contains("(0)") {
-        let old_path = series.path.clone();
-        series.path = series.path.replace("(0)", &format!("({})", series.year));
-        tracing::info!("Fixed series path year: {} -> {}", old_path, series.path);
+    // If year was 0 (unresolved) and we now have a real year, re-compute the folder name
+    if old_year == 0 && series.year > 0 && !series.root_folder_path.is_empty() {
+        let config = crate::core::configuration::AppConfig::load()
+            .unwrap_or_default();
+        let folder_name = crate::core::naming::build_series_folder_name(
+            &config.media,
+            &series.title,
+            series.year,
+        );
+        let new_path = format!(
+            "{}/{}",
+            series.root_folder_path.trim_end_matches('/'),
+            folder_name
+        );
+        if new_path != series.path {
+            tracing::info!("Fixed series path: {} -> {}", series.path, new_path);
+            // Rename existing folder if it exists
+            let old = std::path::Path::new(&series.path);
+            let new = std::path::Path::new(&new_path);
+            if old.exists() && !new.exists() {
+                match tokio::fs::rename(old, new).await {
+                    Ok(()) => tracing::info!("Renamed series folder: {} -> {}", series.path, new_path),
+                    Err(e) => tracing::warn!("Failed to rename series folder: {}", e),
+                }
+            } else if !new.exists() {
+                match tokio::fs::create_dir_all(new).await {
+                    Ok(()) => tracing::info!("Created series folder: {}", new_path),
+                    Err(e) => tracing::warn!("Failed to create series folder {}: {}", new_path, e),
+                }
+            }
+            series.path = new_path;
+        }
     }
 
     // Update series title from upstream — strip year suffix using local series year

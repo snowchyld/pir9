@@ -368,10 +368,12 @@ async fn add_series(
     let profile_id = body.profile_id.unwrap_or(body.quality_profile_id);
 
     tracing::info!(
-        "v3 add series: tvdb_id={}, title='{}', root_folder='{}', profile={}",
+        "v3 add series: tvdb_id={}, title='{}', root_folder='{}', path={:?}, year={}, profile={}",
         tvdb_id,
         body.title,
         body.root_folder_path.as_deref().unwrap_or(""),
+        body.path,
+        body.year,
         profile_id
     );
 
@@ -399,10 +401,12 @@ async fn add_series(
     let full_path = body.path.clone().unwrap_or_else(|| {
         let root = body.root_folder_path.as_deref().unwrap_or("/data/series");
         let media_config = &state.config.read().media;
+        tracing::debug!("v3 add series: no path provided, computing from root='{}', series_folder_format='{}'", root, media_config.series_folder_format);
         let folder_name =
             crate::core::naming::build_series_folder_name(media_config, &body.title, body.year);
         format!("{}/{}", root.trim_end_matches('/'), folder_name)
     });
+    tracing::info!("v3 add series: resolved path='{}'", full_path);
     let root_folder_path = body.root_folder_path.clone().unwrap_or_default();
 
     let clean = body
