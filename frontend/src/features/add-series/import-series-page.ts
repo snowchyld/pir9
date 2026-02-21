@@ -78,7 +78,8 @@ export class ImportSeriesPage extends BaseComponent {
     mutationFn: (series: Partial<Series>[]) => http.post('/series/import', series),
     onSuccess: (_data, variables) => {
       const count = (variables as Partial<Series>[]).length;
-      invalidateQueries(['/series', '/rootfolder']);
+      invalidateQueries(['/series']);
+      invalidateQueries(['/rootfolder']);
       showSuccess(`${count} series imported successfully`);
       // Stay on page and refresh - imported folders will disappear from the list
       this.selectedFolders.set(new Set());

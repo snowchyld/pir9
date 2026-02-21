@@ -89,7 +89,8 @@ export class SeriesDetailPage extends BaseComponent {
     mutationFn: (params: { episodeIds: number[]; monitored: boolean }) =>
       http.put('/episode/monitor', params),
     onSuccess: () => {
-      invalidateQueries(['/episode', '/series']);
+      invalidateQueries(['/episode']);
+      invalidateQueries(['/series']);
       showSuccess('Episode monitoring updated');
     },
     onError: () => {

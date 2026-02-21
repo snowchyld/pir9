@@ -65,7 +65,8 @@ export class MediaManagementSettings extends BaseComponent {
           : Promise.resolve(),
       ]),
     onSuccess: () => {
-      invalidateQueries(['/config/naming', '/config/mediamanagement']);
+      invalidateQueries(['/config/naming']);
+      invalidateQueries(['/config/mediamanagement']);
       showSuccess('Settings saved');
     },
     onError: () => {

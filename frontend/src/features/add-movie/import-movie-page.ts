@@ -78,7 +78,8 @@ export class ImportMoviePage extends BaseComponent {
     mutationFn: (movies: Record<string, unknown>[]) => http.post('/movie/import', movies),
     onSuccess: (_data, variables) => {
       const count = (variables as Record<string, unknown>[]).length;
-      invalidateQueries(['/movie', '/rootfolder']);
+      invalidateQueries(['/movie']);
+      invalidateQueries(['/rootfolder']);
       showSuccess(`${count} movie${count !== 1 ? 's' : ''} imported successfully`);
       this.selectedFolders.set(new Set());
       const currentRoot = this.selectedRootFolder.value;
