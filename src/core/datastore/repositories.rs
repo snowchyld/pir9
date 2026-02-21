@@ -572,6 +572,25 @@ impl SeriesRepository {
 
     pub async fn update(&self, series: &super::models::SeriesDbModel) -> Result<()> {
         let pool = self.db.pool();
+
+        // Resolve tvdb_id conflicts: clear the conflicting series' tvdb_id
+        if series.tvdb_id > 0 {
+            if let Some(existing) = self.get_by_tvdb_id(series.tvdb_id).await? {
+                if existing.id != series.id {
+                    tracing::warn!(
+                        "Series update: tvdb_id {} conflicts with series id={} '{}', clearing conflicting tvdb_id",
+                        series.tvdb_id, existing.id, existing.title
+                    );
+                    let _ = sqlx::query(
+                        "UPDATE series SET tvdb_id = 0 WHERE id = $1",
+                    )
+                    .bind(existing.id)
+                    .execute(pool)
+                    .await;
+                }
+            }
+        }
+
         sqlx::query(
             r#"
             UPDATE series SET
