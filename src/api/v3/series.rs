@@ -368,13 +368,14 @@ async fn add_series(
     let profile_id = body.profile_id.unwrap_or(body.quality_profile_id);
 
     tracing::info!(
-        "v3 add series: tvdb_id={}, title='{}', root_folder='{}', path={:?}, year={}, profile={}",
+        "v3 add series: tvdb_id={}, title='{}', root_folder='{}', path={:?}, year={}, profile={}, addOptions={:?}",
         tvdb_id,
         body.title,
         body.root_folder_path.as_deref().unwrap_or(""),
         body.path,
         body.year,
-        profile_id
+        profile_id,
+        body.add_options
     );
 
     let repo = SeriesRepository::new(state.db.clone());
@@ -493,17 +494,26 @@ async fn add_series(
         }
     }
 
-    // Spawn background refresh (fetch episodes + metadata from Skyhook/IMDB)
+    // Check if Overseerr/Sonarr requested automatic search for missing episodes
+    let search_for_missing = body
+        .add_options
+        .as_ref()
+        .and_then(|opts| opts.get("searchForMissingEpisodes"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    // Refresh metadata inline so the response includes full details (images, year, episodes)
+    tracing::info!("Auto-refreshing new series: {} (id={})", body.title, id);
+    if let Err(e) = crate::api::v5::series::auto_refresh_series(id, &state.db, &state.metadata_service).await {
+        tracing::error!("Failed to auto-refresh series {}: {}", id, e);
+    }
+
+    // Spawn disk scan + episode search in the background (slow NFS — not needed for display)
     let db_clone = state.db.clone();
-    let metadata_svc = state.metadata_service.clone();
     let hybrid_bus = state.hybrid_event_bus.clone();
     let consumer = state.scan_result_consumer.get().cloned();
-    let title_clone = body.title.clone();
+    let event_bus = state.event_bus.clone();
     tokio::spawn(async move {
-        tracing::info!("Auto-refreshing new series: {} (id={})", title_clone, id);
-        if let Err(e) = crate::api::v5::series::auto_refresh_series(id, &db_clone, &metadata_svc).await {
-            tracing::error!("Failed to auto-refresh series {}: {}", id, e);
-        }
         if let Err(e) = crate::api::v5::series::auto_scan_series(
             id,
             &db_clone,
@@ -511,6 +521,17 @@ async fn add_series(
             consumer.as_ref(),
         ).await {
             tracing::error!("Failed to auto-scan series {}: {}", id, e);
+        }
+        if search_for_missing {
+            tracing::info!("Auto-searching missing episodes for series {} (addOptions.searchForMissingEpisodes=true)", id);
+            let search_body = serde_json::json!({"seriesId": id});
+            if let Err(e) = crate::api::v5::command::execute_series_search_public(
+                &search_body,
+                &db_clone,
+                &event_bus,
+            ).await {
+                tracing::error!("Failed to auto-search series {}: {}", id, e);
+            }
         }
     });
 
