@@ -2061,6 +2061,7 @@ pub struct ImportPreviewEpisode {
     pub episode_number: i32,
     pub title: String,
     pub has_file: bool,
+    pub file_size: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2476,6 +2477,7 @@ async fn get_import_preview(
             episode_number: e.episode_number,
             title: e.title.clone(),
             has_file: e.has_file,
+            file_size: e.episode_file_id.and_then(|fid| file_size_map.get(&fid).copied()),
         })
         .collect();
 

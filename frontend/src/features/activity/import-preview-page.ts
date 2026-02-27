@@ -28,6 +28,7 @@ interface ImportPreviewEpisode {
   episodeNumber: number;
   title: string;
   hasFile: boolean;
+  fileSize?: number | null;
 }
 
 interface ImportPreviewSeries {
@@ -173,28 +174,34 @@ export class ImportPreviewPage extends BaseComponent {
 
     const contentTitle = data.series?.title ?? data.movie?.title ?? data.title;
     const rootPath = data.series?.path ?? data.movie?.path ?? '';
-    const matchedCount = this.getMatchedCount(data);
-    const unmatchedCount = data.files.length - matchedCount;
     const hasExisting = data.files.some(
       (f) => f.existingFile || this.getOverrideHasFile(f.sourceFile),
     );
-    const sameFileCount = data.files.filter(
-      (f) =>
-        (f.existingFile || this.getOverrideHasFile(f.sourceFile)) &&
-        f.existingFileSize != null &&
-        f.existingFileSize === f.sourceSize,
-    ).length;
-    const upgradeCount = data.files.filter(
-      (f) =>
-        (f.existingFile || this.getOverrideHasFile(f.sourceFile)) &&
-        (f.existingFileSize == null || f.existingFileSize !== f.sourceSize),
-    ).length;
+    const sameFileCount = data.files.filter((f) => {
+      const isMatched = f.matched || this.manualOverrides.has(f.sourceFile);
+      if (!isMatched) return false;
+      const hasExisting = f.existingFile || this.getOverrideHasFile(f.sourceFile);
+      if (!hasExisting) return false;
+      const existingSize = this.getEffectiveExistingSize(f);
+      return existingSize != null && existingSize === f.sourceSize;
+    }).length;
+    const upgradeCount = data.files.filter((f) => {
+      const isMatched = f.matched || this.manualOverrides.has(f.sourceFile);
+      if (!isMatched) return false;
+      const hasExisting = f.existingFile || this.getOverrideHasFile(f.sourceFile);
+      if (!hasExisting) return false;
+      const existingSize = this.getEffectiveExistingSize(f);
+      return existingSize == null || existingSize !== f.sourceSize;
+    }).length;
+    const matchedCount = this.getMatchedCount(data);
+    const unmatchedCount = data.files.length - sameFileCount - matchedCount;
     const totalSize = data.files
       .filter((f) => {
         const isMatched = f.matched || this.manualOverrides.has(f.sourceFile);
         if (!isMatched) return false;
         const hasExisting = f.existingFile || this.getOverrideHasFile(f.sourceFile);
-        if (hasExisting && f.existingFileSize != null && f.existingFileSize === f.sourceSize) {
+        const existingSize = this.getEffectiveExistingSize(f);
+        if (hasExisting && existingSize != null && existingSize === f.sourceSize) {
           return false;
         }
         return true;
@@ -232,7 +239,7 @@ export class ImportPreviewPage extends BaseComponent {
           </div>
           <div class="info-card">
             <div class="info-label">Files</div>
-            <div class="info-value">${matchedCount} matched · ${unmatchedCount} skipped · ${this.formatSize(totalSize)}</div>
+            <div class="info-value">${matchedCount} matched${unmatchedCount > 0 ? ` · ${unmatchedCount} skipped` : ''}${sameFileCount > 0 ? ` · ${sameFileCount} identical` : ''} · ${this.formatSize(totalSize)}</div>
           </div>
         </div>
 
@@ -284,11 +291,25 @@ export class ImportPreviewPage extends BaseComponent {
       if (!isMatched) return false;
       // Exclude same-size files (identical, no upgrade needed)
       const hasExisting = f.existingFile || this.getOverrideHasFile(f.sourceFile);
-      if (hasExisting && f.existingFileSize != null && f.existingFileSize === f.sourceSize) {
+      const existingSize = this.getEffectiveExistingSize(f);
+      if (hasExisting && existingSize != null && existingSize === f.sourceSize) {
         return false;
       }
       return true;
     }).length;
+  }
+
+  /** Get the existing file size — uses episode fileSize for manual overrides, backend value otherwise */
+  private getEffectiveExistingSize(file: ImportPreviewFile): number | null {
+    const override = this.manualOverrides.get(file.sourceFile);
+    if (override) {
+      const ep = this.preview.value?.episodes?.find(
+        (e) =>
+          e.seasonNumber === override.seasonNumber && e.episodeNumber === override.episodeNumber,
+      );
+      return ep?.fileSize ?? null;
+    }
+    return file.existingFileSize ?? null;
   }
 
   private getOverrideHasFile(sourceFile: string): boolean {
@@ -323,16 +344,23 @@ export class ImportPreviewPage extends BaseComponent {
     const destFilename = file.destinationPath?.split('/').pop() ?? '';
     const hasExistingFile = isManuallyMatched ? (overrideEp?.hasFile ?? false) : file.existingFile;
 
+    // For manually matched episodes, use the episode's file size; otherwise use the backend value
+    const effectiveExistingSize = isManuallyMatched
+      ? (overrideEp?.fileSize ?? null)
+      : (file.existingFileSize ?? null);
+
     // Detect same-size files: if source size matches existing file size, it's likely identical
     const isSameFile =
-      hasExistingFile && file.existingFileSize != null && file.existingFileSize === file.sourceSize;
+      hasExistingFile && effectiveExistingSize != null && effectiveExistingSize === file.sourceSize;
+
+    // Hide identical files entirely — they won't be imported
+    if (effectivelyMatched && isSameFile) {
+      return '';
+    }
 
     let statusClass = 'status-skip';
     let statusLabel = 'Skipped';
-    if (effectivelyMatched && isSameFile) {
-      statusClass = 'status-same';
-      statusLabel = 'Same File';
-    } else if (effectivelyMatched && hasExistingFile) {
+    if (effectivelyMatched && hasExistingFile) {
       statusClass = 'status-upgrade';
       statusLabel = 'Upgrade';
     } else if (effectivelyMatched) {
@@ -347,8 +375,8 @@ export class ImportPreviewPage extends BaseComponent {
     const seasons = [...new Set(episodes.map((e) => e.seasonNumber))].sort((a, b) => a - b);
 
     // Size display: source size on top, existing file size below when present
-    const sizeHtml = file.existingFileSize
-      ? `${this.formatSize(file.sourceSize)}<div class="existing-size">${this.formatSize(file.existingFileSize)} existing</div>`
+    const sizeHtml = effectiveExistingSize
+      ? `${this.formatSize(file.sourceSize)}<div class="existing-size">${this.formatSize(effectiveExistingSize)} existing</div>`
       : this.formatSize(file.sourceSize);
 
     const episodeCellContent =
