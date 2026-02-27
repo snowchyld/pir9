@@ -78,7 +78,8 @@ pub fn build_series_folder_name(config: &MediaConfig, title: &str, year: i32) ->
         i += 1;
     }
 
-    sanitize_filename(&result)
+    let replaced = replace_colons(&result, &config.colon_replacement_format);
+    sanitize_filename(&replaced)
 }
 
 /// Build season folder name from config template.
@@ -109,7 +110,8 @@ pub fn build_season_folder(config: &MediaConfig, season_number: i32) -> String {
         i += 1;
     }
 
-    sanitize_filename(&result)
+    let replaced = replace_colons(&result, &config.colon_replacement_format);
+    sanitize_filename(&replaced)
 }
 
 /// Render a format template string into an episode name.
@@ -852,5 +854,42 @@ mod tests {
 
         let result = build_episode_filename(&config, &ctx);
         assert!(result.contains("Unknown"));
+    }
+
+    #[test]
+    fn test_series_folder_colon_dash() {
+        let config = test_config(); // colon_replacement_format = "dash"
+        let result = build_series_folder_name(&config, "Star Wars: Visions", 2021);
+        assert_eq!(result, "Star Wars - Visions (2021)");
+    }
+
+    #[test]
+    fn test_series_folder_colon_delete() {
+        let mut config = test_config();
+        config.colon_replacement_format = "delete".to_string();
+        let result = build_series_folder_name(&config, "Star Wars: Visions", 2021);
+        assert_eq!(result, "Star Wars Visions (2021)");
+    }
+
+    #[test]
+    fn test_series_folder_colon_space() {
+        let mut config = test_config();
+        config.colon_replacement_format = "space".to_string();
+        let result = build_series_folder_name(&config, "DC: The Flash", 2014);
+        assert_eq!(result, "DC  The Flash (2014)");
+    }
+
+    #[test]
+    fn test_series_folder_no_colon() {
+        let config = test_config();
+        let result = build_series_folder_name(&config, "The Flash", 2014);
+        assert_eq!(result, "The Flash (2014)");
+    }
+
+    #[test]
+    fn test_series_folder_no_year() {
+        let config = test_config();
+        let result = build_series_folder_name(&config, "Star Wars: Visions", 0);
+        assert_eq!(result, "Star Wars - Visions");
     }
 }

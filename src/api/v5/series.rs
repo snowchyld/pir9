@@ -439,7 +439,7 @@ async fn import_series(
             season_folder: import_req.season_folder.unwrap_or(true),
             tags: import_req.tags.unwrap_or_default(),
             add_options: AddOptionsRequest::default(),
-            year: None,
+            year: folder_year,
             overview: None,
             network: None,
             runtime: None,
@@ -1650,8 +1650,13 @@ pub async fn auto_refresh_series(
         }
     }
 
-    // If year was 0 (unresolved) and we now have a real year, re-compute the folder name
-    if old_year == 0 && series.year > 0 && !series.root_folder_path.is_empty() {
+    // Check if the existing folder name has colons that violate the colon replacement rule.
+    // Only rename for colon violations — don't rename just because the year resolved.
+    let current_folder_name = std::path::Path::new(&series.path)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("");
+    if current_folder_name.contains(':') && !series.root_folder_path.is_empty() {
         let config = crate::core::configuration::AppConfig::load()
             .unwrap_or_default();
         let folder_name = crate::core::naming::build_series_folder_name(
@@ -1665,19 +1670,13 @@ pub async fn auto_refresh_series(
             folder_name
         );
         if new_path != series.path {
-            tracing::info!("Fixed series path: {} -> {}", series.path, new_path);
-            // Rename existing folder if it exists
+            tracing::info!("Fixing colon in series folder: {} -> {}", series.path, new_path);
             let old = std::path::Path::new(&series.path);
             let new = std::path::Path::new(&new_path);
             if old.exists() && !new.exists() {
                 match tokio::fs::rename(old, new).await {
                     Ok(()) => tracing::info!("Renamed series folder: {} -> {}", series.path, new_path),
                     Err(e) => tracing::warn!("Failed to rename series folder: {}", e),
-                }
-            } else if !new.exists() {
-                match tokio::fs::create_dir_all(new).await {
-                    Ok(()) => tracing::info!("Created series folder: {}", new_path),
-                    Err(e) => tracing::warn!("Failed to create series folder {}: {}", new_path, e),
                 }
             }
             series.path = new_path;
