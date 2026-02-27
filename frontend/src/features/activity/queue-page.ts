@@ -502,7 +502,13 @@ export class QueuePage extends BaseComponent {
 
   private isImportable(item: QueueItem): boolean {
     if (item.status === 'stalled') return false;
-    return item.status === 'completed' || item.trackedDownloadState === 'importPending';
+    const isCompleted =
+      item.status === 'completed' || item.trackedDownloadState === 'importPending';
+    if (!isCompleted) return false;
+    // Must have a valid series or movie match in the DB (id > 0 means real DB record)
+    const hasSeriesMatch = item.seriesId != null && item.seriesId > 0;
+    const hasMovieMatch = item.movieId != null && item.movieId > 0;
+    return hasSeriesMatch || hasMovieMatch;
   }
 
   private renderRow(item: QueueItem): string {

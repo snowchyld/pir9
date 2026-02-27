@@ -16,7 +16,7 @@ use crate::core::datastore::repositories::{
     MovieRepository, SeriesRepository, TrackedDownloadRepository,
 };
 use crate::core::download::clients::{create_client_from_model, DownloadState};
-use crate::core::parser::{normalize_title, parse_title, title_matches_series};
+use crate::core::parser::{best_series_match, normalize_title, parse_title};
 use crate::core::queue::{
     Protocol as QueueProtocol, QueueResult, QueueStatus, TrackedDownloadService,
     TrackedDownloadState, TrackedDownloadStatus,
@@ -580,54 +580,51 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                         },
                     };
 
-                    for series in &all_series {
-                        if title_matches_series(info, &series.title)
-                            || title_matches_series(info, &series.clean_title)
-                        {
-                            matched_series_id = Some(series.id);
+                    // Use best_series_match (scored) instead of first-match to
+                    // avoid partial substring matches picking the wrong series
+                    if let Some(idx) = best_series_match(info, &all_series) {
+                        let series = &all_series[idx];
+                        matched_series_id = Some(series.id);
 
-                            // Standard S01E02 matching
-                            if let Some(season) = info.season_number {
-                                if !info.episode_numbers.is_empty() {
-                                    let ep_num = info.episode_numbers[0];
-                                    if let Ok(Some(ep)) = episode_repo
-                                        .get_by_series_season_episode(series.id, season, ep_num)
-                                        .await
-                                    {
-                                        matched_episode_id = Some(ep.id);
-                                    }
-                                }
-                            }
-
-                            // Anime absolute episode matching (e.g. "- 23")
-                            if matched_episode_id.is_none()
-                                && !info.absolute_episode_numbers.is_empty()
-                            {
-                                let abs_num = info.absolute_episode_numbers[0];
-                                if let Ok(Some(ep)) = episode_repo
-                                    .get_by_series_and_absolute(series.id, abs_num)
-                                    .await
-                                {
-                                    matched_episode_id = Some(ep.id);
-                                }
-                            }
-
-                            // Bare episode number without season (e.g. "E10")
-                            if matched_episode_id.is_none()
-                                && info.season_number.is_none()
-                                && !info.episode_numbers.is_empty()
-                            {
+                        // Standard S01E02 matching
+                        if let Some(season) = info.season_number {
+                            if !info.episode_numbers.is_empty() {
                                 let ep_num = info.episode_numbers[0];
-                                // Try as absolute episode number first
                                 if let Ok(Some(ep)) = episode_repo
-                                    .get_by_series_and_absolute(series.id, ep_num)
+                                    .get_by_series_season_episode(series.id, season, ep_num)
                                     .await
                                 {
                                     matched_episode_id = Some(ep.id);
                                 }
                             }
+                        }
 
-                            break;
+                        // Anime absolute episode matching (e.g. "- 23")
+                        if matched_episode_id.is_none()
+                            && !info.absolute_episode_numbers.is_empty()
+                        {
+                            let abs_num = info.absolute_episode_numbers[0];
+                            if let Ok(Some(ep)) = episode_repo
+                                .get_by_series_and_absolute(series.id, abs_num)
+                                .await
+                            {
+                                matched_episode_id = Some(ep.id);
+                            }
+                        }
+
+                        // Bare episode number without season (e.g. "E10")
+                        if matched_episode_id.is_none()
+                            && info.season_number.is_none()
+                            && !info.episode_numbers.is_empty()
+                        {
+                            let ep_num = info.episode_numbers[0];
+                            // Try as absolute episode number first
+                            if let Ok(Some(ep)) = episode_repo
+                                .get_by_series_and_absolute(series.id, ep_num)
+                                .await
+                            {
+                                matched_episode_id = Some(ep.id);
+                            }
                         }
                     }
                 }
