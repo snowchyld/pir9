@@ -255,7 +255,12 @@ pub async fn lookup_series(
                         monitored: true,
                     })
                     .collect(),
-                year: s.year.unwrap_or(0),
+                year: s.year.unwrap_or_else(|| {
+                    s.first_aired.as_deref()
+                        .and_then(|fa| fa.split('-').next())
+                        .and_then(|y| y.parse::<i32>().ok())
+                        .unwrap_or(0)
+                }),
                 quality_profile_id: 1,
                 season_folder: true,
                 monitored: true,

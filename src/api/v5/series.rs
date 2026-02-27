@@ -1388,14 +1388,8 @@ async fn lookup_series(
     // Convert Skyhook results to our format
     let results: Vec<SeriesLookupResult> = skyhook_results
         .into_iter()
-        .map(|s| SeriesLookupResult {
-            tvdb_id: s.tvdb_id,
-            title: s.title,
-            sort_title: s.sort_title.unwrap_or_default(),
-            overview: s.overview,
-            year: s.year.unwrap_or(0),
-            status: s.status.unwrap_or_else(|| "unknown".to_string()),
-            images: s
+        .map(|s| {
+            let images: Vec<SeriesImage> = s
                 .images
                 .unwrap_or_default()
                 .into_iter()
@@ -1403,28 +1397,54 @@ async fn lookup_series(
                     cover_type: img.cover_type,
                     url: img.url,
                 })
-                .collect(),
-            seasons: s
-                .seasons
-                .unwrap_or_default()
-                .into_iter()
-                .map(|season| SeasonResource {
-                    season_number: season.season_number,
-                    monitored: true,
-                    statistics: None,
-                })
-                .collect(),
-            ratings: Ratings {
-                votes: s.ratings.as_ref().and_then(|r| r.votes).unwrap_or(0),
-                value: s.ratings.as_ref().and_then(|r| r.value).unwrap_or(0.0),
-            },
-            genres: s.genres.unwrap_or_default(),
-            network: s.network,
-            runtime: s.runtime.unwrap_or(0),
-            tvrage_id: s.tvrage_id.unwrap_or(0),
-            imdb_id: s.imdb_id,
-            certification: s.certification,
-            first_aired: s.first_aired,
+                .collect();
+
+            // Extract poster URL from images array
+            let remote_poster = images
+                .iter()
+                .find(|img| img.cover_type.eq_ignore_ascii_case("poster"))
+                .map(|img| img.url.clone());
+
+            // Extract year from firstAired when year is null
+            let year = s.year.unwrap_or_else(|| {
+                s.first_aired
+                    .as_deref()
+                    .and_then(|fa| fa.split('-').next())
+                    .and_then(|y| y.parse::<i32>().ok())
+                    .unwrap_or(0)
+            });
+
+            SeriesLookupResult {
+                tvdb_id: s.tvdb_id,
+                title: s.title,
+                sort_title: s.sort_title.unwrap_or_default(),
+                overview: s.overview,
+                year,
+                status: s.status.unwrap_or_else(|| "unknown".to_string()),
+                remote_poster,
+                images,
+                seasons: s
+                    .seasons
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|season| SeasonResource {
+                        season_number: season.season_number,
+                        monitored: true,
+                        statistics: None,
+                    })
+                    .collect(),
+                ratings: Ratings {
+                    votes: s.ratings.as_ref().and_then(|r| r.votes).unwrap_or(0),
+                    value: s.ratings.as_ref().and_then(|r| r.value).unwrap_or(0.0),
+                },
+                genres: s.genres.unwrap_or_default(),
+                network: s.network,
+                runtime: s.runtime.unwrap_or(0),
+                tvrage_id: s.tvrage_id.unwrap_or(0),
+                imdb_id: s.imdb_id,
+                certification: s.certification,
+                first_aired: s.first_aired,
+            }
         })
         .collect();
 
@@ -2591,6 +2611,7 @@ pub struct SeriesLookupResult {
     pub year: i32,
     pub status: String,
     pub images: Vec<SeriesImage>,
+    pub remote_poster: Option<String>,
     pub seasons: Vec<SeasonResource>,
     pub ratings: Ratings,
     pub genres: Vec<String>,
