@@ -18,6 +18,7 @@ interface RootFolder {
   id: number;
   path: string;
   freeSpace: number;
+  contentType: string;
 }
 
 interface MovieFormData {
@@ -41,8 +42,8 @@ export class MovieEditDialog extends BaseComponent {
   });
 
   private rootFoldersQuery = createQuery({
-    queryKey: ['/rootfolder'],
-    queryFn: () => http.get<RootFolder[]>('/rootfolder'),
+    queryKey: ['/rootfolder', 'movie'],
+    queryFn: () => http.get<RootFolder[]>('/rootfolder', { params: { contentType: 'movie' } }),
   });
 
   protected onInit(): void {

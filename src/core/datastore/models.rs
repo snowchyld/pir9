@@ -330,6 +330,7 @@ pub struct RootFolderDbModel {
     pub free_space: Option<i64>,
     pub total_space: Option<i64>,
     pub unmapped_folders: Option<String>, // JSON serialized
+    pub content_type: String,
 }
 
 /// Config database model

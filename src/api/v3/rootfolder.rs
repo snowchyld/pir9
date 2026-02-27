@@ -1,7 +1,7 @@
 //! Root Folder API endpoints
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::get,
@@ -20,6 +20,7 @@ pub struct RootFolderResource {
     pub path: String,
     pub accessible: bool,
     pub free_space: i64,
+    pub content_type: String,
     #[serde(default)]
     pub unmapped_folders: Vec<UnmappedFolderResource>,
 }
@@ -32,12 +33,24 @@ pub struct CreateRootFolderRequest {
     #[serde(default)]
     pub id: Option<i32>,
     pub path: String,
+    #[serde(default = "default_content_type")]
+    pub content_type: String,
     #[serde(default)]
     pub accessible: Option<bool>,
     #[serde(default)]
     pub free_space: Option<i64>,
     #[serde(default)]
     pub unmapped_folders: Option<Vec<UnmappedFolderResource>>,
+}
+
+fn default_content_type() -> String {
+    "series".to_string()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RootFolderQuery {
+    pub content_type: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -52,13 +65,20 @@ pub struct UnmappedFolderResource {
 /// GET /api/v3/rootfolder
 pub async fn get_root_folders(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<RootFolderQuery>,
 ) -> Result<Json<Vec<RootFolderResource>>, RootFolderError> {
     let repo = RootFolderRepository::new(state.db.clone());
 
-    let db_folders = repo
-        .get_all()
-        .await
-        .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folders: {}", e)))?;
+    let db_folders = if let Some(ref ct) = query.content_type {
+        let types: Vec<String> = ct.split(',').map(|s| s.trim().to_string()).collect();
+        repo.get_by_content_types(&types)
+            .await
+            .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folders: {}", e)))?
+    } else {
+        repo.get_all()
+            .await
+            .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folders: {}", e)))?
+    };
 
     // Scan each root folder in spawn_blocking to avoid blocking the async
     // runtime on NFS/network filesystem I/O
@@ -71,6 +91,7 @@ pub async fn get_root_folders(
                 path: f.path,
                 accessible,
                 free_space,
+                content_type: f.content_type,
                 unmapped_folders: f
                     .unmapped_folders
                     .and_then(|s| serde_json::from_str(&s).ok())
@@ -110,6 +131,7 @@ pub async fn get_root_folder(
             path: folder.path,
             accessible,
             free_space,
+            content_type: folder.content_type,
             unmapped_folders: folder
                 .unmapped_folders
                 .and_then(|s| serde_json::from_str(&s).ok())
@@ -141,19 +163,21 @@ pub async fn create_root_folder(
             .map_err(|e| RootFolderError::Internal(format!("Check task failed: {}", e)))?;
 
     // Insert into database
+    let content_type = body.content_type;
     let repo = RootFolderRepository::new(state.db.clone());
     let id = repo
-        .insert(&path)
+        .insert(&path, &content_type)
         .await
         .map_err(|e| RootFolderError::Internal(format!("Failed to create root folder: {}", e)))?;
 
-    tracing::info!("Created root folder: id={}, path={}", id, path);
+    tracing::info!("Created root folder: id={}, path={}, content_type={}", id, path, content_type);
 
     Ok(Json(RootFolderResource {
         id: id as i32,
         path,
         accessible,
         free_space,
+        content_type,
         unmapped_folders: body.unmapped_folders.unwrap_or_default(),
     }))
 }

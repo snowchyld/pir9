@@ -414,7 +414,7 @@ impl RootFolderRepository {
     pub async fn get_all(&self) -> Result<Vec<super::models::RootFolderDbModel>> {
         let pool = self.db.pool();
         let rows =
-            sqlx::query_as::<_, super::models::RootFolderDbModel>("SELECT * FROM root_folders")
+            sqlx::query_as::<_, super::models::RootFolderDbModel>("SELECT * FROM root_folders ORDER BY path")
                 .fetch_all(pool)
                 .await?;
         Ok(rows)
@@ -431,16 +431,28 @@ impl RootFolderRepository {
         Ok(row)
     }
 
-    pub async fn insert(&self, path: &str) -> Result<i64> {
+    pub async fn insert(&self, path: &str, content_type: &str) -> Result<i64> {
         let pool = self.db.pool();
         let row: (i64,) = sqlx::query_as(
-            "INSERT INTO root_folders (path, accessible) VALUES ($1, $2) RETURNING id",
+            "INSERT INTO root_folders (path, accessible, content_type) VALUES ($1, $2, $3) RETURNING id",
         )
         .bind(path)
         .bind(true)
+        .bind(content_type)
         .fetch_one(pool)
         .await?;
         Ok(row.0)
+    }
+
+    pub async fn get_by_content_types(&self, types: &[String]) -> Result<Vec<super::models::RootFolderDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::RootFolderDbModel>(
+            "SELECT * FROM root_folders WHERE content_type = ANY($1) ORDER BY path",
+        )
+        .bind(types)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
     }
 
     pub async fn delete(&self, id: i64) -> Result<()> {

@@ -28,6 +28,7 @@ interface RootFolder {
   id: number;
   path: string;
   freeSpace: number;
+  contentType: string;
 }
 
 interface QualityProfile {
@@ -43,8 +44,8 @@ export class AddSeriesPage extends BaseComponent {
   private selectedSeries = signal<SearchResult | null>(null);
 
   private rootFoldersQuery = createQuery({
-    queryKey: ['/rootfolder'],
-    queryFn: () => http.get<RootFolder[]>('/rootfolder'),
+    queryKey: ['/rootfolder', 'series'],
+    queryFn: () => http.get<RootFolder[]>('/rootfolder', { params: { contentType: 'series,anime' } }),
   });
 
   private qualityProfilesQuery = createQuery({

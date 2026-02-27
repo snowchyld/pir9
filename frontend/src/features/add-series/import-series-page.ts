@@ -12,6 +12,7 @@ interface RootFolder {
   id: number;
   path: string;
   freeSpace: number;
+  contentType: string;
   unmappedFolders: Array<{
     name: string;
     path: string;
@@ -65,8 +66,8 @@ export class ImportSeriesPage extends BaseComponent {
   private pendingRootFolders = signal<string[]>([]);
 
   private rootFoldersQuery = createQuery({
-    queryKey: ['/rootfolder'],
-    queryFn: () => http.get<RootFolder[]>('/rootfolder'),
+    queryKey: ['/rootfolder', 'series'],
+    queryFn: () => http.get<RootFolder[]>('/rootfolder', { params: { contentType: 'series,anime' } }),
   });
 
   private qualityProfilesQuery = createQuery({
@@ -1172,7 +1173,7 @@ export class ImportSeriesPage extends BaseComponent {
 
     for (const path of paths) {
       try {
-        await http.post('/rootfolder', { path });
+        await http.post('/rootfolder', { path, contentType: 'series' });
         successCount++;
       } catch {
         errors.push(path);

@@ -13,6 +13,7 @@ interface RootFolder {
   id: number;
   path: string;
   freeSpace: number;
+  contentType: string;
 }
 
 interface QualityProfile {
@@ -28,8 +29,8 @@ export class AddMoviePage extends BaseComponent {
   private selectedMovie = signal<MovieLookupResult | null>(null);
 
   private rootFoldersQuery = createQuery({
-    queryKey: ['/rootfolder'],
-    queryFn: () => http.get<RootFolder[]>('/rootfolder'),
+    queryKey: ['/rootfolder', 'movie'],
+    queryFn: () => http.get<RootFolder[]>('/rootfolder', { params: { contentType: 'movie' } }),
   });
 
   private qualityProfilesQuery = createQuery({

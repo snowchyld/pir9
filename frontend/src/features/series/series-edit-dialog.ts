@@ -17,6 +17,7 @@ interface RootFolder {
   id: number;
   path: string;
   freeSpace: number;
+  contentType: string;
 }
 
 interface SeriesFormData {
@@ -43,8 +44,8 @@ export class SeriesEditDialog extends BaseComponent {
   });
 
   private rootFoldersQuery = createQuery({
-    queryKey: ['/rootfolder'],
-    queryFn: () => http.get<RootFolder[]>('/rootfolder'),
+    queryKey: ['/rootfolder', 'series'],
+    queryFn: () => http.get<RootFolder[]>('/rootfolder', { params: { contentType: 'series,anime' } }),
   });
 
   protected onInit(): void {

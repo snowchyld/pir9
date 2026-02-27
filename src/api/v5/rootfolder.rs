@@ -1,7 +1,7 @@
 //! Root Folder API endpoints (v5)
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::get,
@@ -20,6 +20,7 @@ pub struct RootFolderResource {
     pub path: String,
     pub accessible: bool,
     pub free_space: i64,
+    pub content_type: String,
     #[serde(default)]
     pub unmapped_folders: Vec<UnmappedFolderResource>,
 }
@@ -32,12 +33,24 @@ pub struct CreateRootFolderRequest {
     #[serde(default)]
     pub id: Option<i32>,
     pub path: String,
+    #[serde(default = "default_content_type")]
+    pub content_type: String,
     #[serde(default)]
     pub accessible: Option<bool>,
     #[serde(default)]
     pub free_space: Option<i64>,
     #[serde(default)]
     pub unmapped_folders: Option<Vec<UnmappedFolderResource>>,
+}
+
+fn default_content_type() -> String {
+    "series".to_string()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RootFolderQuery {
+    pub content_type: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -50,26 +63,35 @@ pub struct UnmappedFolderResource {
 
 pub async fn get_root_folders(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<RootFolderQuery>,
 ) -> Result<Json<Vec<RootFolderResource>>, RootFolderError> {
     let repo = RootFolderRepository::new(state.db.clone());
 
-    let db_folders = repo
-        .get_all()
-        .await
-        .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folders: {}", e)))?;
+    let db_folders = if let Some(ref ct) = query.content_type {
+        let types: Vec<String> = ct.split(',').map(|s| s.trim().to_string()).collect();
+        repo.get_by_content_types(&types)
+            .await
+            .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folders: {}", e)))?
+    } else {
+        repo.get_all()
+            .await
+            .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folders: {}", e)))?
+    };
 
-    // Get all series + movie paths to determine which folders are unmapped
+    // Get series + movie paths to determine which folders are unmapped
     let series_paths = get_series_paths(&state.db).await.unwrap_or_default();
     let movie_paths = get_movie_paths(&state.db).await.unwrap_or_default();
-    let mut mapped_paths = series_paths;
-    mapped_paths.extend(movie_paths);
-    let mapped_paths = Arc::new(mapped_paths);
 
     // Scan each root folder in spawn_blocking to avoid blocking the async
     // runtime on NFS/network filesystem I/O
     let mut tasks = Vec::new();
     for f in db_folders {
-        let mapped = mapped_paths.clone();
+        // Determine mapped paths based on content type:
+        // movie folders only check movie paths, series/anime check series paths
+        let mapped = Arc::new(match f.content_type.as_str() {
+            "movie" => movie_paths.clone(),
+            _ => series_paths.clone(),
+        });
         tasks.push(tokio::task::spawn_blocking(move || {
             let (accessible, free_space) = check_path_accessible(&f.path);
             let unmapped_folders = if accessible {
@@ -82,6 +104,7 @@ pub async fn get_root_folders(
                 path: f.path,
                 accessible,
                 free_space,
+                content_type: f.content_type,
                 unmapped_folders,
             }
         }));
@@ -110,11 +133,11 @@ pub async fn get_root_folder(
         .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folder: {}", e)))?
         .ok_or(RootFolderError::NotFound)?;
 
-    // Get series + movie paths for unmapped folder detection
-    let series_paths = get_series_paths(&state.db).await.unwrap_or_default();
-    let movie_paths = get_movie_paths(&state.db).await.unwrap_or_default();
-    let mut mapped_paths = series_paths;
-    mapped_paths.extend(movie_paths);
+    // Get mapped paths based on content type
+    let mapped_paths = match folder.content_type.as_str() {
+        "movie" => get_movie_paths(&state.db).await.unwrap_or_default(),
+        _ => get_series_paths(&state.db).await.unwrap_or_default(),
+    };
 
     let resource = tokio::task::spawn_blocking(move || {
         let (accessible, free_space) = check_path_accessible(&folder.path);
@@ -128,6 +151,7 @@ pub async fn get_root_folder(
             path: folder.path,
             accessible,
             free_space,
+            content_type: folder.content_type,
             unmapped_folders,
         }
     })
@@ -162,19 +186,20 @@ pub async fn create_root_folder(
     }
 
     // Insert into database
+    let content_type = body.content_type;
     let repo = RootFolderRepository::new(state.db.clone());
     let id = repo
-        .insert(&path)
+        .insert(&path, &content_type)
         .await
         .map_err(|e| RootFolderError::Internal(format!("Failed to create root folder: {}", e)))?;
 
-    tracing::info!("Created root folder: id={}, path={}", id, path);
+    tracing::info!("Created root folder: id={}, path={}, content_type={}", id, path, content_type);
 
-    // Scan for unmapped folders
-    let series_paths = get_series_paths(&state.db).await.unwrap_or_default();
-    let movie_paths = get_movie_paths(&state.db).await.unwrap_or_default();
-    let mut mapped_paths = series_paths;
-    mapped_paths.extend(movie_paths);
+    // Scan for unmapped folders based on content type
+    let mapped_paths = match content_type.as_str() {
+        "movie" => get_movie_paths(&state.db).await.unwrap_or_default(),
+        _ => get_series_paths(&state.db).await.unwrap_or_default(),
+    };
     let path_scan = path.clone();
     let unmapped_folders =
         tokio::task::spawn_blocking(move || scan_unmapped_folders(&path_scan, &mapped_paths))
@@ -186,6 +211,7 @@ pub async fn create_root_folder(
         path,
         accessible,
         free_space,
+        content_type,
         unmapped_folders,
     }))
 }
