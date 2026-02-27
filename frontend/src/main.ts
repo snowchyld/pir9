@@ -56,6 +56,7 @@ import './features/calendar/calendar-page';
 
 // Activity
 import './features/activity/queue-page';
+import './features/activity/import-preview-page';
 import './features/activity/history-page';
 import './features/activity/blocklist-page';
 

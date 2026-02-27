@@ -12,8 +12,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::core::datastore::repositories::{
-    DownloadClientRepository, EpisodeRepository, MovieFileRepository, MovieRepository,
-    SeriesRepository, TrackedDownloadRepository,
+    DownloadClientRepository, EpisodeFileRepository, EpisodeRepository, MovieFileRepository,
+    MovieRepository, SeriesRepository, TrackedDownloadRepository,
 };
 use crate::core::download::clients::{create_client_from_model, DownloadState};
 use crate::core::parser::{normalize_title, parse_title, title_matches_series};
@@ -1159,9 +1159,20 @@ async fn grab_release(
 async fn import_queue_item(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
+    body: axum::body::Bytes,
 ) -> Json<QueueActionResponse> {
     use crate::core::datastore::repositories::TrackedDownloadRepository;
     use crate::core::download::import::ImportService;
+
+    // Parse optional overrides from request body
+    let overrides: std::collections::HashMap<String, EpisodeOverride> = if body.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        match serde_json::from_slice::<ImportQueueBody>(&body) {
+            Ok(b) => b.overrides.unwrap_or_default(),
+            Err(_) => std::collections::HashMap::new(),
+        }
+    };
 
     let td_repo = TrackedDownloadRepository::new(state.db.clone());
     let client_repo = DownloadClientRepository::new(state.db.clone());
@@ -1491,6 +1502,40 @@ async fn import_queue_item(
         }
     }
 
+    // Apply manual episode overrides from the UI
+    if !overrides.is_empty() {
+        if let Some(ref matched_series) = series {
+            let episode_repo = EpisodeRepository::new(state.db.clone());
+            if let Ok(all_eps) = episode_repo.get_by_series_id(matched_series.id).await {
+                for ov in overrides.values() {
+                    if let Some(ep) = all_eps.iter().find(|e| {
+                        e.season_number == ov.season_number
+                            && e.episode_number == ov.episode_number
+                    }) {
+                        if !episodes.iter().any(|e| e.id == ep.id) {
+                            episodes.push(ep.clone());
+                        }
+                    }
+                }
+                // Ensure we have full_season/is_multi_season set for pack-style import
+                if parsed.is_none() || episodes.len() > 1 {
+                    parsed = Some(crate::core::parser::ParsedEpisodeInfo {
+                        series_title: matched_series.clean_title.clone(),
+                        full_season: true,
+                        is_multi_season: true,
+                        raw_title: title.clone(),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        tracing::info!(
+            "Import: {} manual override(s) applied for '{}'",
+            overrides.len(),
+            title
+        );
+    }
+
     let pending = crate::core::download::import::PendingImport {
         download_id: download_id.clone(),
         download_client_id,
@@ -1500,6 +1545,10 @@ async fn import_queue_item(
         parsed_info: parsed,
         series,
         episodes,
+        overrides: overrides
+            .iter()
+            .map(|(k, v)| (k.clone(), (v.season_number, v.episode_number)))
+            .collect(),
     };
 
     // Dispatch to Redis worker when available — worker has fast local disk access
@@ -1518,6 +1567,10 @@ async fn import_queue_item(
                     parsed_info: pending.parsed_info.clone(),
                     series: pending.series.clone(),
                     episodes: pending.episodes.clone(),
+                    overrides: overrides
+                        .iter()
+                        .map(|(k, v)| (k.clone(), (v.season_number, v.episode_number)))
+                        .collect(),
                 };
 
                 consumer
@@ -1956,6 +2009,499 @@ async fn update_match(
     Ok(Json(QueueActionResponse { success: true }))
 }
 
+// ─── Import Preview ────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPreviewResponse {
+    pub id: i64,
+    pub title: String,
+    pub content_type: String,
+    pub series: Option<ImportPreviewSeries>,
+    pub movie: Option<ImportPreviewMovie>,
+    pub output_path: String,
+    pub files: Vec<ImportPreviewFile>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub episodes: Vec<ImportPreviewEpisode>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPreviewSeries {
+    pub id: i64,
+    pub title: String,
+    pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPreviewMovie {
+    pub id: i64,
+    pub title: String,
+    pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPreviewFile {
+    pub source_file: String,
+    pub source_size: i64,
+    pub season_number: Option<i32>,
+    pub episode_number: Option<i32>,
+    pub episode_title: Option<String>,
+    pub destination_path: Option<String>,
+    pub matched: bool,
+    pub existing_file: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub existing_file_size: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPreviewEpisode {
+    pub id: i64,
+    pub season_number: i32,
+    pub episode_number: i32,
+    pub title: String,
+    pub has_file: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportQueueBody {
+    pub overrides: Option<std::collections::HashMap<String, EpisodeOverride>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodeOverride {
+    pub season_number: i32,
+    pub episode_number: i32,
+}
+
+/// GET /api/v5/queue/{id}/import-preview
+/// Preview what an import will do before committing
+async fn get_import_preview(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<ImportPreviewResponse>, StatusCode> {
+    use crate::core::datastore::repositories::{
+        EpisodeRepository, RemotePathMappingRepository, TrackedDownloadRepository,
+    };
+    use crate::core::download::import::compute_destination_path;
+    use crate::core::parser::parse_title;
+    use crate::core::scanner::{is_video_file, parse_episodes_from_filename};
+
+    let td_repo = TrackedDownloadRepository::new(state.db.clone());
+    let client_repo = DownloadClientRepository::new(state.db.clone());
+
+    // Resolve download: tracked (id < 10000) or untracked
+    let (download_id, download_client_id, title, tracked_series_id, tracked_movie_id, stored_output_path) =
+        if id < 10000 {
+            match td_repo.get_by_id(id).await {
+                Ok(Some(td)) => (
+                    td.download_id,
+                    td.download_client_id,
+                    td.title,
+                    if td.series_id > 0 {
+                        Some(td.series_id)
+                    } else {
+                        None
+                    },
+                    td.movie_id,
+                    td.output_path,
+                ),
+                _ => return Err(StatusCode::NOT_FOUND),
+            }
+        } else {
+            let downloads = fetch_all_downloads(&state, true).await;
+            match downloads.into_iter().find(|d| d.id == id) {
+                Some(dl) => {
+                    let dl_id = dl.download_id.ok_or(StatusCode::NOT_FOUND)?;
+                    let client_name = dl.download_client.unwrap_or_default();
+                    let clients = client_repo.get_all().await.unwrap_or_default();
+                    let client_id = clients
+                        .iter()
+                        .find(|c| c.name == client_name)
+                        .map(|c| c.id)
+                        .ok_or(StatusCode::NOT_FOUND)?;
+                    (
+                        dl_id,
+                        client_id,
+                        dl.title,
+                        dl.series_id.filter(|&sid| sid > 0),
+                        dl.movie_id,
+                        dl.output_path,
+                    )
+                }
+                None => return Err(StatusCode::NOT_FOUND),
+            }
+        };
+
+    // Try to get live status from client; fall back to stored output_path if gone
+    let client_model = client_repo
+        .get_by_id(download_client_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let client =
+        create_client_from_model(&client_model).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let live_status = client
+        .get_download(&download_id)
+        .await
+        .unwrap_or(None);
+
+    let raw_output_path = live_status
+        .as_ref()
+        .and_then(|s| s.output_path.clone())
+        .or(stored_output_path)
+        .ok_or(StatusCode::UNPROCESSABLE_ENTITY)?;
+
+    // Apply remote path mappings
+    let output_path = {
+        let mapping_repo = RemotePathMappingRepository::new(state.db.clone());
+        let mut mapped = raw_output_path.clone();
+        if let Ok(mappings) = mapping_repo.get_all().await {
+            for m in &mappings {
+                if mapped.starts_with(&m.remote_path) {
+                    mapped = mapped.replacen(&m.remote_path, &m.local_path, 1);
+                    break;
+                }
+            }
+        }
+        mapped
+    };
+
+    // Get file list: try download client first, fall back to scanning the output path
+    let dl_files = if live_status.is_some() {
+        client.get_files(&download_id).await.unwrap_or_default()
+    } else {
+        // Client doesn't have this download anymore — scan the filesystem
+        use crate::core::download::clients::DownloadFile;
+        let scan_path = output_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let path = std::path::Path::new(&scan_path);
+            if !path.exists() {
+                return vec![];
+            }
+            if path.is_file() {
+                let size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
+                return vec![DownloadFile {
+                    name: path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                    size,
+                }];
+            }
+            let mut files = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(path) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_file() {
+                        let size = std::fs::metadata(&p).map(|m| m.len() as i64).unwrap_or(0);
+                        files.push(DownloadFile {
+                            name: p
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_default(),
+                            size,
+                        });
+                    } else if p.is_dir() {
+                        // One level of subdirectory
+                        if let Ok(sub_entries) = std::fs::read_dir(&p) {
+                            let dir_name = p
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_default();
+                            for sub_entry in sub_entries.flatten() {
+                                let sp = sub_entry.path();
+                                if sp.is_file() {
+                                    let size = std::fs::metadata(&sp)
+                                        .map(|m| m.len() as i64)
+                                        .unwrap_or(0);
+                                    let name = format!(
+                                        "{}/{}",
+                                        dir_name,
+                                        sp.file_name()
+                                            .map(|n| n.to_string_lossy().to_string())
+                                            .unwrap_or_default()
+                                    );
+                                    files.push(DownloadFile { name, size });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            files
+        })
+        .await
+        .unwrap_or_default()
+    };
+
+    let media_config = state.config.read().media.clone();
+
+    // ── Movie preview ──
+    if let Some(movie_id) = tracked_movie_id {
+        let movie_repo = MovieRepository::new(state.db.clone());
+        let movie = movie_repo
+            .get_by_id(movie_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?;
+
+        let files: Vec<ImportPreviewFile> = dl_files
+            .iter()
+            .map(|f| {
+                let filename = f.name.split('/').last().unwrap_or(&f.name);
+                let is_video =
+                    is_video_file(std::path::Path::new(filename));
+                ImportPreviewFile {
+                    source_file: f.name.clone(),
+                    source_size: f.size,
+                    season_number: None,
+                    episode_number: None,
+                    episode_title: None,
+                    destination_path: if is_video {
+                        Some(movie.path.clone())
+                    } else {
+                        None
+                    },
+                    matched: is_video,
+                    existing_file: movie.has_file,
+                    existing_file_size: None,
+                }
+            })
+            .collect();
+
+        return Ok(Json(ImportPreviewResponse {
+            id,
+            title,
+            content_type: "movie".to_string(),
+            series: None,
+            movie: Some(ImportPreviewMovie {
+                id: movie.id,
+                title: movie.title,
+                path: movie.path,
+            }),
+            output_path,
+            files,
+            episodes: vec![],
+        }));
+    }
+
+    // ── Series preview ──
+    let series_repo = SeriesRepository::new(state.db.clone());
+    let episode_repo = EpisodeRepository::new(state.db.clone());
+
+    // Resolve series: tracked series_id or parse from title
+    let series = if let Some(sid) = tracked_series_id {
+        series_repo
+            .get_by_id(sid)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?
+    } else {
+        // Try to match from release title
+        let parsed = parse_title(&title).ok_or(StatusCode::UNPROCESSABLE_ENTITY)?;
+        crate::core::download::import::match_series_standalone(&state.db, &parsed)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?
+    };
+
+    // Load all episodes for this series
+    let all_episodes = episode_repo
+        .get_by_series_id(series.id)
+        .await
+        .unwrap_or_default();
+
+    // Episodes that already have files (use has_file flag from episode model)
+    let episodes_with_files: HashSet<i64> = all_episodes
+        .iter()
+        .filter(|e| e.has_file)
+        .map(|e| e.id)
+        .collect();
+
+    // Load episode file sizes for existing file comparison
+    let episode_file_repo = EpisodeFileRepository::new(state.db.clone());
+    let file_size_map: std::collections::HashMap<i64, i64> = episode_file_repo
+        .get_by_series_id(series.id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|f| (f.id, f.size))
+        .collect();
+
+    // Parse the release title for quality/group info
+    let parsed_info = parse_title(&title).unwrap_or_default();
+
+    // Build preview for each file
+    let mut preview_files = Vec::new();
+    for f in &dl_files {
+        let filename = f.name.split('/').last().unwrap_or(&f.name);
+        let is_video = is_video_file(std::path::Path::new(filename));
+
+        if !is_video {
+            preview_files.push(ImportPreviewFile {
+                source_file: f.name.clone(),
+                source_size: f.size,
+                season_number: None,
+                episode_number: None,
+                episode_title: None,
+                destination_path: None,
+                matched: false,
+                existing_file: false,
+                existing_file_size: None,
+            });
+            continue;
+        }
+
+        let parsed_eps = parse_episodes_from_filename(filename);
+
+        if parsed_eps.is_empty() {
+            // Try special matching as fallback
+            let specials: Vec<(i32, &str)> = all_episodes
+                .iter()
+                .filter(|e| e.season_number == 0)
+                .map(|e| (e.episode_number, e.title.as_str()))
+                .collect();
+            if let Some((season, ep)) =
+                crate::core::scanner::match_special_by_title(filename, &series.title, &specials)
+            {
+                let matched_ep = all_episodes
+                    .iter()
+                    .find(|e| e.season_number == season && e.episode_number == ep);
+                let has_file = matched_ep
+                    .map(|e| episodes_with_files.contains(&e.id))
+                    .unwrap_or(false);
+                let dest = matched_ep.map(|e| {
+                    compute_destination_path(
+                        &media_config,
+                        &series,
+                        season,
+                        filename,
+                        &[e.clone()],
+                        &parsed_info,
+                    )
+                    .to_string_lossy()
+                    .to_string()
+                });
+                let existing_size = matched_ep
+                    .and_then(|e| e.episode_file_id)
+                    .and_then(|fid| file_size_map.get(&fid).copied());
+                preview_files.push(ImportPreviewFile {
+                    source_file: f.name.clone(),
+                    source_size: f.size,
+                    season_number: Some(season),
+                    episode_number: Some(ep),
+                    episode_title: matched_ep.map(|e| e.title.clone()),
+                    destination_path: dest,
+                    matched: true,
+                    existing_file: has_file,
+                    existing_file_size: existing_size,
+                });
+            } else {
+                preview_files.push(ImportPreviewFile {
+                    source_file: f.name.clone(),
+                    source_size: f.size,
+                    season_number: None,
+                    episode_number: None,
+                    episode_title: None,
+                    destination_path: None,
+                    matched: false,
+                    existing_file: false,
+                    existing_file_size: None,
+                });
+            }
+            continue;
+        }
+
+        // For each parsed episode (handles multi-episode files)
+        let (season, first_ep) = parsed_eps[0];
+        let matched_episodes: Vec<_> = parsed_eps
+            .iter()
+            .filter_map(|&(s, e)| {
+                all_episodes
+                    .iter()
+                    .find(|ep| ep.season_number == s && ep.episode_number == e)
+                    .cloned()
+            })
+            .collect();
+
+        let has_file = matched_episodes
+            .iter()
+            .any(|e| episodes_with_files.contains(&e.id));
+
+        let dest = if !matched_episodes.is_empty() {
+            Some(
+                compute_destination_path(
+                    &media_config,
+                    &series,
+                    season,
+                    filename,
+                    &matched_episodes,
+                    &parsed_info,
+                )
+                .to_string_lossy()
+                .to_string(),
+            )
+        } else {
+            None
+        };
+
+        let existing_size = matched_episodes
+            .first()
+            .and_then(|e| e.episode_file_id)
+            .and_then(|fid| file_size_map.get(&fid).copied());
+        preview_files.push(ImportPreviewFile {
+            source_file: f.name.clone(),
+            source_size: f.size,
+            season_number: Some(season),
+            episode_number: Some(first_ep),
+            episode_title: matched_episodes.first().map(|e| e.title.clone()),
+            destination_path: dest,
+            matched: !matched_episodes.is_empty(),
+            existing_file: has_file,
+            existing_file_size: existing_size,
+        });
+    }
+
+    // Build episode list for manual matching dropdowns
+    let preview_episodes: Vec<ImportPreviewEpisode> = all_episodes
+        .iter()
+        .map(|e| ImportPreviewEpisode {
+            id: e.id,
+            season_number: e.season_number,
+            episode_number: e.episode_number,
+            title: e.title.clone(),
+            has_file: e.has_file,
+        })
+        .collect();
+
+    Ok(Json(ImportPreviewResponse {
+        id,
+        title,
+        content_type: if series.series_type == 2 {
+            "anime".to_string()
+        } else {
+            "series".to_string()
+        },
+        series: Some(ImportPreviewSeries {
+            id: series.id,
+            title: series.title,
+            path: series.path,
+        }),
+        movie: None,
+        output_path,
+        files: preview_files,
+        episodes: preview_episodes,
+    }))
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_queue).delete(remove_from_queue))
@@ -1964,6 +2510,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/{id}", get(get_queue_item).delete(remove_queue_item))
         .route("/{id}/grab", get(grab_release))
         .route("/{id}/import", axum::routing::post(import_queue_item))
+        .route("/{id}/import-preview", get(get_import_preview))
         .route("/{id}/match", axum::routing::put(update_match))
         .route("/{id}/files", get(get_queue_files))
 }

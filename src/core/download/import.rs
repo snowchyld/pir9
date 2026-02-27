@@ -201,6 +201,8 @@ pub struct PendingImport {
     pub series: Option<SeriesDbModel>,
     /// Matched episodes
     pub episodes: Vec<EpisodeDbModel>,
+    /// Manual episode overrides from import preview UI: source_file → (season, episode)
+    pub overrides: std::collections::HashMap<String, (i32, i32)>,
 }
 
 /// Result of importing a single file
@@ -287,6 +289,7 @@ impl ImportService {
             parsed_info: parsed.clone(),
             series: None,
             episodes: Vec::new(),
+            overrides: std::collections::HashMap::new(),
         };
 
         // Try to match to a series
@@ -432,6 +435,8 @@ impl ImportService {
                 parsed_info,
                 &pending.download_id,
                 &pending.title,
+                &pending.overrides,
+                &pending.output_path,
             )
             .await
         }
@@ -497,6 +502,8 @@ impl ImportService {
         parsed_info: &ParsedEpisodeInfo,
         download_id: &str,
         download_title: &str,
+        file_overrides: &HashMap<String, (i32, i32)>,
+        download_path: &Path,
     ) -> Result<ImportResult> {
         // Build episode lookup: (season, episode_number) -> EpisodeDbModel
         let mut episode_map: HashMap<(i32, i32), &EpisodeDbModel> = HashMap::new();
@@ -533,36 +540,48 @@ impl ImportService {
 
             let parsed_eps = parse_episodes_from_filename(filename);
 
-            // Fallback: try title-based matching against season 0 specials
+            // Fallback chain: title-based specials → manual overrides → skip
             let parsed_eps = if parsed_eps.is_empty() {
                 let specials: Vec<(i32, &str)> = all_episodes
                     .iter()
                     .filter(|e| e.season_number == 0)
                     .map(|e| (e.episode_number, e.title.as_str()))
                     .collect();
-                if !specials.is_empty() {
-                    match match_special_by_title(filename, &series.title, &specials) {
-                        Some(pair) => {
-                            tracing::info!(
-                                "Season pack import: matched '{}' to special S00E{:02} by title",
-                                filename,
-                                pair.1
-                            );
-                            vec![pair]
-                        }
-                        None => {
-                            tracing::debug!(
-                                "Season pack import: skipping unmatched file '{}'",
-                                filename
-                            );
-                            files_skipped += 1;
-                            continue;
-                        }
-                    }
+                let special_match = if !specials.is_empty() {
+                    match_special_by_title(filename, &series.title, &specials)
                 } else {
-                    tracing::debug!("Season pack import: skipping unmatched file '{}'", filename);
-                    files_skipped += 1;
-                    continue;
+                    None
+                };
+                if let Some(pair) = special_match {
+                    tracing::info!(
+                        "Season pack import: matched '{}' to special S00E{:02} by title",
+                        filename,
+                        pair.1
+                    );
+                    vec![pair]
+                } else {
+                    // Check manual overrides from import preview UI
+                    let relative = video_file
+                        .strip_prefix(download_path)
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|_| filename.to_string());
+                    if let Some(&(season, episode)) = file_overrides
+                        .get(&relative)
+                        .or_else(|| file_overrides.get(filename))
+                    {
+                        tracing::info!(
+                            "Season pack import: manual override '{}' → S{:02}E{:02}",
+                            filename, season, episode
+                        );
+                        vec![(season, episode)]
+                    } else {
+                        tracing::debug!(
+                            "Season pack import: skipping unmatched file '{}'",
+                            filename
+                        );
+                        files_skipped += 1;
+                        continue;
+                    }
                 }
             } else {
                 parsed_eps

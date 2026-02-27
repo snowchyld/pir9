@@ -61,6 +61,8 @@ struct PendingDownloadImport {
     download_title: String,
     /// Mapping: dest_path → import details for DB insert
     file_mappings: HashMap<PathBuf, ImportMapping>,
+    /// Manual episode overrides from import preview UI: source_file → (season, episode)
+    overrides: HashMap<String, (i32, i32)>,
 }
 
 /// Per-file data needed to insert episode_file records after the worker moves the file
@@ -110,6 +112,8 @@ pub struct DownloadImportInfo {
     pub parsed_info: Option<crate::core::parser::ParsedEpisodeInfo>,
     pub series: Option<SeriesDbModel>,
     pub episodes: Vec<EpisodeDbModel>,
+    /// Manual episode overrides from import preview UI: source_file → (season, episode)
+    pub overrides: std::collections::HashMap<String, (i32, i32)>,
 }
 
 /// Progress info from a worker's scan enrichment pipeline
@@ -242,6 +246,7 @@ impl ScanResultConsumer {
                     download_client_id: import_info.download_client_id,
                     download_title: import_info.title.clone(),
                     file_mappings: HashMap::new(),
+                    overrides: import_info.overrides.clone(),
                 },
             );
         }
@@ -657,22 +662,37 @@ impl ScanResultConsumer {
 
         // Get download info from the registered import
         let mut download_title = String::new();
+        let file_overrides: HashMap<String, (i32, i32)>;
         if let Some(key) = download_keys.first() {
             let jobs = self.pending_jobs.read().await;
             if let Some(pending) = jobs.download_imports.get(key) {
                 download_title = pending.download_title.clone();
+                file_overrides = pending.overrides.clone();
+            } else {
+                file_overrides = HashMap::new();
             }
+        } else {
+            file_overrides = HashMap::new();
         }
 
         // Process each file (typically 1 in per-file streaming mode)
         for file in &files_found {
             let filename = &file.filename;
 
-            // Parse episode info from the filename
-            let parsed_eps = crate::core::scanner::parse_episodes_from_filename(filename);
+            // Parse episode info from the filename, falling back to manual overrides
+            let mut parsed_eps = crate::core::scanner::parse_episodes_from_filename(filename);
             if parsed_eps.is_empty() {
-                debug!("[worker:{}] skipping unmatched file '{}'", worker_id, filename);
-                continue;
+                // Check manual overrides from import preview UI
+                if let Some(&(season, episode)) = file_overrides.get(filename) {
+                    parsed_eps = vec![(season, episode)];
+                    info!(
+                        "[worker:{}] manual override for '{}' → S{:02}E{:02}",
+                        worker_id, filename, season, episode
+                    );
+                } else {
+                    debug!("[worker:{}] skipping unmatched file '{}'", worker_id, filename);
+                    continue;
+                }
             }
 
             // Try to match to a series using the full filename as a parsed title
@@ -788,6 +808,7 @@ impl ScanResultConsumer {
                         download_client_id: 0,
                         download_title: download_title.clone(),
                         file_mappings,
+                        overrides: HashMap::new(),
                     },
                 );
                 // Map import_job_id back to scan job for tracker updates

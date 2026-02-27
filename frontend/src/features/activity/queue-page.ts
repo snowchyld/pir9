@@ -735,7 +735,7 @@ export class QueuePage extends BaseComponent {
   }
 
   handleImport(id: number): void {
-    this.importItemMutation.mutate(id);
+    navigate(`/activity/queue/${id}/import`);
   }
 
   handleRemove(id: number): void {

@@ -50,6 +50,7 @@ export const routes: Route[] = [
 
   // Activity
   { path: '/activity/queue', component: 'queue-page', title: 'Queue' },
+  { path: '/activity/queue/:id/import', component: 'import-preview-page', title: 'Import Preview' },
   { path: '/activity/history', component: 'history-page', title: 'History' },
   { path: '/activity/blocklist', component: 'blocklist-page', title: 'Blocklist' },
 

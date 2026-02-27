@@ -654,6 +654,7 @@ async fn execute_downloaded_episodes_scan(
                     parsed_info: item.parsed_info.clone(),
                     series: item.series.clone(),
                     episodes: item.episodes.clone(),
+                    overrides: std::collections::HashMap::new(),
                 };
 
                 consumer

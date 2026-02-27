@@ -1708,6 +1708,7 @@ async fn execute_process_downloads_distributed(
             parsed_info: item.parsed_info.clone(),
             series: item.series.clone(),
             episodes: item.episodes.clone(),
+            overrides: std::collections::HashMap::new(),
         };
 
         consumer
@@ -2162,12 +2163,23 @@ async fn execute_season_search(
     ))
 }
 
-/// Execute SeriesSearch command - search indexers for all episodes in a series
-async fn execute_series_search(
+/// Public entry point for SeriesSearch — used by v3 add handler for auto-search
+pub async fn execute_series_search_public(
     body: &serde_json::Value,
-    _db: &crate::core::datastore::Database,
+    db: &crate::core::datastore::Database,
     event_bus: &crate::core::messaging::EventBus,
 ) -> Result<String, String> {
+    execute_series_search(body, db, event_bus).await
+}
+
+/// Execute SeriesSearch command - search indexers for all missing episodes in a series
+async fn execute_series_search(
+    body: &serde_json::Value,
+    db: &crate::core::datastore::Database,
+    event_bus: &crate::core::messaging::EventBus,
+) -> Result<String, String> {
+    use crate::core::datastore::repositories::EpisodeRepository;
+
     // Parse series ID from body
     let series_id = body
         .get("seriesId")
@@ -2176,16 +2188,54 @@ async fn execute_series_search(
         .ok_or_else(|| "Missing seriesId".to_string())?;
 
     tracing::info!(
-        "SeriesSearch: searching for all episodes in series {}",
+        "SeriesSearch: searching for all missing episodes in series {}",
         series_id
     );
 
-    // Publish search event
+    // Publish search event for notifications/websocket
     event_bus
         .publish(crate::core::messaging::Message::SeriesSearchRequested { series_id })
         .await;
 
-    Ok(format!("Series search started for series {}", series_id))
+    // Find all monitored episodes without files that have aired
+    let episode_repo = EpisodeRepository::new(db.clone());
+    let episodes = episode_repo
+        .get_by_series_id(series_id)
+        .await
+        .map_err(|e| format!("Failed to fetch episodes: {}", e))?;
+
+    let missing_ids: Vec<i64> = episodes
+        .into_iter()
+        .filter(|ep| {
+            ep.monitored
+                && !ep.has_file
+                && ep.air_date_utc.is_some()
+                && ep
+                    .air_date_utc
+                    .as_ref()
+                    .map(|d| *d < chrono::Utc::now())
+                    .unwrap_or(false)
+        })
+        .map(|ep| ep.id)
+        .collect();
+
+    if missing_ids.is_empty() {
+        tracing::info!("SeriesSearch: no missing episodes for series {}", series_id);
+        return Ok(format!(
+            "Series search complete for series {} — no missing episodes",
+            series_id
+        ));
+    }
+
+    tracing::info!(
+        "SeriesSearch: found {} missing episodes for series {}, delegating to EpisodeSearch",
+        missing_ids.len(),
+        series_id
+    );
+
+    // Delegate to EpisodeSearch with the missing episode IDs
+    let episode_body = serde_json::json!({ "episodeIds": missing_ids });
+    execute_episode_search(&episode_body, db, event_bus).await
 }
 
 /// Execute RescanMovie command — scans a movie's folder for video files.
