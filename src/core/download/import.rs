@@ -521,6 +521,18 @@ impl ImportService {
             }
         }
 
+        // Load existing episode file sizes for same-size skip detection.
+        // If a source file is the same size as the existing file, it's almost certainly
+        // identical — skip importing it to avoid wasteful disk I/O.
+        let episode_file_repo = EpisodeFileRepository::new(self.db.clone());
+        let existing_file_sizes: HashMap<i64, i64> = episode_file_repo
+            .get_by_series_id(series.id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| (f.id, f.size))
+            .collect();
+
         // Phase 1: Match each file to episodes, resolving duplicates by file size
         // Key: episode DB id -> (file path, file size, all matched episodes for that file)
         let mut file_assignments: HashMap<PathBuf, (Vec<&EpisodeDbModel>, u64)> = HashMap::new();
@@ -607,6 +619,22 @@ impl ImportService {
                     "Season pack import: no episode match for '{}' (parsed {:?})",
                     filename,
                     parsed_eps
+                );
+                files_skipped += 1;
+                continue;
+            }
+
+            // Same-size skip: if ALL matched episodes already have files of the same size,
+            // the source file is identical — skip to avoid wasteful overwrite
+            if matched.iter().all(|ep| {
+                ep.episode_file_id
+                    .and_then(|fid| existing_file_sizes.get(&fid))
+                    .map(|&existing_size| existing_size == file_size as i64)
+                    .unwrap_or(false)
+            }) {
+                tracing::info!(
+                    "Season pack import: skipping '{}' — same size as existing file(s)",
+                    filename,
                 );
                 files_skipped += 1;
                 continue;

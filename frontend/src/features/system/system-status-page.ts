@@ -157,11 +157,15 @@ export class SystemStatusPage extends BaseComponent {
       <div class="status-page">
         <h1 class="page-title">System Status</h1>
 
-        ${runningTasks.length > 0 ? html`
+        ${
+          runningTasks.length > 0
+            ? html`
           <div class="running-section">
             <h2 class="section-title">Running Tasks</h2>
             <div class="running-list">
-              ${runningTasks.map((task) => html`
+              ${runningTasks
+                .map(
+                  (task) => html`
                 <div class="running-item">
                   <div class="running-icon">
                     <svg class="spinner-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -170,7 +174,9 @@ export class SystemStatusPage extends BaseComponent {
                   </div>
                   <div class="running-content">
                     <div class="running-name">${escapeHtml(this.formatTaskName(task))}</div>
-                    ${task.progress ? html`
+                    ${
+                      task.progress
+                        ? html`
                       <div class="running-progress">
                         <div class="progress-bar">
                           <div class="progress-fill" style="width: ${task.progress.percent}%"></div>
@@ -185,7 +191,8 @@ export class SystemStatusPage extends BaseComponent {
                         ${task.progress.currentFile ? html`<span class="running-file" title="${escapeHtml(task.progress.currentFile)}">${escapeHtml(this.truncateFilename(task.progress.currentFile, 40))}</span>` : ''}
                         ${task.progress.detail && task.progress.detail !== 'unchanged' ? html`<span class="running-metadata">${escapeHtml(task.progress.detail)}</span>` : ''}
                       </div>
-                    ` : html`
+                    `
+                        : html`
                       <div class="running-detail">
                         <span class="running-status">${task.status === 'queued' ? 'Queued' : 'Running'}</span>
                         ${task.started ? html`<span class="running-elapsed">${this.formatElapsed(task.started)}</span>` : ''}
@@ -193,7 +200,8 @@ export class SystemStatusPage extends BaseComponent {
                         ${task.detail ? html`<span class="running-message">${escapeHtml(task.detail)}</span>` : ''}
                         ${task.message ? html`<span class="running-message">${escapeHtml(task.message)}</span>` : ''}
                       </div>
-                    `}
+                    `
+                    }
                   </div>
                   <button
                     class="cancel-btn"
@@ -207,12 +215,18 @@ export class SystemStatusPage extends BaseComponent {
                     </svg>
                   </button>
                 </div>
-              `).join('')}
+              `,
+                )
+                .join('')}
             </div>
           </div>
-        ` : ''}
+        `
+            : ''
+        }
 
-        ${health.length > 0 ? html`
+        ${
+          health.length > 0
+            ? html`
           <div class="health-section">
             <h2 class="section-title">Health</h2>
             <div class="health-list">
@@ -244,7 +258,9 @@ export class SystemStatusPage extends BaseComponent {
                 .join('')}
             </div>
           </div>
-        ` : ''}
+        `
+            : ''
+        }
 
         <div class="info-section">
           <h2 class="section-title">About</h2>
@@ -704,10 +720,14 @@ export class SystemStatusPage extends BaseComponent {
 
   private formatStage(stage: string): string {
     switch (stage) {
-      case 'scanning': return 'Discovering';
-      case 'probing': return 'Probing';
-      case 'hashing': return 'Hashing';
-      default: return stage;
+      case 'scanning':
+        return 'Discovering';
+      case 'probing':
+        return 'Probing';
+      case 'hashing':
+        return 'Hashing';
+      default:
+        return stage;
     }
   }
 

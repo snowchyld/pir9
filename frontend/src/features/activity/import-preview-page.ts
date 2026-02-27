@@ -178,8 +178,27 @@ export class ImportPreviewPage extends BaseComponent {
     const hasExisting = data.files.some(
       (f) => f.existingFile || this.getOverrideHasFile(f.sourceFile),
     );
+    const sameFileCount = data.files.filter(
+      (f) =>
+        (f.existingFile || this.getOverrideHasFile(f.sourceFile)) &&
+        f.existingFileSize != null &&
+        f.existingFileSize === f.sourceSize,
+    ).length;
+    const upgradeCount = data.files.filter(
+      (f) =>
+        (f.existingFile || this.getOverrideHasFile(f.sourceFile)) &&
+        (f.existingFileSize == null || f.existingFileSize !== f.sourceSize),
+    ).length;
     const totalSize = data.files
-      .filter((f) => f.matched || this.manualOverrides.has(f.sourceFile))
+      .filter((f) => {
+        const isMatched = f.matched || this.manualOverrides.has(f.sourceFile);
+        if (!isMatched) return false;
+        const hasExisting = f.existingFile || this.getOverrideHasFile(f.sourceFile);
+        if (hasExisting && f.existingFileSize != null && f.existingFileSize === f.sourceSize) {
+          return false;
+        }
+        return true;
+      })
       .reduce((sum, f) => sum + f.sourceSize, 0);
 
     return html`
@@ -217,7 +236,7 @@ export class ImportPreviewPage extends BaseComponent {
           </div>
         </div>
 
-        ${hasExisting ? '<div class="warning-banner"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> Some episodes already have files — importing will upgrade them</div>' : ''}
+        ${hasExisting ? `<div class="warning-banner"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> Some episodes already have files${upgradeCount > 0 ? ` — ${upgradeCount} will be upgraded` : ''}${sameFileCount > 0 ? ` — ${sameFileCount} identical (same size), will be skipped` : ''}</div>` : ''}
 
         <table class="file-table">
           <colgroup>
@@ -260,7 +279,16 @@ export class ImportPreviewPage extends BaseComponent {
   }
 
   private getMatchedCount(data: ImportPreviewResponse): number {
-    return data.files.filter((f) => f.matched || this.manualOverrides.has(f.sourceFile)).length;
+    return data.files.filter((f) => {
+      const isMatched = f.matched || this.manualOverrides.has(f.sourceFile);
+      if (!isMatched) return false;
+      // Exclude same-size files (identical, no upgrade needed)
+      const hasExisting = f.existingFile || this.getOverrideHasFile(f.sourceFile);
+      if (hasExisting && f.existingFileSize != null && f.existingFileSize === f.sourceSize) {
+        return false;
+      }
+      return true;
+    }).length;
   }
 
   private getOverrideHasFile(sourceFile: string): boolean {
@@ -295,9 +323,16 @@ export class ImportPreviewPage extends BaseComponent {
     const destFilename = file.destinationPath?.split('/').pop() ?? '';
     const hasExistingFile = isManuallyMatched ? (overrideEp?.hasFile ?? false) : file.existingFile;
 
+    // Detect same-size files: if source size matches existing file size, it's likely identical
+    const isSameFile =
+      hasExistingFile && file.existingFileSize != null && file.existingFileSize === file.sourceSize;
+
     let statusClass = 'status-skip';
     let statusLabel = 'Skipped';
-    if (effectivelyMatched && hasExistingFile) {
+    if (effectivelyMatched && isSameFile) {
+      statusClass = 'status-same';
+      statusLabel = 'Same File';
+    } else if (effectivelyMatched && hasExistingFile) {
       statusClass = 'status-upgrade';
       statusLabel = 'Upgrade';
     } else if (effectivelyMatched) {
@@ -326,7 +361,7 @@ export class ImportPreviewPage extends BaseComponent {
       : escapeHtml(destFilename);
 
     return html`
-      <tr class="${effectivelyMatched ? '' : 'row-skipped'}">
+      <tr class="${!effectivelyMatched ? 'row-skipped' : isSameFile ? 'row-same' : ''}">
         <td class="file-cell" title="${escapeHtml(file.sourceFile)}">
           ${escapeHtml(filename)}
         </td>
@@ -426,7 +461,10 @@ export class ImportPreviewPage extends BaseComponent {
 
     this.manualOverrides.set(sourceFile, { seasonNumber: seasonNum, episodeNumber: episodeNum });
     // Re-render to update the row status
-    this.preview.set({ ...this.preview.value! });
+    const current = this.preview.value;
+    if (current) {
+      this.preview.set({ ...current });
+    }
   }
 
   private formatSize(bytes: number): string {
@@ -635,9 +673,18 @@ export class ImportPreviewPage extends BaseComponent {
         color: var(--color-white, #fff);
       }
 
+      .status-same {
+        background-color: var(--bg-progress);
+        color: var(--text-color-muted);
+      }
+
       .status-skip {
         background-color: var(--bg-progress);
         color: var(--text-color-muted);
+      }
+
+      .row-same {
+        opacity: 0.65;
       }
 
       /* Footer */

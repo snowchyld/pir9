@@ -45,7 +45,8 @@ export class AddSeriesPage extends BaseComponent {
 
   private rootFoldersQuery = createQuery({
     queryKey: ['/rootfolder', 'series'],
-    queryFn: () => http.get<RootFolder[]>('/rootfolder', { params: { contentType: 'series,anime' } }),
+    queryFn: () =>
+      http.get<RootFolder[]>('/rootfolder', { params: { contentType: 'series,anime' } }),
   });
 
   private qualityProfilesQuery = createQuery({

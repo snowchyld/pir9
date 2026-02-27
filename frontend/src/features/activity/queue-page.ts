@@ -46,21 +46,6 @@ export class QueuePage extends BaseComponent {
     },
   });
 
-  private importItemMutation = createMutation({
-    mutationFn: (id: number) => http.post<{ success: boolean }>(`/queue/${id}/import`),
-    onSuccess: (result: { success: boolean }) => {
-      if (result.success) {
-        invalidateQueries(['/queue']);
-        showSuccess('Download imported to library');
-      } else {
-        showError('Import failed — could not match series or episodes');
-      }
-    },
-    onError: () => {
-      showError('Failed to import download');
-    },
-  });
-
   protected onInit(): void {
     this.watch(this.queueQuery.data);
     this.watch(this.queueQuery.isLoading);
@@ -535,9 +520,9 @@ export class QueuePage extends BaseComponent {
       : `/series/${item.series?.titleSlug ?? ''}`;
     const linkSlug = isMovie ? (item.movie?.titleSlug ?? '') : (item.series?.titleSlug ?? '');
     const episodeLabel = isMovie
-      ? (item.outputPath
-          ? item.outputPath.split('/').pop() ?? item.title
-          : item.title)
+      ? item.outputPath
+        ? (item.outputPath.split('/').pop() ?? item.title)
+        : item.title
       : item.episode
         ? `S${String(item.episode.seasonNumber).padStart(2, '0')}E${String(item.episode.episodeNumber).padStart(2, '0')}${item.episode.title ? ` - ${item.episode.title}` : ''}`
         : '-';

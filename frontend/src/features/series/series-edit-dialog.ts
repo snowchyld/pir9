@@ -45,7 +45,8 @@ export class SeriesEditDialog extends BaseComponent {
 
   private rootFoldersQuery = createQuery({
     queryKey: ['/rootfolder', 'series'],
-    queryFn: () => http.get<RootFolder[]>('/rootfolder', { params: { contentType: 'series,anime' } }),
+    queryFn: () =>
+      http.get<RootFolder[]>('/rootfolder', { params: { contentType: 'series,anime' } }),
   });
 
   protected onInit(): void {
@@ -334,7 +335,9 @@ export class SeriesEditDialog extends BaseComponent {
       }
 
       invalidateQueries(['/series']);
-      showSuccess(orderingChanged ? 'Series saved — refreshing episode ordering...' : 'Series saved');
+      showSuccess(
+        orderingChanged ? 'Series saved — refreshing episode ordering...' : 'Series saved',
+      );
       this.close();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save series';

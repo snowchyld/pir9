@@ -126,7 +126,11 @@ export class SeriesDetailPage extends BaseComponent {
 
   private rescanSeasonMutation = createMutation({
     mutationFn: (params: { seriesId: number; seasonNumber: number }) =>
-      http.post('/command', { name: 'RescanSeries', seriesId: params.seriesId, seasonNumber: params.seasonNumber }),
+      http.post('/command', {
+        name: 'RescanSeries',
+        seriesId: params.seriesId,
+        seasonNumber: params.seasonNumber,
+      }),
     onSuccess: () => {
       const id = this.seriesId.value;
       if (id) {

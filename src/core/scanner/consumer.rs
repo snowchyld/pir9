@@ -754,6 +754,30 @@ impl ScanResultConsumer {
                 }
             };
 
+            // Same-size skip: if ALL matched episodes already have files of the same size,
+            // the source file is identical — skip to avoid wasteful overwrite
+            let episode_file_repo =
+                crate::core::datastore::repositories::EpisodeFileRepository::new(self.db.clone());
+            let ep_file_sizes: HashMap<i64, i64> = episode_file_repo
+                .get_by_series_id(series.id)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|f| (f.id, f.size))
+                .collect();
+            if episodes.iter().all(|ep| {
+                ep.episode_file_id
+                    .and_then(|fid| ep_file_sizes.get(&fid))
+                    .map(|&existing_size| existing_size == file.size)
+                    .unwrap_or(false)
+            }) {
+                info!(
+                    "[worker:{}] skipping '{}' — same size as existing file(s)",
+                    worker_id, filename,
+                );
+                continue;
+            }
+
             let season_number = episodes.first().map(|e| e.season_number).unwrap_or(1);
 
             // Compute destination path (pure computation, no I/O)
