@@ -277,15 +277,14 @@ impl TrackedDownloadService {
                 client_status_map.get(&(td.download_client_id, td.download_id.clone()));
 
             // If the client was successfully polled but the download is gone,
-            // mark as DownloadClientUnavailable but DON'T delete — the download
-            // may have finished seeding and been removed from the client while
-            // files still need importing. Only truly stale records (Imported or
-            // old enough) should be cleaned up by the reconciliation job.
+            // auto-remove the tracked record — there's nothing left to import.
             if live_status.is_none() && polled_clients.contains(&td.download_client_id) {
-                debug!(
-                    "Tracked download {} '{}' (status={}) not found in download client (client_id={})",
-                    td.id, td.title, td.status, td.download_client_id
+                info!(
+                    "Auto-removing tracked download {} '{}' — no longer in download client (client_id={})",
+                    td.id, td.title, td.download_client_id
                 );
+                let _ = repo.delete(td.id).await;
+                continue;
             }
 
             // Determine queue status and state
