@@ -158,6 +158,53 @@ export function setMovieFilter(filter: string): void {
 }
 
 /**
+ * Anime view mode
+ */
+export const animeViewMode = persistedSignal<ViewMode>('anime-view-mode', 'posters');
+
+export function setAnimeViewMode(mode: ViewMode): void {
+  animeViewMode.set(mode);
+}
+
+/**
+ * Anime sort key (reuses SeriesSortKey type)
+ */
+export const animeSortKey = persistedSignal<SeriesSortKey>('anime-sort-key', 'sortTitle');
+export const animeSortDirection = persistedSignal<'ascending' | 'descending'>(
+  'anime-sort-direction',
+  'ascending',
+);
+
+export function setAnimeSort(key: SeriesSortKey, direction?: 'ascending' | 'descending'): void {
+  if (key === animeSortKey.value && !direction) {
+    animeSortDirection.update((d) => (d === 'ascending' ? 'descending' : 'ascending'));
+  } else {
+    animeSortKey.set(key);
+    if (direction) {
+      animeSortDirection.set(direction);
+    }
+  }
+}
+
+/**
+ * Anime filter
+ */
+export const animeFilter = persistedSignal<string>('anime-filter', 'all');
+
+export function setAnimeFilter(filter: string): void {
+  animeFilter.set(filter);
+}
+
+/**
+ * Anime network filter
+ */
+export const animeNetworkFilter = persistedSignal<string>('anime-network-filter', 'all');
+
+export function setAnimeNetworkFilter(network: string): void {
+  animeNetworkFilter.set(network);
+}
+
+/**
  * Global search query
  */
 export const searchQuery = signal('');

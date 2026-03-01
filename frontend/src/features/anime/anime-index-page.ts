@@ -1,5 +1,6 @@
 /**
- * Series index page - main grid/table view
+ * Anime index page - grid/table view for anime series only
+ * Filters the shared series data by seriesType === 'anime'
  */
 
 import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
@@ -7,55 +8,55 @@ import { http, type Series } from '../../core/http';
 import { useSeriesQuery } from '../../core/query';
 import { navigate } from '../../router';
 import {
+  animeFilter,
+  animeNetworkFilter,
+  animeSortDirection,
+  animeSortKey,
+  animeViewMode,
   type SeriesSortKey,
   searchQuery,
-  seriesFilter,
-  seriesNetworkFilter,
-  seriesSortDirection,
-  seriesSortKey,
-  seriesViewMode,
-  setSeriesFilter,
-  setSeriesNetworkFilter,
-  setSeriesSort,
-  setSeriesViewMode,
+  setAnimeFilter,
+  setAnimeNetworkFilter,
+  setAnimeSort,
+  setAnimeViewMode,
   showError,
   showInfo,
   showSuccess,
   type ViewMode,
 } from '../../stores/app.store';
 
-@customElement('series-index-page')
-export class SeriesIndexPage extends BaseComponent {
+@customElement('anime-index-page')
+export class AnimeIndexPage extends BaseComponent {
   private seriesQuery = useSeriesQuery();
 
   protected onInit(): void {
     this.watch(this.seriesQuery.data);
     this.watch(this.seriesQuery.isLoading);
     this.watch(this.seriesQuery.isError);
-    this.watch(seriesViewMode);
-    this.watch(seriesSortKey);
-    this.watch(seriesSortDirection);
-    this.watch(seriesFilter);
-    this.watch(seriesNetworkFilter);
+    this.watch(animeViewMode);
+    this.watch(animeSortKey);
+    this.watch(animeSortDirection);
+    this.watch(animeFilter);
+    this.watch(animeNetworkFilter);
     this.watch(searchQuery);
   }
 
   protected template(): string {
-    const series = this.seriesQuery.data.value ?? [];
+    const allSeries = this.seriesQuery.data.value ?? [];
     const isLoading = this.seriesQuery.isLoading.value;
     const isError = this.seriesQuery.isError.value;
-    const viewMode = seriesViewMode.value;
-    const sortKey = seriesSortKey.value;
-    const sortDir = seriesSortDirection.value;
-    const filter = seriesFilter.value;
-    const networkFilter = seriesNetworkFilter.value;
+    const viewMode = animeViewMode.value;
+    const sortKey = animeSortKey.value;
+    const sortDir = animeSortDirection.value;
+    const filter = animeFilter.value;
+    const networkFilter = animeNetworkFilter.value;
     const search = searchQuery.value.toLowerCase();
 
-    // Exclude anime series (they have their own page at /anime)
-    const nonAnimeSeries = series.filter((s) => s.seriesType !== 'anime');
+    // Filter to anime only
+    const animeSeries = allSeries.filter((s) => s.seriesType === 'anime');
 
-    // Collect unique networks (before filtering, so dropdown is always complete)
-    const networks = [...new Set(nonAnimeSeries.map((s) => s.network || 'Unknown Network'))].sort(
+    // Collect unique networks from anime (before other filters)
+    const networks = [...new Set(animeSeries.map((s) => s.network || 'Unknown Network'))].sort(
       (a, b) => {
         if (a === 'Unknown Network') return 1;
         if (b === 'Unknown Network') return -1;
@@ -63,17 +64,15 @@ export class SeriesIndexPage extends BaseComponent {
       },
     );
 
-    // Filter and sort series
-    let filtered = nonAnimeSeries;
+    // Apply filters
+    let filtered = animeSeries;
 
-    // Apply search filter
     if (search) {
       filtered = filtered.filter(
         (s) => s.title.toLowerCase().includes(search) || s.network?.toLowerCase().includes(search),
       );
     }
 
-    // Apply status filter
     if (filter !== 'all') {
       filtered = filtered.filter((s) => {
         switch (filter) {
@@ -91,7 +90,6 @@ export class SeriesIndexPage extends BaseComponent {
       });
     }
 
-    // Apply network filter
     if (networkFilter !== 'all') {
       filtered = filtered.filter((s) => (s.network || 'Unknown Network') === networkFilter);
     }
@@ -99,16 +97,15 @@ export class SeriesIndexPage extends BaseComponent {
     // Sort
     const isDateSort = sortKey === 'nextAiring' || sortKey === 'previousAiring';
     filtered = [...filtered].sort((a, b) => {
-      let comparison = 0;
       const aVal = this.getSortValue(a, sortKey);
       const bVal = this.getSortValue(b, sortKey);
 
-      // Push missing date values to the bottom regardless of direction
       if (isDateSort) {
         if (aVal === '' && bVal !== '') return 1;
         if (aVal !== '' && bVal === '') return -1;
       }
 
+      let comparison = 0;
       if (aVal < bVal) comparison = -1;
       if (aVal > bVal) comparison = 1;
 
@@ -116,12 +113,12 @@ export class SeriesIndexPage extends BaseComponent {
     });
 
     return html`
-      <div class="series-page">
+      <div class="anime-page">
         <!-- Toolbar -->
         <div class="toolbar">
           <div class="toolbar-left">
-            <h1 class="page-title">Series</h1>
-            <span class="series-count">${filtered.length} series</span>
+            <h1 class="page-title">Anime</h1>
+            <span class="anime-count">${filtered.length} series</span>
           </div>
 
           <div class="toolbar-right">
@@ -129,7 +126,7 @@ export class SeriesIndexPage extends BaseComponent {
             <select
               class="filter-select"
               value="${filter}"
-              onchange="this.closest('series-index-page').handleFilterChange(event)"
+              onchange="this.closest('anime-index-page').handleFilterChange(event)"
             >
               <option value="all">All</option>
               <option value="monitored">Monitored</option>
@@ -141,7 +138,7 @@ export class SeriesIndexPage extends BaseComponent {
             <!-- Network filter dropdown -->
             <select
               class="filter-select"
-              onchange="this.closest('series-index-page').handleNetworkFilterChange(event)"
+              onchange="this.closest('anime-index-page').handleNetworkFilterChange(event)"
             >
               <option value="all" ${networkFilter === 'all' ? 'selected' : ''}>All Networks</option>
               ${networks.map((n) => html`<option value="${escapeHtml(n)}" ${networkFilter === n ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('')}
@@ -151,7 +148,7 @@ export class SeriesIndexPage extends BaseComponent {
             <select
               class="sort-select"
               value="${sortKey}"
-              onchange="this.closest('series-index-page').handleSortChange(event)"
+              onchange="this.closest('anime-index-page').handleSortChange(event)"
             >
               <option value="sortTitle">Title</option>
               <option value="status">Status</option>
@@ -167,7 +164,7 @@ export class SeriesIndexPage extends BaseComponent {
             <!-- Sort direction -->
             <button
               class="sort-dir-btn"
-              onclick="this.closest('series-index-page').handleSortDirToggle()"
+              onclick="this.closest('anime-index-page').handleSortDirToggle()"
               title="${sortDir === 'ascending' ? 'Ascending' : 'Descending'}"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -179,8 +176,8 @@ export class SeriesIndexPage extends BaseComponent {
             <!-- Refresh All button -->
             <button
               class="refresh-all-btn"
-              onclick="this.closest('series-index-page').handleRefreshAll()"
-              title="Refresh all series metadata from Skyhook"
+              onclick="this.closest('anime-index-page').handleRefreshAll()"
+              title="Refresh all anime metadata"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10"></polyline>
@@ -205,7 +202,7 @@ export class SeriesIndexPage extends BaseComponent {
       </div>
 
       <style>
-        .series-page {
+        .anime-page {
           display: flex;
           flex-direction: column;
           gap: 1.25rem;
@@ -213,14 +210,8 @@ export class SeriesIndexPage extends BaseComponent {
         }
 
         @keyframes pageEnter {
-          from {
-            opacity: 0;
-            transform: translateY(12px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
+          from { opacity: 0; transform: translateY(12px); }
+          to { opacity: 1; transform: translateY(0); }
         }
 
         .toolbar {
@@ -253,7 +244,7 @@ export class SeriesIndexPage extends BaseComponent {
           background-clip: text;
         }
 
-        .series-count {
+        .anime-count {
           color: var(--text-color-muted);
           font-size: 0.875rem;
           padding: 0.25rem 0.625rem;
@@ -371,7 +362,6 @@ export class SeriesIndexPage extends BaseComponent {
           border: none;
           cursor: pointer;
           transition: all var(--transition-fast) var(--ease-out-expo);
-          position: relative;
         }
 
         .view-mode-btn:not(:last-child) {
@@ -389,7 +379,6 @@ export class SeriesIndexPage extends BaseComponent {
           color: var(--pir9-blue);
         }
 
-        /* Loading state */
         .loading-container {
           display: flex;
           flex-direction: column;
@@ -410,16 +399,9 @@ export class SeriesIndexPage extends BaseComponent {
           box-shadow: 0 0 20px rgba(93, 156, 236, 0.3);
         }
 
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-        @keyframes fadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-
-        /* Error state */
         .error-container {
           display: flex;
           flex-direction: column;
@@ -437,10 +419,7 @@ export class SeriesIndexPage extends BaseComponent {
           filter: drop-shadow(0 0 12px rgba(240, 80, 80, 0.4));
         }
 
-        .error-message {
-          color: var(--text-color-muted);
-          font-size: 1rem;
-        }
+        .error-message { color: var(--text-color-muted); font-size: 1rem; }
 
         .retry-btn {
           padding: 0.625rem 1.25rem;
@@ -459,7 +438,6 @@ export class SeriesIndexPage extends BaseComponent {
           transform: translateY(-1px);
         }
 
-        /* Empty state */
         .empty-container {
           display: flex;
           flex-direction: column;
@@ -470,11 +448,7 @@ export class SeriesIndexPage extends BaseComponent {
           animation: fadeIn var(--transition-normal) var(--ease-out-expo);
         }
 
-        .empty-icon {
-          width: 72px;
-          height: 72px;
-          color: var(--text-color-dim);
-        }
+        .empty-icon { width: 72px; height: 72px; color: var(--text-color-dim); }
 
         .add-series-btn {
           padding: 0.625rem 1.25rem;
@@ -493,7 +467,7 @@ export class SeriesIndexPage extends BaseComponent {
           transform: translateY(-1px);
         }
 
-        /* Poster grid - Glassmorphism cards */
+        /* Poster grid */
         .poster-grid {
           display: grid;
           grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -524,25 +498,15 @@ export class SeriesIndexPage extends BaseComponent {
         .poster-card:nth-child(8) { animation-delay: 210ms; }
 
         @keyframes slideUp {
-          from {
-            opacity: 0;
-            transform: translateY(20px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
+          from { opacity: 0; transform: translateY(20px); }
+          to { opacity: 1; transform: translateY(0); }
         }
 
         .poster-card::before {
           content: '';
           position: absolute;
           inset: 0;
-          background: linear-gradient(
-            135deg,
-            rgba(255, 255, 255, 0.1) 0%,
-            transparent 50%
-          );
+          background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, transparent 50%);
           opacity: 0;
           transition: opacity var(--transition-fast);
           pointer-events: none;
@@ -555,9 +519,7 @@ export class SeriesIndexPage extends BaseComponent {
           border-color: rgba(93, 156, 236, 0.3);
         }
 
-        .poster-card:hover::before {
-          opacity: 1;
-        }
+        .poster-card:hover::before { opacity: 1; }
 
         .poster-image {
           width: 100%;
@@ -567,9 +529,7 @@ export class SeriesIndexPage extends BaseComponent {
           transition: transform var(--transition-normal) var(--ease-out-expo);
         }
 
-        .poster-card:hover .poster-image {
-          transform: scale(1.05);
-        }
+        .poster-card:hover .poster-image { transform: scale(1.05); }
 
         .poster-placeholder {
           width: 100%;
@@ -616,29 +576,14 @@ export class SeriesIndexPage extends BaseComponent {
           box-shadow: 0 0 8px currentColor;
         }
 
-        .poster-status.continuing {
-          background-color: var(--color-success);
-          color: var(--color-success);
-        }
-
-        .poster-status.ended {
-          background-color: var(--color-danger);
-          color: var(--color-danger);
-        }
-
-        .poster-status.upcoming {
-          background-color: var(--pir9-blue);
-          color: var(--pir9-blue);
-        }
-
+        .poster-status.continuing { background-color: var(--color-success); color: var(--color-success); }
+        .poster-status.ended { background-color: var(--color-danger); color: var(--color-danger); }
+        .poster-status.upcoming { background-color: var(--pir9-blue); color: var(--pir9-blue); }
         .poster-status.unknown,
         .poster-status.deleted,
-        .poster-status.unmonitored {
-          background-color: var(--color-gray-600);
-          color: var(--color-gray-600);
-        }
+        .poster-status.unmonitored { background-color: var(--color-gray-600); color: var(--color-gray-600); }
 
-        /* Table view - Glass table */
+        /* Table view */
         .series-table {
           width: 100%;
           border-collapse: collapse;
@@ -673,14 +618,8 @@ export class SeriesIndexPage extends BaseComponent {
           transition: all var(--transition-fast) var(--ease-out-expo);
         }
 
-        .series-table th.sortable:hover {
-          color: var(--pir9-blue);
-          background: var(--bg-input-hover);
-        }
-
-        .series-table th.sortable.sorted {
-          color: var(--pir9-blue);
-        }
+        .series-table th.sortable:hover { color: var(--pir9-blue); background: var(--bg-input-hover); }
+        .series-table th.sortable.sorted { color: var(--pir9-blue); }
 
         .series-table th.sortable svg {
           display: inline-block;
@@ -693,13 +632,8 @@ export class SeriesIndexPage extends BaseComponent {
           transition: background-color var(--transition-fast);
         }
 
-        .series-table tbody tr:hover td {
-          background-color: var(--bg-table-row-hover);
-        }
-
-        .series-table tbody tr:last-child td {
-          border-bottom: none;
-        }
+        .series-table tbody tr:hover td { background-color: var(--bg-table-row-hover); }
+        .series-table tbody tr:last-child td { border-bottom: none; }
 
         .status-badge {
           display: inline-flex;
@@ -711,49 +645,17 @@ export class SeriesIndexPage extends BaseComponent {
           border: 1px solid;
         }
 
-        .status-badge.continuing {
-          background-color: rgba(39, 194, 76, 0.15);
-          border-color: rgba(39, 194, 76, 0.3);
-          color: var(--color-success);
-        }
-
-        .status-badge.ended {
-          background-color: rgba(240, 80, 80, 0.15);
-          border-color: rgba(240, 80, 80, 0.3);
-          color: var(--color-danger);
-        }
-
-        .status-badge.upcoming {
-          background-color: rgba(93, 156, 236, 0.15);
-          border-color: rgba(93, 156, 236, 0.3);
-          color: var(--pir9-blue);
-        }
-
+        .status-badge.continuing { background-color: rgba(39, 194, 76, 0.15); border-color: rgba(39, 194, 76, 0.3); color: var(--color-success); }
+        .status-badge.ended { background-color: rgba(240, 80, 80, 0.15); border-color: rgba(240, 80, 80, 0.3); color: var(--color-danger); }
+        .status-badge.upcoming { background-color: rgba(93, 156, 236, 0.15); border-color: rgba(93, 156, 236, 0.3); color: var(--pir9-blue); }
         .status-badge.unknown,
-        .status-badge.deleted {
-          background-color: rgba(133, 133, 133, 0.15);
-          border-color: rgba(133, 133, 133, 0.3);
-          color: var(--color-gray-600);
-        }
+        .status-badge.deleted { background-color: rgba(133, 133, 133, 0.15); border-color: rgba(133, 133, 133, 0.3); color: var(--color-gray-600); }
 
-        .monitored-icon {
-          width: 18px;
-          height: 18px;
-          transition: all var(--transition-fast);
-        }
+        .monitored-icon { width: 18px; height: 18px; transition: all var(--transition-fast); }
+        .monitored-icon.true { color: var(--color-success); filter: drop-shadow(0 0 4px rgba(39, 194, 76, 0.4)); }
+        .monitored-icon.false { color: var(--color-gray-600); }
 
-        .monitored-icon.true {
-          color: var(--color-success);
-          filter: drop-shadow(0 0 4px rgba(39, 194, 76, 0.4));
-        }
-        .monitored-icon.false {
-          color: var(--color-gray-600);
-        }
-
-        /* Episode progress */
-        .episode-progress {
-          min-width: 120px;
-        }
+        .episode-progress { min-width: 120px; }
 
         .episode-progress-bar {
           height: 6px;
@@ -768,36 +670,18 @@ export class SeriesIndexPage extends BaseComponent {
           transition: width var(--transition-normal) var(--ease-out-expo);
         }
 
-        .episode-progress-fill.complete {
-          background-color: var(--color-success);
-        }
+        .episode-progress-fill.complete { background-color: var(--color-success); }
+        .episode-progress-fill.partial { background-color: var(--color-primary); }
+        .episode-progress-fill.empty { background-color: var(--color-gray-600); }
 
-        .episode-progress-fill.partial {
-          background-color: var(--color-primary);
-        }
-
-        .episode-progress-fill.empty {
-          background-color: var(--color-gray-600);
-        }
-
-        .episode-progress-text {
-          font-size: 0.75rem;
-          color: var(--text-color-muted);
-          margin-top: 2px;
-        }
-
-        .airing-date {
-          white-space: nowrap;
-          font-size: 0.8125rem;
-          color: var(--text-color-muted);
-        }
-
+        .episode-progress-text { font-size: 0.75rem; color: var(--text-color-muted); margin-top: 2px; }
+        .airing-date { white-space: nowrap; font-size: 0.8125rem; color: var(--text-color-muted); }
       </style>
     `;
   }
 
   private renderViewModeButton(mode: ViewMode, label: string): string {
-    const active = seriesViewMode.value === mode;
+    const active = animeViewMode.value === mode;
     const icon =
       mode === 'posters'
         ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>'
@@ -806,7 +690,7 @@ export class SeriesIndexPage extends BaseComponent {
     return html`
       <button
         class="view-mode-btn ${active ? 'active' : ''}"
-        onclick="this.closest('series-index-page').handleViewModeChange('${mode}')"
+        onclick="this.closest('anime-index-page').handleViewModeChange('${mode}')"
         title="${label}"
       >
         ${safeHtml(icon)}
@@ -830,8 +714,8 @@ export class SeriesIndexPage extends BaseComponent {
           <line x1="15" y1="9" x2="9" y2="15"></line>
           <line x1="9" y1="9" x2="15" y2="15"></line>
         </svg>
-        <p class="error-message">Failed to load series</p>
-        <button class="retry-btn" onclick="this.closest('series-index-page').handleRetry()">
+        <p class="error-message">Failed to load anime</p>
+        <button class="retry-btn" onclick="this.closest('anime-index-page').handleRetry()">
           Retry
         </button>
       </div>
@@ -856,8 +740,8 @@ export class SeriesIndexPage extends BaseComponent {
           <rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect>
           <polyline points="17 2 12 7 7 2"></polyline>
         </svg>
-        <p>No series found</p>
-        <button class="add-series-btn" onclick="this.closest('series-index-page').handleAddSeries()">
+        <p>No anime found</p>
+        <button class="add-series-btn" onclick="this.closest('anime-index-page').handleAddSeries()">
           Add Series
         </button>
       </div>
@@ -879,7 +763,7 @@ export class SeriesIndexPage extends BaseComponent {
     return html`
       <div
         class="poster-card"
-        onclick="this.closest('series-index-page').handleSeriesClick('${escapeHtml(series.titleSlug)}')"
+        onclick="this.closest('anime-index-page').handleSeriesClick('${escapeHtml(series.titleSlug)}')"
       >
         <div class="poster-status ${statusClass}"></div>
         ${
@@ -896,8 +780,8 @@ export class SeriesIndexPage extends BaseComponent {
   }
 
   private renderTable(series: Series[]): string {
-    const sortKey = seriesSortKey.value;
-    const sortDir = seriesSortDirection.value;
+    const sortKey = animeSortKey.value;
+    const sortDir = animeSortDirection.value;
     const sortIcon =
       sortDir === 'ascending'
         ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>'
@@ -908,26 +792,26 @@ export class SeriesIndexPage extends BaseComponent {
         <thead>
           <tr>
             <th>Monitored</th>
-            <th class="sortable ${sortKey === 'sortTitle' ? 'sorted' : ''}" onclick="this.closest('series-index-page').handleHeaderSort('sortTitle')">
+            <th class="sortable ${sortKey === 'sortTitle' ? 'sorted' : ''}" onclick="this.closest('anime-index-page').handleHeaderSort('sortTitle')">
               Title ${sortKey === 'sortTitle' ? safeHtml(sortIcon) : ''}
             </th>
-            <th class="sortable ${sortKey === 'network' ? 'sorted' : ''}" onclick="this.closest('series-index-page').handleHeaderSort('network')">
+            <th class="sortable ${sortKey === 'network' ? 'sorted' : ''}" onclick="this.closest('anime-index-page').handleHeaderSort('network')">
               Network ${sortKey === 'network' ? safeHtml(sortIcon) : ''}
             </th>
-            <th class="sortable ${sortKey === 'status' ? 'sorted' : ''}" onclick="this.closest('series-index-page').handleHeaderSort('status')">
+            <th class="sortable ${sortKey === 'status' ? 'sorted' : ''}" onclick="this.closest('anime-index-page').handleHeaderSort('status')">
               Status ${sortKey === 'status' ? safeHtml(sortIcon) : ''}
             </th>
-            <th class="sortable ${sortKey === 'nextAiring' ? 'sorted' : ''}" onclick="this.closest('series-index-page').handleHeaderSort('nextAiring')">
+            <th class="sortable ${sortKey === 'nextAiring' ? 'sorted' : ''}" onclick="this.closest('anime-index-page').handleHeaderSort('nextAiring')">
               Next Airing ${sortKey === 'nextAiring' ? safeHtml(sortIcon) : ''}
             </th>
-            <th class="sortable ${sortKey === 'previousAiring' ? 'sorted' : ''}" onclick="this.closest('series-index-page').handleHeaderSort('previousAiring')">
+            <th class="sortable ${sortKey === 'previousAiring' ? 'sorted' : ''}" onclick="this.closest('anime-index-page').handleHeaderSort('previousAiring')">
               Prev Airing ${sortKey === 'previousAiring' ? safeHtml(sortIcon) : ''}
             </th>
-            <th class="sortable ${sortKey === 'year' ? 'sorted' : ''}" onclick="this.closest('series-index-page').handleHeaderSort('year')">
+            <th class="sortable ${sortKey === 'year' ? 'sorted' : ''}" onclick="this.closest('anime-index-page').handleHeaderSort('year')">
               Year ${sortKey === 'year' ? safeHtml(sortIcon) : ''}
             </th>
             <th>Seasons</th>
-            <th class="sortable ${sortKey === 'episodeProgress' ? 'sorted' : ''}" onclick="this.closest('series-index-page').handleHeaderSort('episodeProgress')">
+            <th class="sortable ${sortKey === 'episodeProgress' ? 'sorted' : ''}" onclick="this.closest('anime-index-page').handleHeaderSort('episodeProgress')">
               Episodes ${sortKey === 'episodeProgress' ? safeHtml(sortIcon) : ''}
             </th>
           </tr>
@@ -945,7 +829,7 @@ export class SeriesIndexPage extends BaseComponent {
     const fileCount = stats?.episodeFileCount ?? 0;
 
     return html`
-      <tr onclick="this.closest('series-index-page').handleSeriesClick('${escapeHtml(series.titleSlug)}')">
+      <tr onclick="this.closest('anime-index-page').handleSeriesClick('${escapeHtml(series.titleSlug)}')">
         <td>
           <svg class="monitored-icon ${series.monitored}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             ${
@@ -984,7 +868,6 @@ export class SeriesIndexPage extends BaseComponent {
     const diffMs = date.getTime() - now.getTime();
     const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
 
-    // Show relative for near-future/past, absolute for far dates
     if (diffDays === 0) return 'Today';
     if (diffDays === 1) return 'Tomorrow';
     if (diffDays === -1) return 'Yesterday';
@@ -1036,37 +919,36 @@ export class SeriesIndexPage extends BaseComponent {
 
   handleFilterChange(event: Event): void {
     const select = event.target as HTMLSelectElement;
-    setSeriesFilter(select.value);
+    setAnimeFilter(select.value);
   }
 
   handleNetworkFilterChange(event: Event): void {
     const select = event.target as HTMLSelectElement;
-    setSeriesNetworkFilter(select.value);
+    setAnimeNetworkFilter(select.value);
   }
 
   handleSortChange(event: Event): void {
     const select = event.target as HTMLSelectElement;
-    setSeriesSort(select.value as SeriesSortKey);
+    setAnimeSort(select.value as SeriesSortKey);
   }
 
   handleSortDirToggle(): void {
-    const current = seriesSortDirection.value;
-    seriesSortDirection.set(current === 'ascending' ? 'descending' : 'ascending');
+    const current = animeSortDirection.value;
+    animeSortDirection.set(current === 'ascending' ? 'descending' : 'ascending');
   }
 
   handleHeaderSort(key: SeriesSortKey): void {
-    // If clicking same column, toggle direction; otherwise set new column with ascending
-    if (seriesSortKey.value === key) {
-      const current = seriesSortDirection.value;
-      seriesSortDirection.set(current === 'ascending' ? 'descending' : 'ascending');
+    if (animeSortKey.value === key) {
+      const current = animeSortDirection.value;
+      animeSortDirection.set(current === 'ascending' ? 'descending' : 'ascending');
     } else {
-      setSeriesSort(key);
-      seriesSortDirection.set('ascending');
+      setAnimeSort(key);
+      animeSortDirection.set('ascending');
     }
   }
 
   handleViewModeChange(mode: ViewMode): void {
-    setSeriesViewMode(mode);
+    setAnimeViewMode(mode);
   }
 
   handleRetry(): void {
@@ -1089,18 +971,15 @@ export class SeriesIndexPage extends BaseComponent {
     }
 
     try {
-      // Send RefreshSeries command with no seriesIds to refresh all
       await http.post('/command', { name: 'RefreshSeries' });
+      showInfo('Refreshing all anime metadata...', 'Refresh Started');
 
-      showInfo('Refreshing all series metadata...', 'Refresh Started');
-
-      // Refetch series data after a delay to show updated metadata
       setTimeout(() => {
         this.seriesQuery.refetch();
-        showSuccess('Series metadata updated', 'Refresh Complete');
+        showSuccess('Anime metadata updated', 'Refresh Complete');
       }, 5000);
     } catch (error) {
-      console.error('[SeriesIndex] Failed to refresh all series:', error);
+      console.error('[AnimeIndex] Failed to refresh anime:', error);
       showError('Failed to start refresh command', 'Refresh Failed');
     } finally {
       if (btn) {

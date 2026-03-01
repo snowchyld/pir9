@@ -33,6 +33,9 @@ export const routes: Route[] = [
   { path: '/series', component: 'series-index-page', title: 'Series' },
   { path: '/series/:titleSlug', component: 'series-detail-page', title: 'Series' },
 
+  // Anime
+  { path: '/anime', component: 'anime-index-page', title: 'Anime' },
+
   // Movies
   { path: '/movies', component: 'movies-index-page', title: 'Movies' },
   { path: '/movies/:titleSlug', component: 'movie-detail-page', title: 'Movie' },

@@ -39,6 +39,9 @@ import './features/dashboard/dashboard-page';
 import './features/series/series-index-page';
 import './features/series/series-detail-page';
 
+// Anime
+import './features/anime/anime-index-page';
+
 // Movies
 import './features/movies/movies-index-page';
 import './features/movies/movie-detail-page';
