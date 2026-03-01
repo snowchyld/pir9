@@ -46,6 +46,8 @@ pub struct SearchQuery {
     pub limit: Option<u32>,
     pub offset: Option<u32>,
     pub categories: Vec<i32>,
+    /// When true, use `moviesearch` action instead of `tvsearch` (Newznab/Torznab/Prowlarr)
+    pub is_movie_search: bool,
 }
 
 /// Indexer capabilities from caps endpoint
@@ -246,6 +248,7 @@ impl NewznabClient {
             special: false,
             series_id: None,
             episode_id: None,
+            movie_id: None,
             download_client_id: None,
             download_client: None,
             episode_requested: false,
@@ -347,8 +350,10 @@ impl IndexerClient for NewznabClient {
     async fn search(&self, query: &SearchQuery) -> Result<Vec<ReleaseInfo>> {
         let mut params: Vec<(&str, String)> = Vec::new();
 
-        // Use tvsearch if we have TVDB ID
-        let action = if query.tvdb_id.is_some() {
+        // Select action: moviesearch for movies with IMDB ID, tvsearch for TV with TVDB ID, else generic search
+        let action = if query.is_movie_search && query.imdb_id.is_some() {
+            "moviesearch"
+        } else if query.tvdb_id.is_some() {
             "tvsearch"
         } else {
             "search"
@@ -486,7 +491,9 @@ impl IndexerClient for TorznabClient {
     async fn search(&self, query: &SearchQuery) -> Result<Vec<ReleaseInfo>> {
         let mut params: Vec<(&str, String)> = Vec::new();
 
-        let action = if query.tvdb_id.is_some() {
+        let action = if query.is_movie_search && query.imdb_id.is_some() {
+            "moviesearch"
+        } else if query.tvdb_id.is_some() {
             "tvsearch"
         } else {
             "search"
@@ -625,13 +632,16 @@ impl ProwlarrClient {
     /// Build search query text from structured search parameters.
     /// Prowlarr's REST API doesn't accept tvdbId/season/episode as separate params,
     /// so we encode them into the query string (e.g. "Series Title S02E06").
+    /// For movie searches, just use the title (no S/E appending).
     fn build_search_text(query: &SearchQuery) -> String {
         let mut text = query.query.clone().unwrap_or_default();
-        if let Some(season) = query.season {
-            if let Some(episode) = query.episode {
-                text = format!("{} S{:02}E{:02}", text, season, episode);
-            } else {
-                text = format!("{} S{:02}", text, season);
+        if !query.is_movie_search {
+            if let Some(season) = query.season {
+                if let Some(episode) = query.episode {
+                    text = format!("{} S{:02}E{:02}", text, season, episode);
+                } else {
+                    text = format!("{} S{:02}", text, season);
+                }
             }
         }
         text.trim().to_string()
@@ -718,6 +728,7 @@ impl ProwlarrClient {
             special: false,
             series_id: None,
             episode_id: None,
+            movie_id: None,
             download_client_id: None,
             download_client: None,
             episode_requested: false,
@@ -798,11 +809,17 @@ impl IndexerClient for ProwlarrClient {
 
     async fn search(&self, query: &SearchQuery) -> Result<Vec<ReleaseInfo>> {
         let search_text = Self::build_search_text(query);
+        let search_type = if query.is_movie_search {
+            "moviesearch"
+        } else {
+            "tvsearch"
+        };
 
         let mut url = format!(
-            "{}/api/v1/search?query={}&type=tvsearch",
+            "{}/api/v1/search?query={}&type={}",
             self.base_url,
-            urlencoding::encode(&search_text)
+            urlencoding::encode(&search_text),
+            search_type
         );
 
         if !query.categories.is_empty() {

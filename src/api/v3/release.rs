@@ -92,6 +92,7 @@ pub struct ReleaseQuery {
     pub series_id: Option<i64>,
     pub episode_id: Option<i64>,
     pub season_number: Option<i32>,
+    pub movie_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -271,12 +272,17 @@ fn release_to_resource(release: &ReleaseInfo) -> ReleaseResource {
 }
 
 /// GET /api/v3/release
-/// Search for releases (interactive search)
+/// Search for releases (interactive search) — supports both series and movies
 pub async fn get_releases(
     State(state): State<Arc<AppState>>,
     query: Query<ReleaseQuery>,
 ) -> Json<Vec<ReleaseResource>> {
-    // If no series_id provided, return empty
+    // Movie search path
+    if let Some(movie_id) = query.movie_id {
+        return get_movie_releases(state, movie_id).await;
+    }
+
+    // Series search path — require series_id
     let series_id = match query.series_id {
         Some(id) => id,
         None => return Json(vec![]),
@@ -377,6 +383,77 @@ pub async fn get_releases(
     Json(resources)
 }
 
+/// Movie interactive search — searches indexers with movie categories and IMDB ID
+async fn get_movie_releases(
+    state: Arc<AppState>,
+    movie_id: i64,
+) -> Json<Vec<ReleaseResource>> {
+    use crate::core::datastore::repositories::MovieRepository;
+
+    let movie_repo = MovieRepository::new(state.db.clone());
+    let movie = match movie_repo.get_by_id(movie_id).await {
+        Ok(Some(m)) => m,
+        Ok(None) => {
+            tracing::error!("Movie {} not found", movie_id);
+            return Json(vec![]);
+        }
+        Err(e) => {
+            tracing::error!("Failed to fetch movie: {}", e);
+            return Json(vec![]);
+        }
+    };
+
+    let indexer_repo = IndexerRepository::new(state.db.clone());
+    let indexers = match indexer_repo.get_all().await {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::error!("Failed to fetch indexers: {}", e);
+            return Json(vec![]);
+        }
+    };
+
+    if indexers.is_empty() {
+        return Json(vec![]);
+    }
+
+    let search_service = IndexerSearchService::new(indexers);
+    let year = if movie.year > 0 { Some(movie.year) } else { None };
+    let releases = match search_service
+        .interactive_movie_search(&movie.title, year, movie.imdb_id.as_deref())
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("Movie search failed: {}", e);
+            return Json(vec![]);
+        }
+    };
+
+    tracing::info!(
+        "Interactive movie search returned {} releases for '{}'",
+        releases.len(),
+        movie.title
+    );
+
+    // Stamp movie_id on each release
+    let releases: Vec<ReleaseInfo> = releases
+        .into_iter()
+        .map(|mut r| {
+            r.movie_id = Some(movie_id);
+            r
+        })
+        .collect();
+
+    // Cache for grab
+    {
+        let mut cache = RELEASE_CACHE.write().await;
+        cache.insert_many(&releases);
+    }
+
+    let resources: Vec<ReleaseResource> = releases.iter().map(release_to_resource).collect();
+    Json(resources)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GrabReleaseRequest {
@@ -385,6 +462,8 @@ pub struct GrabReleaseRequest {
     /// Episode IDs to associate with this grab (optional, will be parsed from release if not provided)
     #[serde(default)]
     pub episode_ids: Vec<i64>,
+    /// Movie ID for movie grabs
+    pub movie_id: Option<i64>,
 }
 
 /// POST /api/v3/release
@@ -431,8 +510,14 @@ pub async fn create_release(
         }
     };
 
-    // Get episode IDs - use provided ones or parse from release
-    let episode_ids = if !body.episode_ids.is_empty() {
+    // Determine movie_id from request body or cached release
+    let movie_id = body.movie_id.or(release.movie_id);
+
+    // Get episode IDs - use provided ones or parse from release (only for series grabs)
+    let episode_ids = if movie_id.is_some() {
+        // Movie grab — no episode IDs
+        vec![]
+    } else if !body.episode_ids.is_empty() {
         body.episode_ids
     } else if let Some(series_id) = release.series_id {
         // Try to look up episodes based on parsed info
@@ -456,16 +541,44 @@ pub async fn create_release(
 
     // Grab the release using TrackedDownloadService
     let service = TrackedDownloadService::new(state.db.clone());
-    match service.grab_release(&release, episode_ids.clone(), None).await {
+    match service.grab_release(&release, episode_ids.clone(), movie_id).await {
         Ok(tracked_id) => {
             tracing::info!("Release grabbed and tracked: id={}", tracked_id);
 
             // Record in history
-            if let Some(series_id) = release.series_id {
-                let history_repo = HistoryRepository::new(state.db.clone());
-                let episode_id = episode_ids.first().copied().unwrap_or(0);
+            let history_repo = HistoryRepository::new(state.db.clone());
 
-                // Skip history for movie grabs (no valid episode_id)
+            if let Some(mid) = movie_id {
+                // Movie grab — record with movie_id
+                let history = HistoryDbModel {
+                    id: 0,
+                    series_id: None,
+                    episode_id: None,
+                    movie_id: Some(mid),
+                    source_title: release.title.clone(),
+                    quality: serde_json::to_string(&release.quality).unwrap_or_default(),
+                    languages: serde_json::to_string(&release.languages).unwrap_or_default(),
+                    custom_formats: "[]".to_string(),
+                    custom_format_score: 0,
+                    quality_cutoff_not_met: false,
+                    date: Utc::now(),
+                    download_id: Some(format!("{}", tracked_id)),
+                    event_type: 1, // Grabbed
+                    data: serde_json::json!({
+                        "indexer": release.indexer,
+                        "releaseGroup": release.release_group,
+                        "size": release.size,
+                        "downloadClient": "auto",
+                    })
+                    .to_string(),
+                };
+
+                if let Err(e) = history_repo.insert(&history).await {
+                    tracing::warn!("Failed to record movie grab in history: {}", e);
+                }
+            } else if let Some(series_id) = release.series_id {
+                // Series grab — record with series_id and episode_id
+                let episode_id = episode_ids.first().copied().unwrap_or(0);
                 if episode_id > 0 {
                     let history = HistoryDbModel {
                         id: 0,

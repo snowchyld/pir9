@@ -121,6 +121,117 @@ impl IndexerSearchService {
         Ok(all_releases)
     }
 
+    /// Search a specific indexer for movies
+    pub async fn search_movie_indexer(
+        &self,
+        indexer: &IndexerDbModel,
+        title: &str,
+        year: Option<i32>,
+        imdb_id: Option<&str>,
+    ) -> Result<Vec<ReleaseInfo>> {
+        let client =
+            create_client_from_model(indexer).context("Failed to create indexer client")?;
+
+        let search_term = sanitize_title_for_search(title);
+        // Append year for better text-search precision
+        let query_text = if let Some(y) = year {
+            format!("{} {}", search_term, y)
+        } else {
+            search_term.clone()
+        };
+
+        let query = SearchQuery {
+            query: Some(query_text.clone()),
+            imdb_id: imdb_id.map(String::from),
+            limit: Some(100),
+            categories: get_movie_categories(),
+            is_movie_search: true,
+            ..Default::default()
+        };
+
+        tracing::info!(
+            "Searching indexer {} for movie: Term: [{}] | IMDB: [{}]",
+            indexer.name,
+            query_text,
+            imdb_id.unwrap_or("none"),
+        );
+
+        let mut releases = client.search(&query).await?;
+
+        for release in &mut releases {
+            release.indexer_id = indexer.id;
+            release.indexer = indexer.name.clone();
+        }
+
+        Ok(releases)
+    }
+
+    /// Automatic movie search (uses enable_automatic_search filter)
+    pub async fn movie_search(
+        &self,
+        title: &str,
+        year: Option<i32>,
+        imdb_id: Option<&str>,
+    ) -> Result<Vec<ReleaseInfo>> {
+        let mut all_releases = Vec::new();
+
+        for indexer in &self.indexers {
+            if !indexer.enable_automatic_search {
+                continue;
+            }
+
+            match self.search_movie_indexer(indexer, title, year, imdb_id).await {
+                Ok(releases) => {
+                    tracing::debug!(
+                        "Indexer {} returned {} movie releases",
+                        indexer.name,
+                        releases.len()
+                    );
+                    all_releases.extend(releases);
+                }
+                Err(e) => {
+                    tracing::warn!("Indexer {} movie search failed: {}", indexer.name, e);
+                }
+            }
+        }
+
+        all_releases.sort_by(|a, b| b.quality.quality.weight().cmp(&a.quality.quality.weight()));
+        Ok(all_releases)
+    }
+
+    /// Interactive movie search (uses enable_interactive_search filter)
+    pub async fn interactive_movie_search(
+        &self,
+        title: &str,
+        year: Option<i32>,
+        imdb_id: Option<&str>,
+    ) -> Result<Vec<ReleaseInfo>> {
+        let mut all_releases = Vec::new();
+
+        for indexer in &self.indexers {
+            if !indexer.enable_interactive_search {
+                continue;
+            }
+
+            match self.search_movie_indexer(indexer, title, year, imdb_id).await {
+                Ok(releases) => {
+                    tracing::debug!(
+                        "Indexer {} returned {} releases for interactive movie search",
+                        indexer.name,
+                        releases.len()
+                    );
+                    all_releases.extend(releases);
+                }
+                Err(e) => {
+                    tracing::warn!("Indexer {} movie search failed: {}", indexer.name, e);
+                }
+            }
+        }
+
+        all_releases.sort_by(|a, b| b.quality.quality.weight().cmp(&a.quality.quality.weight()));
+        Ok(all_releases)
+    }
+
     /// Search by series name and title
     pub async fn search_by_query(
         &self,
@@ -174,7 +285,7 @@ impl IndexerSearchService {
 
 /// Sanitize title for search queries
 /// Removes special characters that can break indexer searches
-fn sanitize_title_for_search(title: &str) -> String {
+pub fn sanitize_title_for_search(title: &str) -> String {
     // Remove special characters that indexers often can't handle
     // Keep alphanumeric, spaces, and common punctuation
     let sanitized: String = title
@@ -204,6 +315,12 @@ fn sanitize_title_for_search(title: &str) -> String {
     }
 
     result.trim().to_string()
+}
+
+/// Get movie categories for Newznab indexers
+/// 2000: Movies, 2010: Foreign, 2020: Other, 2030: SD, 2040: HD, 2045: UHD, 2050: BluRay
+fn get_movie_categories() -> Vec<i32> {
+    vec![2000, 2010, 2020, 2030, 2040, 2045, 2050]
 }
 
 /// Get TV categories based on protocol

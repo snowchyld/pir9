@@ -46,12 +46,14 @@ interface ReleaseResource {
 }
 
 interface SearchParams {
-  seriesId: number;
-  seriesTitle: string;
+  seriesId?: number;
+  seriesTitle?: string;
   seasonNumber?: number;
   episodeId?: number;
   episodeNumber?: number;
   episodeTitle?: string;
+  movieId?: number;
+  movieTitle?: string;
 }
 
 @customElement('release-search-modal')
@@ -95,14 +97,18 @@ export class ReleaseSearchModal extends BaseComponent {
     this.isLoading.set(true);
 
     try {
-      const queryParams: Record<string, string | number> = {
-        seriesId: params.seriesId,
-      };
-      if (params.episodeId) {
-        queryParams.episodeId = params.episodeId;
-      }
-      if (params.seasonNumber !== undefined) {
-        queryParams.seasonNumber = params.seasonNumber;
+      const queryParams: Record<string, string | number> = {};
+
+      if (params.movieId) {
+        queryParams.movieId = params.movieId;
+      } else if (params.seriesId) {
+        queryParams.seriesId = params.seriesId;
+        if (params.episodeId) {
+          queryParams.episodeId = params.episodeId;
+        }
+        if (params.seasonNumber !== undefined) {
+          queryParams.seasonNumber = params.seasonNumber;
+        }
       }
 
       const results = await httpV3.get<ReleaseResource[]>('/release', { params: queryParams });
@@ -117,12 +123,17 @@ export class ReleaseSearchModal extends BaseComponent {
 
   private async grabRelease(release: ReleaseResource): Promise<void> {
     this.isGrabbing.set(release.guid);
+    const params = this.searchParams.value;
 
     try {
-      await httpV3.post('/release', {
+      const grabBody: Record<string, unknown> = {
         guid: release.guid,
         indexerId: release.indexerId,
-      });
+      };
+      if (params?.movieId) {
+        grabBody.movieId = params.movieId;
+      }
+      await httpV3.post('/release', grabBody);
       showSuccess(`Grabbed: ${release.title}`);
       this.close();
     } catch (_e) {
@@ -178,9 +189,10 @@ export class ReleaseSearchModal extends BaseComponent {
     const releases = this.getSortedReleases();
     const grabbing = this.isGrabbing.value;
 
-    const title =
-      params?.episodeNumber !== undefined
-        ? `${params.seriesTitle} - S${String(params.seasonNumber ?? 0).padStart(2, '0')}E${String(params.episodeNumber).padStart(2, '0')} - ${params.episodeTitle ?? ''}`
+    const title = params?.movieTitle
+      ? params.movieTitle
+      : params?.episodeNumber !== undefined
+        ? `${params?.seriesTitle} - S${String(params?.seasonNumber ?? 0).padStart(2, '0')}E${String(params.episodeNumber).padStart(2, '0')} - ${params?.episodeTitle ?? ''}`
         : params?.seasonNumber !== undefined
           ? `${params?.seriesTitle} - Season ${params.seasonNumber}`
           : (params?.seriesTitle ?? 'Search');

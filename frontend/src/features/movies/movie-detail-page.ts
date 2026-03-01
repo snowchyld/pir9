@@ -3,11 +3,13 @@
  */
 
 import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
+import type { ReleaseSearchModal } from '../../components/release-search-modal';
 import { http, type Movie } from '../../core/http';
-import { createQuery, invalidateQueries } from '../../core/query';
+import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
 import { navigate } from '../../router';
 import { showError, showInfo, showSuccess } from '../../stores/app.store';
+import '../../components/release-search-modal';
 import './movie-edit-dialog';
 import './movie-match-dialog';
 import type { MovieEditDialog } from './movie-edit-dialog';
@@ -17,6 +19,24 @@ import type { MovieMatchDialog } from './movie-match-dialog';
 export class MovieDetailPage extends BaseComponent {
   private movieId = signal<number | null>(null);
   private titleSlug = signal<string | null>(null);
+
+  private handleDocumentClick = (event: MouseEvent): void => {
+    const dropdown = this.querySelector('.search-dropdown');
+    if (dropdown && !dropdown.contains(event.target as Node)) {
+      this.closeSearchMenu();
+    }
+  };
+
+  private searchMutation = createMutation({
+    mutationFn: (params: { movieId: number }) =>
+      http.post('/command', { name: 'MovieSearch', movieId: params.movieId }),
+    onSuccess: () => {
+      showSuccess('Movie search started');
+    },
+    onError: () => {
+      showError('Failed to start movie search');
+    },
+  });
 
   private movieQuery: ReturnType<typeof createQuery<Movie | null>> | null = null;
 
@@ -66,6 +86,11 @@ export class MovieDetailPage extends BaseComponent {
       this.titleSlug.set(slug);
       this.lookupMovieId(slug);
     }
+    document.addEventListener('click', this.handleDocumentClick);
+  }
+
+  protected onDestroy(): void {
+    document.removeEventListener('click', this.handleDocumentClick);
   }
 
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
@@ -229,6 +254,27 @@ export class MovieDetailPage extends BaseComponent {
 
         <!-- Actions -->
         <div class="actions-panel">
+          <div class="search-dropdown">
+            <button class="action-btn primary" onclick="event.stopPropagation(); this.closest('movie-detail-page').toggleSearchMenu()">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+              Search
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </button>
+            <div class="search-menu">
+              <button class="search-menu-item" onclick="event.stopPropagation(); this.closest('movie-detail-page').openMovieSearch()">
+                Interactive Search
+              </button>
+              <div class="search-menu-divider"></div>
+              <button class="search-menu-item" onclick="event.stopPropagation(); this.closest('movie-detail-page').handleSearchMovie()">
+                Automatic Search
+              </button>
+            </div>
+          </div>
           <button class="action-btn" onclick="this.closest('movie-detail-page').handleRefreshMetadata()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 2v6h-6"></path>
@@ -270,6 +316,7 @@ export class MovieDetailPage extends BaseComponent {
         </div>
       </div>
 
+      <release-search-modal></release-search-modal>
       <movie-edit-dialog></movie-edit-dialog>
       <movie-match-dialog></movie-match-dialog>
 
@@ -510,9 +557,66 @@ export class MovieDetailPage extends BaseComponent {
           color: var(--pir9-blue);
         }
 
+        .action-btn.primary {
+          background-color: var(--btn-primary-bg);
+          border-color: var(--btn-primary-bg);
+          color: white;
+        }
+
+        .action-btn.primary:hover {
+          background-color: var(--btn-primary-bg-hover);
+          border-color: var(--btn-primary-bg-hover);
+          color: white;
+        }
+
         .action-btn.danger:hover {
           border-color: var(--color-danger);
           color: var(--color-danger);
+        }
+
+        .search-dropdown {
+          position: relative;
+          display: inline-block;
+        }
+
+        .search-menu {
+          display: none;
+          position: absolute;
+          top: 100%;
+          left: 0;
+          margin-top: 0.25rem;
+          min-width: 200px;
+          background-color: var(--bg-popover, var(--bg-card));
+          border: 1px solid var(--border-color);
+          border-radius: 0.375rem;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+          z-index: 50;
+        }
+
+        .search-menu.visible {
+          display: block;
+        }
+
+        .search-menu-item {
+          display: block;
+          width: 100%;
+          padding: 0.5rem 0.75rem;
+          background: transparent;
+          border: none;
+          color: var(--text-color);
+          text-align: left;
+          cursor: pointer;
+          font-size: 0.875rem;
+        }
+
+        .search-menu-item:hover {
+          background-color: var(--bg-table-row-hover, rgba(255,255,255,0.05));
+        }
+
+        .search-menu-divider {
+          height: 1px;
+          background-color: var(--border-color);
+          margin: 0.25rem 0;
         }
 
         .error-container {
@@ -550,6 +654,40 @@ export class MovieDetailPage extends BaseComponent {
     if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
     if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
     return num.toString();
+  }
+
+  // Search handlers
+  toggleSearchMenu(): void {
+    const menu = this.querySelector('.search-menu') as HTMLElement | null;
+    if (menu) {
+      menu.classList.toggle('visible');
+    }
+  }
+
+  closeSearchMenu(): void {
+    const menu = this.querySelector('.search-menu') as HTMLElement | null;
+    if (menu) {
+      menu.classList.remove('visible');
+    }
+  }
+
+  openMovieSearch(): void {
+    this.closeSearchMenu();
+    const movie = this.movieQuery?.data.value;
+    if (!movie) return;
+
+    const modal = this.querySelector('release-search-modal') as ReleaseSearchModal | null;
+    if (modal) {
+      modal.open({ movieId: movie.id, movieTitle: movie.title });
+    }
+  }
+
+  handleSearchMovie(): void {
+    this.closeSearchMenu();
+    const id = this.movieId.value;
+    if (id) {
+      this.searchMutation.mutate({ movieId: id });
+    }
   }
 
   // Event handlers

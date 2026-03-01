@@ -408,7 +408,7 @@ pub fn normalize_title(title: &str) -> String {
     let cleaned = clean_title(title).to_lowercase();
     let cleaned = replace_word_numbers(&cleaned);
 
-    cleaned
+    let result = cleaned
         .replace(" the ", " ")
         .replace("the ", "")
         .replace(" a ", " ")
@@ -417,9 +417,10 @@ pub fn normalize_title(title: &str) -> String {
         .replace("'", "")
         .replace("\"", "")
         .replace(":", "")
-        .replace(",", "")
-        .trim()
-        .to_string()
+        .replace(",", "");
+
+    // Collapse any double spaces left by removals (e.g. "Wars: The" → "Wars  " → "Wars ")
+    result.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Match a parsed title against a series name

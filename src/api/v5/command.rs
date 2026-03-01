@@ -392,6 +392,7 @@ pub async fn execute_command_with_options(
         "EpisodeSearch" => execute_episode_search(body, db, event_bus).await,
         "SeasonSearch" => execute_season_search(body, db, event_bus).await,
         "SeriesSearch" => execute_series_search(body, db, event_bus).await,
+        "MovieSearch" => execute_movie_search(body, db).await,
         "MissingEpisodeSearch" => {
             tracing::info!("MissingEpisodeSearch: searching for missing episodes");
             // This would search indexers for all missing episodes
@@ -2236,6 +2237,225 @@ async fn execute_series_search(
     // Delegate to EpisodeSearch with the missing episode IDs
     let episode_body = serde_json::json!({ "episodeIds": missing_ids });
     execute_episode_search(&episode_body, db, event_bus).await
+}
+
+/// Execute MovieSearch command — search indexers for a movie and auto-grab best match
+async fn execute_movie_search(
+    body: &serde_json::Value,
+    db: &crate::core::datastore::Database,
+) -> Result<String, String> {
+    use crate::core::datastore::repositories::{
+        IndexerRepository, MovieRepository, QualityProfileRepository, TrackedDownloadRepository,
+    };
+    use crate::core::indexers::search::IndexerSearchService;
+    use crate::core::profiles::QualityProfileItem;
+    use crate::core::queue::service::TrackedDownloadService;
+
+    // Parse movie IDs — accept both movieId (singular) and movieIds (array)
+    let mut movie_ids: Vec<i64> = body
+        .get("movieIds")
+        .or_else(|| body.get("body").and_then(|b| b.get("movieIds")))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+        .unwrap_or_default();
+
+    if movie_ids.is_empty() {
+        if let Some(id) = body
+            .get("movieId")
+            .or_else(|| body.get("body").and_then(|b| b.get("movieId")))
+            .and_then(|v| v.as_i64())
+        {
+            movie_ids.push(id);
+        }
+    }
+
+    if movie_ids.is_empty() {
+        return Ok("No movies to search".to_string());
+    }
+
+    tracing::info!("MovieSearch: searching for {} movies", movie_ids.len());
+
+    // Get indexers
+    let indexer_repo = IndexerRepository::new(db.clone());
+    let indexers = match indexer_repo.get_all().await {
+        Ok(i) => i,
+        Err(e) => return Err(format!("Failed to fetch indexers: {}", e)),
+    };
+
+    let enabled_indexers: Vec<_> = indexers
+        .into_iter()
+        .filter(|i| i.enable_automatic_search)
+        .collect();
+
+    if enabled_indexers.is_empty() {
+        return Ok("No indexers have automatic search enabled".to_string());
+    }
+
+    let movie_repo = MovieRepository::new(db.clone());
+    let quality_repo = QualityProfileRepository::new(db.clone());
+    let tracked_repo = TrackedDownloadRepository::new(db.clone());
+    let tracked_service = TrackedDownloadService::new(db.clone());
+
+    let all_profiles = quality_repo.get_all().await.unwrap_or_default();
+    let profiles: std::collections::HashMap<i64, _> =
+        all_profiles.into_iter().map(|p| (p.id, p)).collect();
+
+    // Get active movie downloads to avoid duplicates
+    let active_downloads = tracked_repo.get_all_active().await.unwrap_or_default();
+    let downloading_movie_ids: std::collections::HashSet<i64> = active_downloads
+        .iter()
+        .filter_map(|d| d.movie_id)
+        .collect();
+
+    let mut total_releases = 0;
+    let mut grabbed = 0u32;
+
+    for movie_id in &movie_ids {
+        let movie = match movie_repo.get_by_id(*movie_id).await {
+            Ok(Some(m)) => m,
+            Ok(None) => {
+                tracing::warn!("MovieSearch: movie {} not found", movie_id);
+                continue;
+            }
+            Err(e) => {
+                tracing::error!("MovieSearch: failed to fetch movie {}: {}", movie_id, e);
+                continue;
+            }
+        };
+
+        if downloading_movie_ids.contains(movie_id) {
+            tracing::info!(
+                "MovieSearch: movie {} '{}' already downloading, skipping",
+                movie_id,
+                movie.title
+            );
+            continue;
+        }
+
+        tracing::info!(
+            "MovieSearch: searching for '{}' ({}) IMDB: [{}]",
+            movie.title,
+            movie.year,
+            movie.imdb_id.as_deref().unwrap_or("none"),
+        );
+
+        let search_service = IndexerSearchService::new(enabled_indexers.clone());
+        let year = if movie.year > 0 { Some(movie.year) } else { None };
+        match search_service
+            .movie_search(&movie.title, year, movie.imdb_id.as_deref())
+            .await
+        {
+            Ok(releases) => {
+                tracing::info!(
+                    "MovieSearch: found {} releases for '{}'",
+                    releases.len(),
+                    movie.title
+                );
+                total_releases += releases.len();
+
+                for (i, release) in releases.iter().take(5).enumerate() {
+                    tracing::debug!(
+                        "  {}. {} ({} - {:?})",
+                        i + 1,
+                        release.title,
+                        release.indexer,
+                        release.quality.quality
+                    );
+                }
+
+                // Auto-grab: check quality profile and grab best match
+                if movie.monitored {
+                    if let Some(profile) = profiles.get(&movie.quality_profile_id) {
+                        let profile_items: Vec<QualityProfileItem> =
+                            serde_json::from_str(&profile.items).unwrap_or_default();
+
+                        let accept_any = profile.cutoff == 0
+                            && profile_items
+                                .iter()
+                                .all(|item| !item.allowed || item.quality.id == 0);
+
+                        for mut release in releases {
+                            let release_weight = release.quality.quality.weight();
+
+                            if !accept_any {
+                                let is_quality_allowed = profile_items.iter().any(|item| {
+                                    item.allowed
+                                        && (item.quality.id == release_weight
+                                            || item
+                                                .items
+                                                .iter()
+                                                .any(|q| q.id == release_weight))
+                                });
+
+                                if !is_quality_allowed {
+                                    tracing::debug!(
+                                        "MovieSearch: release '{}' weight={} rejected (quality not allowed)",
+                                        release.title,
+                                        release_weight
+                                    );
+                                    continue;
+                                }
+
+                                if release_weight < profile.cutoff {
+                                    tracing::debug!(
+                                        "MovieSearch: release '{}' weight={} rejected (below cutoff {})",
+                                        release.title,
+                                        release_weight,
+                                        profile.cutoff
+                                    );
+                                    continue;
+                                }
+                            }
+
+                            // Grab this release
+                            release.movie_id = Some(movie.id);
+                            tracing::info!(
+                                "MovieSearch auto-grab: '{}' → '{}' ({:?})",
+                                release.title,
+                                movie.title,
+                                release.quality.quality
+                            );
+
+                            match tracked_service
+                                .grab_release(&release, vec![], Some(movie.id))
+                                .await
+                            {
+                                Ok(tracked_id) => {
+                                    grabbed += 1;
+                                    tracing::info!(
+                                        "MovieSearch: grabbed successfully (tracked_id={})",
+                                        tracked_id
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "MovieSearch: failed to grab '{}': {}",
+                                        release.title,
+                                        e
+                                    );
+                                }
+                            }
+                            break; // Only grab the best matching release
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    "MovieSearch: search failed for '{}': {}",
+                    movie.title,
+                    e
+                );
+            }
+        }
+    }
+
+    Ok(format!(
+        "Movie search completed for {} movies, found {} releases, grabbed {}",
+        movie_ids.len(),
+        total_releases,
+        grabbed
+    ))
 }
 
 /// Execute RescanMovie command — scans a movie's folder for video files.

@@ -114,6 +114,7 @@ pub struct ReleaseInfo {
     pub special: bool,
     pub series_id: Option<i64>,
     pub episode_id: Option<i64>,
+    pub movie_id: Option<i64>,
     pub download_client_id: Option<i64>,
     pub download_client: Option<String>,
     pub episode_requested: bool,
