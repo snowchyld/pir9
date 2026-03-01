@@ -1121,12 +1121,41 @@ export class SeriesIndexPage extends BaseComponent {
     }
 
     try {
-      // Send RefreshSeries command with no seriesIds to refresh all
-      await http.post('/command', { name: 'RefreshSeries' });
+      const filter = seriesFilter.value;
+      const networkFilter = seriesNetworkFilter.value;
+      const rootFolderFilter = seriesRootFolderFilter.value;
+      const hasActiveFilter = filter !== 'all' || networkFilter !== 'all' || rootFolderFilter !== 'all';
 
-      showInfo('Refreshing all series metadata...', 'Refresh Started');
+      if (hasActiveFilter) {
+        const allSeries = this.seriesQuery.data.value ?? [];
+        let filtered = allSeries.filter((s) => s.seriesType !== 'anime');
 
-      // Refetch series data after a delay to show updated metadata
+        if (filter !== 'all') {
+          filtered = filtered.filter((s) => {
+            switch (filter) {
+              case 'monitored': return s.monitored;
+              case 'unmonitored': return !s.monitored;
+              case 'continuing': return s.status === 'continuing';
+              case 'ended': return s.status === 'ended';
+              default: return true;
+            }
+          });
+        }
+        if (networkFilter !== 'all') {
+          filtered = filtered.filter((s) => (s.network || 'Unknown Network') === networkFilter);
+        }
+        if (rootFolderFilter !== 'all') {
+          filtered = filtered.filter((s) => getRootFolder(s.path) === rootFolderFilter);
+        }
+
+        const seriesIds = filtered.map((s) => s.id);
+        await http.post('/command', { name: 'RefreshSeries', seriesIds });
+        showInfo(`Refreshing ${seriesIds.length} series...`, 'Refresh Started');
+      } else {
+        await http.post('/command', { name: 'RefreshSeries' });
+        showInfo('Refreshing all series metadata...', 'Refresh Started');
+      }
+
       setTimeout(() => {
         this.seriesQuery.refetch();
         showSuccess('Series metadata updated', 'Refresh Complete');

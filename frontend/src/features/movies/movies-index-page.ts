@@ -850,11 +850,45 @@ export class MoviesIndexPage extends BaseComponent {
 
   async handleRefreshAll(): Promise<void> {
     try {
-      const result = await http.post<{ id: number }>('/command', { name: 'RefreshMovies' });
+      const filter = movieFilter.value;
+      const rootFolderFilter = movieRootFolderFilter.value;
+      const hasActiveFilter = filter !== 'all' || rootFolderFilter !== 'all';
+
+      let result: { id: number };
+
+      if (hasActiveFilter) {
+        const allMovies = this.moviesQuery.data.value ?? [];
+        let filtered = allMovies;
+
+        if (filter !== 'all') {
+          filtered = filtered.filter((m) => {
+            switch (filter) {
+              case 'monitored': return m.monitored;
+              case 'unmonitored': return !m.monitored;
+              case 'released': return m.status === 'released';
+              case 'inCinemas': return m.status === 'inCinemas';
+              case 'announced': return m.status === 'announced';
+              case 'missing': return m.monitored && !m.hasFile;
+              default: return true;
+            }
+          });
+        }
+        if (rootFolderFilter !== 'all') {
+          filtered = filtered.filter(
+            (m) => (m.rootFolderPath || getRootFolder(m.path)) === rootFolderFilter,
+          );
+        }
+
+        const movieIds = filtered.map((m) => m.id);
+        result = await http.post<{ id: number }>('/command', { name: 'RefreshMovies', movieIds });
+        showInfo(`Refreshing ${movieIds.length} movies...`, 'Refresh Started');
+      } else {
+        result = await http.post<{ id: number }>('/command', { name: 'RefreshMovies' });
+        showInfo('Refreshing all movie metadata...', 'Refresh Started');
+      }
+
       this.refreshCommandId = result.id;
       this.requestUpdate();
-
-      showInfo('Refreshing all movie metadata...', 'Refresh Started');
     } catch (error) {
       console.error('[MoviesIndex] Failed to refresh all movies:', error);
       showError('Failed to start refresh command', 'Refresh Failed');

@@ -1002,8 +1002,42 @@ export class AnimeIndexPage extends BaseComponent {
     }
 
     try {
-      await http.post('/command', { name: 'RefreshSeries' });
-      showInfo('Refreshing all anime metadata...', 'Refresh Started');
+      const allSeries = this.seriesQuery.data.value ?? [];
+      let animeSeries = allSeries.filter((s) => s.seriesType === 'anime');
+
+      const filter = animeFilter.value;
+      const networkFilter = animeNetworkFilter.value;
+      const rootFolderFilter = animeRootFolderFilter.value;
+      const hasActiveFilter = filter !== 'all' || networkFilter !== 'all' || rootFolderFilter !== 'all';
+
+      if (hasActiveFilter) {
+        if (filter !== 'all') {
+          animeSeries = animeSeries.filter((s) => {
+            switch (filter) {
+              case 'monitored': return s.monitored;
+              case 'unmonitored': return !s.monitored;
+              case 'continuing': return s.status === 'continuing';
+              case 'ended': return s.status === 'ended';
+              default: return true;
+            }
+          });
+        }
+        if (networkFilter !== 'all') {
+          animeSeries = animeSeries.filter((s) => (s.network || 'Unknown Network') === networkFilter);
+        }
+        if (rootFolderFilter !== 'all') {
+          animeSeries = animeSeries.filter((s) => getRootFolder(s.path) === rootFolderFilter);
+        }
+      }
+
+      const seriesIds = animeSeries.map((s) => s.id);
+      await http.post('/command', { name: 'RefreshSeries', seriesIds });
+
+      if (hasActiveFilter) {
+        showInfo(`Refreshing ${seriesIds.length} anime...`, 'Refresh Started');
+      } else {
+        showInfo(`Refreshing all ${seriesIds.length} anime...`, 'Refresh Started');
+      }
 
       setTimeout(() => {
         this.seriesQuery.refetch();
