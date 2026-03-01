@@ -822,9 +822,9 @@ impl IndexerClient for ProwlarrClient {
             search_type
         );
 
-        if !query.categories.is_empty() {
-            let cats: Vec<String> = query.categories.iter().map(|c| c.to_string()).collect();
-            url.push_str(&format!("&categories={}", cats.join(",")));
+        // Prowlarr expects repeated `categories` params, not comma-separated
+        for cat in &query.categories {
+            url.push_str(&format!("&categories={}", cat));
         }
 
         if let Some(limit) = query.limit {
@@ -859,7 +859,7 @@ impl IndexerClient for ProwlarrClient {
 
     async fn fetch_rss(&self, limit: Option<u32>) -> Result<Vec<ReleaseInfo>> {
         let mut url = format!(
-            "{}/api/v1/search?type=search&categories=5000,5010,5020,5030,5040,5045,5050,5060,5070,5080",
+            "{}/api/v1/search?type=search&categories=5000&categories=5010&categories=5020&categories=5030&categories=5040&categories=5045&categories=5050&categories=5060&categories=5070&categories=5080",
             self.base_url
         );
 

@@ -133,9 +133,14 @@ impl IndexerSearchService {
             create_client_from_model(indexer).context("Failed to create indexer client")?;
 
         let search_term = sanitize_title_for_search(title);
-        // Append year for better text-search precision
+        // Append year for better text-search precision (skip if title already ends with the year)
         let query_text = if let Some(y) = year {
-            format!("{} {}", search_term, y)
+            let year_str = y.to_string();
+            if search_term.ends_with(&year_str) {
+                search_term.clone()
+            } else {
+                format!("{} {}", search_term, y)
+            }
         } else {
             search_term.clone()
         };
