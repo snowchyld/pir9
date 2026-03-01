@@ -36,9 +36,15 @@ export interface SeriesMessage extends WebSocketMessage {
 }
 
 export interface EpisodeMessage extends WebSocketMessage {
-  type: 'episode_grabbed' | 'episode_imported' | 'episode_renamed' | 'episode_deleted';
+  type:
+    | 'episode_grabbed'
+    | 'episode_imported'
+    | 'episode_file_imported'
+    | 'episode_renamed'
+    | 'episode_deleted';
   series_id: number;
-  episode_id: number;
+  episode_id?: number;
+  episode_ids?: number[];
   title?: string;
 }
 
@@ -213,9 +219,19 @@ class WebSocketManager {
 
       case 'episode_grabbed':
       case 'episode_imported':
+      case 'episode_file_imported':
       case 'episode_renamed':
       case 'episode_deleted':
         this.handleEpisodeMessage(message as EpisodeMessage);
+        break;
+
+      case 'movie_updated':
+      case 'movie_refreshed':
+      case 'movie_added':
+      case 'movie_deleted':
+      case 'movie_file_imported':
+      case 'movie_file_deleted':
+        this.handleMovieMessage(message);
         break;
 
       case 'queue_updated':
@@ -298,6 +314,12 @@ class WebSocketManager {
     // Invalidate queue and history
     invalidateQueries(['/queue']);
     invalidateQueries(['/history']);
+  }
+
+  private handleMovieMessage(message: WebSocketMessage): void {
+    console.log('[WebSocket] Movie event:', message.type);
+
+    invalidateQueries(['/movie']);
   }
 
   private handleQueueMessage(_message: QueueMessage): void {

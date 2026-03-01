@@ -586,6 +586,14 @@ impl ScanResultConsumer {
                     "Movie scan: found file for '{}': {} ({} bytes)",
                     movie.title, file_path_str, file.size
                 );
+
+                // Publish per-file event so the frontend updates immediately
+                self.event_bus
+                    .publish(Message::MovieFileImported {
+                        movie_file_id: file_id,
+                        movie_id,
+                    })
+                    .await;
             }
             Err(e) => {
                 warn!(
@@ -1322,6 +1330,7 @@ impl ScanResultConsumer {
             };
 
             // Link episodes to file
+            let mut linked_episode_ids = Vec::new();
             for episode_num in &file.episode_numbers {
                 if let Some(mut ep) = episodes
                     .iter()
@@ -1333,6 +1342,7 @@ impl ScanResultConsumer {
                         ep.episode_file_id = Some(episode_file_id);
                         if episode_repo.update(&ep).await.is_ok() {
                             matched_episodes += 1;
+                            linked_episode_ids.push(ep.id);
                             debug!(
                                 "Linked S{:02}E{:02} to file {}",
                                 season_number, episode_num, episode_file_id
@@ -1340,6 +1350,17 @@ impl ScanResultConsumer {
                         }
                     }
                 }
+            }
+
+            // Publish per-file event so the frontend updates incrementally
+            if !linked_episode_ids.is_empty() {
+                self.event_bus
+                    .publish(Message::EpisodeFileImported {
+                        episode_file_id,
+                        series_id,
+                        episode_ids: linked_episode_ids,
+                    })
+                    .await;
             }
 
             // Log multi-episode files
