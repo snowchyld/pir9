@@ -4,12 +4,13 @@
  */
 
 import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
-import { http, type Series } from '../../core/http';
+import { getRootFolder, http, type Series } from '../../core/http';
 import { useSeriesQuery } from '../../core/query';
 import { navigate } from '../../router';
 import {
   animeFilter,
   animeNetworkFilter,
+  animeRootFolderFilter,
   animeSortDirection,
   animeSortKey,
   animeViewMode,
@@ -17,6 +18,7 @@ import {
   searchQuery,
   setAnimeFilter,
   setAnimeNetworkFilter,
+  setAnimeRootFolderFilter,
   setAnimeSort,
   setAnimeViewMode,
   showError,
@@ -38,6 +40,7 @@ export class AnimeIndexPage extends BaseComponent {
     this.watch(animeSortDirection);
     this.watch(animeFilter);
     this.watch(animeNetworkFilter);
+    this.watch(animeRootFolderFilter);
     this.watch(searchQuery);
   }
 
@@ -50,10 +53,14 @@ export class AnimeIndexPage extends BaseComponent {
     const sortDir = animeSortDirection.value;
     const filter = animeFilter.value;
     const networkFilter = animeNetworkFilter.value;
+    const rootFolderFilter = animeRootFolderFilter.value;
     const search = searchQuery.value.toLowerCase();
 
     // Filter to anime only
     const animeSeries = allSeries.filter((s) => s.seriesType === 'anime');
+
+    // Collect unique root folders from anime (before other filters)
+    const rootFolders = [...new Set(animeSeries.map((s) => getRootFolder(s.path)))].sort();
 
     // Collect unique networks from anime (before other filters)
     const networks = [...new Set(animeSeries.map((s) => s.network || 'Unknown Network'))].sort(
@@ -92,6 +99,10 @@ export class AnimeIndexPage extends BaseComponent {
 
     if (networkFilter !== 'all') {
       filtered = filtered.filter((s) => (s.network || 'Unknown Network') === networkFilter);
+    }
+
+    if (rootFolderFilter !== 'all') {
+      filtered = filtered.filter((s) => getRootFolder(s.path) === rootFolderFilter);
     }
 
     // Sort
@@ -143,6 +154,21 @@ export class AnimeIndexPage extends BaseComponent {
               <option value="all" ${networkFilter === 'all' ? 'selected' : ''}>All Networks</option>
               ${networks.map((n) => html`<option value="${escapeHtml(n)}" ${networkFilter === n ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('')}
             </select>
+
+            <!-- Root folder filter dropdown -->
+            ${
+              rootFolders.length > 1
+                ? html`
+            <select
+              class="filter-select"
+              onchange="this.closest('anime-index-page').handleRootFolderFilterChange(event)"
+            >
+              <option value="all" ${rootFolderFilter === 'all' ? 'selected' : ''}>All Folders</option>
+              ${rootFolders.map((f) => html`<option value="${escapeHtml(f)}" ${rootFolderFilter === f ? 'selected' : ''}>${escapeHtml(f)}</option>`).join('')}
+            </select>
+            `
+                : ''
+            }
 
             <!-- Sort dropdown -->
             <select
@@ -925,6 +951,11 @@ export class AnimeIndexPage extends BaseComponent {
   handleNetworkFilterChange(event: Event): void {
     const select = event.target as HTMLSelectElement;
     setAnimeNetworkFilter(select.value);
+  }
+
+  handleRootFolderFilterChange(event: Event): void {
+    const select = event.target as HTMLSelectElement;
+    setAnimeRootFolderFilter(select.value);
   }
 
   handleSortChange(event: Event): void {

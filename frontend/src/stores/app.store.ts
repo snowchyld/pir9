@@ -110,6 +110,15 @@ export function setSeriesNetworkFilter(network: string): void {
 }
 
 /**
+ * Series root folder filter
+ */
+export const seriesRootFolderFilter = persistedSignal<string>('series-rootfolder-filter', 'all');
+
+export function setSeriesRootFolderFilter(folder: string): void {
+  seriesRootFolderFilter.set(folder);
+}
+
+/**
  * Movie view mode
  */
 export const movieViewMode = persistedSignal<ViewMode>('movie-view-mode', 'posters');
@@ -158,6 +167,15 @@ export function setMovieFilter(filter: string): void {
 }
 
 /**
+ * Movie root folder filter
+ */
+export const movieRootFolderFilter = persistedSignal<string>('movie-rootfolder-filter', 'all');
+
+export function setMovieRootFolderFilter(folder: string): void {
+  movieRootFolderFilter.set(folder);
+}
+
+/**
  * Anime view mode
  */
 export const animeViewMode = persistedSignal<ViewMode>('anime-view-mode', 'posters');
@@ -202,6 +220,15 @@ export const animeNetworkFilter = persistedSignal<string>('anime-network-filter'
 
 export function setAnimeNetworkFilter(network: string): void {
   animeNetworkFilter.set(network);
+}
+
+/**
+ * Anime root folder filter
+ */
+export const animeRootFolderFilter = persistedSignal<string>('anime-rootfolder-filter', 'all');
+
+export function setAnimeRootFolderFilter(folder: string): void {
+  animeRootFolderFilter.set(folder);
 }
 
 /**

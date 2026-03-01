@@ -493,3 +493,16 @@ export interface UpdateInfo {
   branch: string;
   updateAvailable: boolean;
 }
+
+/**
+ * Extract the root folder from a full item path.
+ * e.g. "/volume1/tv/Breaking Bad" → "/volume1/tv"
+ * e.g. "/volume1/movies/Inception (2010)" → "/volume1/movies"
+ */
+export function getRootFolder(path: string): string {
+  // Trim trailing slash, then take parent directory
+  const trimmed = path.replace(/\/+$/, '');
+  const lastSlash = trimmed.lastIndexOf('/');
+  if (lastSlash <= 0) return trimmed || '/';
+  return trimmed.substring(0, lastSlash);
+}

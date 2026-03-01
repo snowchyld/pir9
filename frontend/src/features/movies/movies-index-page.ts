@@ -3,17 +3,19 @@
  */
 
 import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
-import { http, type Movie } from '../../core/http';
+import { getRootFolder, http, type Movie } from '../../core/http';
 import { useMoviesQuery } from '../../core/query';
 import { navigate } from '../../router';
 import {
   type MovieSortKey,
   movieFilter,
+  movieRootFolderFilter,
   movieSortDirection,
   movieSortKey,
   movieViewMode,
   searchQuery,
   setMovieFilter,
+  setMovieRootFolderFilter,
   setMovieSort,
   setMovieViewMode,
   showError,
@@ -34,6 +36,7 @@ export class MoviesIndexPage extends BaseComponent {
     this.watch(movieSortKey);
     this.watch(movieSortDirection);
     this.watch(movieFilter);
+    this.watch(movieRootFolderFilter);
     this.watch(searchQuery);
   }
 
@@ -45,7 +48,13 @@ export class MoviesIndexPage extends BaseComponent {
     const sortKey = movieSortKey.value;
     const sortDir = movieSortDirection.value;
     const filter = movieFilter.value;
+    const rootFolderFilter = movieRootFolderFilter.value;
     const search = searchQuery.value.toLowerCase();
+
+    // Collect unique root folders (before filtering)
+    const rootFolders = [
+      ...new Set(movies.map((m) => m.rootFolderPath || getRootFolder(m.path))),
+    ].sort();
 
     // Filter and sort movies
     let filtered = movies;
@@ -75,6 +84,12 @@ export class MoviesIndexPage extends BaseComponent {
             return true;
         }
       });
+    }
+
+    if (rootFolderFilter !== 'all') {
+      filtered = filtered.filter(
+        (m) => (m.rootFolderPath || getRootFolder(m.path)) === rootFolderFilter,
+      );
     }
 
     filtered = [...filtered].sort((a, b) => {
@@ -110,6 +125,21 @@ export class MoviesIndexPage extends BaseComponent {
               <option value="announced">Announced</option>
               <option value="missing">Missing</option>
             </select>
+
+            <!-- Root folder filter dropdown -->
+            ${
+              rootFolders.length > 1
+                ? html`
+            <select
+              class="filter-select"
+              onchange="this.closest('movies-index-page').handleRootFolderFilterChange(event)"
+            >
+              <option value="all" ${rootFolderFilter === 'all' ? 'selected' : ''}>All Folders</option>
+              ${rootFolders.map((f) => html`<option value="${escapeHtml(f)}" ${rootFolderFilter === f ? 'selected' : ''}>${escapeHtml(f)}</option>`).join('')}
+            </select>
+            `
+                : ''
+            }
 
             <select
               class="sort-select"
@@ -784,6 +814,11 @@ export class MoviesIndexPage extends BaseComponent {
   handleFilterChange(event: Event): void {
     const select = event.target as HTMLSelectElement;
     setMovieFilter(select.value);
+  }
+
+  handleRootFolderFilterChange(event: Event): void {
+    const select = event.target as HTMLSelectElement;
+    setMovieRootFolderFilter(select.value);
   }
 
   handleSortChange(event: Event): void {

@@ -3,7 +3,7 @@
  */
 
 import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
-import { http, type Series } from '../../core/http';
+import { getRootFolder, http, type Series } from '../../core/http';
 import { useSeriesQuery } from '../../core/query';
 import { navigate } from '../../router';
 import {
@@ -11,11 +11,13 @@ import {
   searchQuery,
   seriesFilter,
   seriesNetworkFilter,
+  seriesRootFolderFilter,
   seriesSortDirection,
   seriesSortKey,
   seriesViewMode,
   setSeriesFilter,
   setSeriesNetworkFilter,
+  setSeriesRootFolderFilter,
   setSeriesSort,
   setSeriesViewMode,
   showError,
@@ -37,6 +39,7 @@ export class SeriesIndexPage extends BaseComponent {
     this.watch(seriesSortDirection);
     this.watch(seriesFilter);
     this.watch(seriesNetworkFilter);
+    this.watch(seriesRootFolderFilter);
     this.watch(searchQuery);
   }
 
@@ -49,10 +52,14 @@ export class SeriesIndexPage extends BaseComponent {
     const sortDir = seriesSortDirection.value;
     const filter = seriesFilter.value;
     const networkFilter = seriesNetworkFilter.value;
+    const rootFolderFilter = seriesRootFolderFilter.value;
     const search = searchQuery.value.toLowerCase();
 
     // Exclude anime series (they have their own page at /anime)
     const nonAnimeSeries = series.filter((s) => s.seriesType !== 'anime');
+
+    // Collect unique root folders (before filtering, so dropdown is always complete)
+    const rootFolders = [...new Set(nonAnimeSeries.map((s) => getRootFolder(s.path)))].sort();
 
     // Collect unique networks (before filtering, so dropdown is always complete)
     const networks = [...new Set(nonAnimeSeries.map((s) => s.network || 'Unknown Network'))].sort(
@@ -94,6 +101,11 @@ export class SeriesIndexPage extends BaseComponent {
     // Apply network filter
     if (networkFilter !== 'all') {
       filtered = filtered.filter((s) => (s.network || 'Unknown Network') === networkFilter);
+    }
+
+    // Apply root folder filter
+    if (rootFolderFilter !== 'all') {
+      filtered = filtered.filter((s) => getRootFolder(s.path) === rootFolderFilter);
     }
 
     // Sort
@@ -146,6 +158,21 @@ export class SeriesIndexPage extends BaseComponent {
               <option value="all" ${networkFilter === 'all' ? 'selected' : ''}>All Networks</option>
               ${networks.map((n) => html`<option value="${escapeHtml(n)}" ${networkFilter === n ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('')}
             </select>
+
+            <!-- Root folder filter dropdown -->
+            ${
+              rootFolders.length > 1
+                ? html`
+            <select
+              class="filter-select"
+              onchange="this.closest('series-index-page').handleRootFolderFilterChange(event)"
+            >
+              <option value="all" ${rootFolderFilter === 'all' ? 'selected' : ''}>All Folders</option>
+              ${rootFolders.map((f) => html`<option value="${escapeHtml(f)}" ${rootFolderFilter === f ? 'selected' : ''}>${escapeHtml(f)}</option>`).join('')}
+            </select>
+            `
+                : ''
+            }
 
             <!-- Sort dropdown -->
             <select
@@ -1042,6 +1069,11 @@ export class SeriesIndexPage extends BaseComponent {
   handleNetworkFilterChange(event: Event): void {
     const select = event.target as HTMLSelectElement;
     setSeriesNetworkFilter(select.value);
+  }
+
+  handleRootFolderFilterChange(event: Event): void {
+    const select = event.target as HTMLSelectElement;
+    setSeriesRootFolderFilter(select.value);
   }
 
   handleSortChange(event: Event): void {
