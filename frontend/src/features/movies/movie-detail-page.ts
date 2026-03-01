@@ -2,8 +2,8 @@
  * Movie Detail page - shows movie info with file status
  */
 
-import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import type { ReleaseSearchModal } from '../../components/release-search-modal';
+import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http, type Movie } from '../../core/http';
 import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';

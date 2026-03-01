@@ -140,14 +140,13 @@ export class SeriesIndexPage extends BaseComponent {
             <!-- Filter dropdown -->
             <select
               class="filter-select"
-              value="${filter}"
               onchange="this.closest('series-index-page').handleFilterChange(event)"
             >
-              <option value="all">All</option>
-              <option value="monitored">Monitored</option>
-              <option value="unmonitored">Unmonitored</option>
-              <option value="continuing">Continuing</option>
-              <option value="ended">Ended</option>
+              <option value="all" ${filter === 'all' ? 'selected' : ''}>All</option>
+              <option value="monitored" ${filter === 'monitored' ? 'selected' : ''}>Monitored</option>
+              <option value="unmonitored" ${filter === 'unmonitored' ? 'selected' : ''}>Unmonitored</option>
+              <option value="continuing" ${filter === 'continuing' ? 'selected' : ''}>Continuing</option>
+              <option value="ended" ${filter === 'ended' ? 'selected' : ''}>Ended</option>
             </select>
 
             <!-- Network filter dropdown -->
@@ -177,18 +176,17 @@ export class SeriesIndexPage extends BaseComponent {
             <!-- Sort dropdown -->
             <select
               class="sort-select"
-              value="${sortKey}"
               onchange="this.closest('series-index-page').handleSortChange(event)"
             >
-              <option value="sortTitle">Title</option>
-              <option value="status">Status</option>
-              <option value="network">Network</option>
-              <option value="nextAiring">Next Airing</option>
-              <option value="previousAiring">Previous Airing</option>
-              <option value="added">Added</option>
-              <option value="year">Year</option>
-              <option value="episodeProgress">Episodes</option>
-              <option value="sizeOnDisk">Size</option>
+              <option value="sortTitle" ${sortKey === 'sortTitle' ? 'selected' : ''}>Title</option>
+              <option value="status" ${sortKey === 'status' ? 'selected' : ''}>Status</option>
+              <option value="network" ${sortKey === 'network' ? 'selected' : ''}>Network</option>
+              <option value="nextAiring" ${sortKey === 'nextAiring' ? 'selected' : ''}>Next Airing</option>
+              <option value="previousAiring" ${sortKey === 'previousAiring' ? 'selected' : ''}>Previous Airing</option>
+              <option value="added" ${sortKey === 'added' ? 'selected' : ''}>Added</option>
+              <option value="year" ${sortKey === 'year' ? 'selected' : ''}>Year</option>
+              <option value="episodeProgress" ${sortKey === 'episodeProgress' ? 'selected' : ''}>Episodes</option>
+              <option value="sizeOnDisk" ${sortKey === 'sizeOnDisk' ? 'selected' : ''}>Size</option>
             </select>
 
             <!-- Sort direction -->
@@ -1124,7 +1122,8 @@ export class SeriesIndexPage extends BaseComponent {
       const filter = seriesFilter.value;
       const networkFilter = seriesNetworkFilter.value;
       const rootFolderFilter = seriesRootFolderFilter.value;
-      const hasActiveFilter = filter !== 'all' || networkFilter !== 'all' || rootFolderFilter !== 'all';
+      const hasActiveFilter =
+        filter !== 'all' || networkFilter !== 'all' || rootFolderFilter !== 'all';
 
       if (hasActiveFilter) {
         const allSeries = this.seriesQuery.data.value ?? [];
@@ -1133,11 +1132,16 @@ export class SeriesIndexPage extends BaseComponent {
         if (filter !== 'all') {
           filtered = filtered.filter((s) => {
             switch (filter) {
-              case 'monitored': return s.monitored;
-              case 'unmonitored': return !s.monitored;
-              case 'continuing': return s.status === 'continuing';
-              case 'ended': return s.status === 'ended';
-              default: return true;
+              case 'monitored':
+                return s.monitored;
+              case 'unmonitored':
+                return !s.monitored;
+              case 'continuing':
+                return s.status === 'continuing';
+              case 'ended':
+                return s.status === 'ended';
+              default:
+                return true;
             }
           });
         }

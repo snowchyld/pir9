@@ -114,16 +114,15 @@ export class MoviesIndexPage extends BaseComponent {
           <div class="toolbar-right">
             <select
               class="filter-select"
-              value="${filter}"
               onchange="this.closest('movies-index-page').handleFilterChange(event)"
             >
-              <option value="all">All</option>
-              <option value="monitored">Monitored</option>
-              <option value="unmonitored">Unmonitored</option>
-              <option value="released">Released</option>
-              <option value="inCinemas">In Cinemas</option>
-              <option value="announced">Announced</option>
-              <option value="missing">Missing</option>
+              <option value="all" ${filter === 'all' ? 'selected' : ''}>All</option>
+              <option value="monitored" ${filter === 'monitored' ? 'selected' : ''}>Monitored</option>
+              <option value="unmonitored" ${filter === 'unmonitored' ? 'selected' : ''}>Unmonitored</option>
+              <option value="released" ${filter === 'released' ? 'selected' : ''}>Released</option>
+              <option value="inCinemas" ${filter === 'inCinemas' ? 'selected' : ''}>In Cinemas</option>
+              <option value="announced" ${filter === 'announced' ? 'selected' : ''}>Announced</option>
+              <option value="missing" ${filter === 'missing' ? 'selected' : ''}>Missing</option>
             </select>
 
             <!-- Root folder filter dropdown -->
@@ -143,16 +142,15 @@ export class MoviesIndexPage extends BaseComponent {
 
             <select
               class="sort-select"
-              value="${sortKey}"
               onchange="this.closest('movies-index-page').handleSortChange(event)"
             >
-              <option value="sortTitle">Title</option>
-              <option value="status">Status</option>
-              <option value="studio">Studio</option>
-              <option value="added">Added</option>
-              <option value="year">Year</option>
-              <option value="sizeOnDisk">Size</option>
-              <option value="ratings">Rating</option>
+              <option value="sortTitle" ${sortKey === 'sortTitle' ? 'selected' : ''}>Title</option>
+              <option value="status" ${sortKey === 'status' ? 'selected' : ''}>Status</option>
+              <option value="studio" ${sortKey === 'studio' ? 'selected' : ''}>Studio</option>
+              <option value="added" ${sortKey === 'added' ? 'selected' : ''}>Added</option>
+              <option value="year" ${sortKey === 'year' ? 'selected' : ''}>Year</option>
+              <option value="sizeOnDisk" ${sortKey === 'sizeOnDisk' ? 'selected' : ''}>Size</option>
+              <option value="ratings" ${sortKey === 'ratings' ? 'selected' : ''}>Rating</option>
             </select>
 
             <button
@@ -863,13 +861,20 @@ export class MoviesIndexPage extends BaseComponent {
         if (filter !== 'all') {
           filtered = filtered.filter((m) => {
             switch (filter) {
-              case 'monitored': return m.monitored;
-              case 'unmonitored': return !m.monitored;
-              case 'released': return m.status === 'released';
-              case 'inCinemas': return m.status === 'inCinemas';
-              case 'announced': return m.status === 'announced';
-              case 'missing': return m.monitored && !m.hasFile;
-              default: return true;
+              case 'monitored':
+                return m.monitored;
+              case 'unmonitored':
+                return !m.monitored;
+              case 'released':
+                return m.status === 'released';
+              case 'inCinemas':
+                return m.status === 'inCinemas';
+              case 'announced':
+                return m.status === 'announced';
+              case 'missing':
+                return m.monitored && !m.hasFile;
+              default:
+                return true;
             }
           });
         }
