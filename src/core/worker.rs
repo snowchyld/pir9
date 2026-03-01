@@ -71,6 +71,9 @@ pub struct WorkerRunner {
     worker_paths: Vec<PathBuf>,
     /// Redis URL for event bus
     redis_url: String,
+    /// Redis connection for job claiming (distributed lock)
+    #[cfg(feature = "redis-events")]
+    redis_conn: tokio::sync::Mutex<Option<redis::aio::ConnectionManager>>,
     /// Statistics: number of scans completed
     scans_completed: std::sync::atomic::AtomicU64,
     /// Statistics: total files found
@@ -95,6 +98,8 @@ impl WorkerRunner {
             worker_id: worker_id.to_string(),
             worker_paths: paths,
             redis_url: redis_url.to_string(),
+            #[cfg(feature = "redis-events")]
+            redis_conn: tokio::sync::Mutex::new(None),
             scans_completed: std::sync::atomic::AtomicU64::new(0),
             files_found: std::sync::atomic::AtomicU64::new(0),
             start_time: std::time::Instant::now(),
@@ -149,6 +154,16 @@ impl WorkerRunner {
             .context("Failed to connect to Redis")?;
 
         let event_bus = Arc::new(event_bus);
+
+        // Create a separate Redis connection for job claiming (SET NX)
+        {
+            let client = redis::Client::open(this.redis_url.as_str())
+                .context("Failed to create Redis client for job claiming")?;
+            let conn = redis::aio::ConnectionManager::new(client)
+                .await
+                .context("Failed to connect to Redis for job claiming")?;
+            *this.redis_conn.lock().await = Some(conn);
+        }
 
         // Start the Redis subscriber in background to receive messages from other instances
         let event_bus_clone = event_bus.clone();
@@ -278,6 +293,11 @@ impl WorkerRunner {
 
                 if relevant.is_empty() {
                     debug!("Scan request not for our paths, ignoring");
+                    return;
+                }
+
+                // Try to claim this job — only one worker should process each scan
+                if !self.try_claim_job(job_id).await {
                     return;
                 }
 
@@ -411,6 +431,11 @@ impl WorkerRunner {
                     return;
                 }
 
+                // Claim the import job so only one worker moves the files
+                if !self.try_claim_job(job_id).await {
+                    return;
+                }
+
                 let mut results = Vec::new();
                 let started = std::time::Instant::now();
 
@@ -510,6 +535,11 @@ impl WorkerRunner {
                     return;
                 }
 
+                // Claim the delete job so only one worker executes it
+                if !self.try_claim_job(job_id).await {
+                    return;
+                }
+
                 let mut results = Vec::new();
                 for (idx, path_str) in paths.iter().enumerate() {
                     let path = std::path::Path::new(path_str.as_str());
@@ -567,6 +597,52 @@ impl WorkerRunner {
             // Check if the path starts with or equals one of our worker paths
             path.starts_with(wp) || wp.starts_with(&path)
         })
+    }
+
+    /// Try to claim a job using Redis SET NX (distributed lock).
+    /// Returns true if this worker claimed the job, false if another worker already has it.
+    /// The lock auto-expires after 1 hour to prevent stale locks from dead workers.
+    #[cfg(feature = "redis-events")]
+    async fn try_claim_job(&self, job_id: &str) -> bool {
+        let mut guard = self.redis_conn.lock().await;
+        let conn = match guard.as_mut() {
+            Some(c) => c,
+            None => {
+                warn!("No Redis connection for job claiming, proceeding without lock");
+                return true;
+            }
+        };
+
+        let key = format!("pir9:job:{}", job_id);
+        let result: redis::RedisResult<bool> = redis::cmd("SET")
+            .arg(&key)
+            .arg(&self.worker_id)
+            .arg("NX") // Only set if not exists
+            .arg("EX")
+            .arg(3600) // Auto-expire after 1 hour
+            .query_async(conn)
+            .await;
+
+        match result {
+            Ok(true) => {
+                info!(
+                    "Claimed job {} (worker={})",
+                    job_id, self.worker_id
+                );
+                true
+            }
+            Ok(false) => {
+                info!(
+                    "Job {} already claimed by another worker, skipping",
+                    job_id
+                );
+                false
+            }
+            Err(e) => {
+                warn!("Failed to claim job {} via Redis: {}, proceeding anyway", job_id, e);
+                true // Fail open — better to double-scan than miss a scan
+            }
+        }
     }
 
     /// Execute a scan request and return results
@@ -1085,6 +1161,8 @@ mod tests {
             worker_id: "test".to_string(),
             worker_paths: vec![PathBuf::from("/media/tv"), PathBuf::from("/media/anime")],
             redis_url: "redis://localhost".to_string(),
+            #[cfg(feature = "redis-events")]
+            redis_conn: tokio::sync::Mutex::new(None),
             scans_completed: std::sync::atomic::AtomicU64::new(0),
             files_found: std::sync::atomic::AtomicU64::new(0),
             start_time: std::time::Instant::now(),
