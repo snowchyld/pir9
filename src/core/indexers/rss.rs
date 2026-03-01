@@ -4,8 +4,10 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 
 use super::clients::create_client_from_model;
+use super::search::{apply_minimum_seeders_filter, get_minimum_seeders};
 use super::ReleaseInfo;
 use crate::core::datastore::models::IndexerDbModel;
+
 
 /// RSS sync service
 pub struct RssSyncService {
@@ -65,6 +67,10 @@ impl RssSyncService {
             release.indexer_id = indexer.id;
             release.indexer = indexer.name.clone();
         }
+
+        // Apply minimum seeders filter
+        let min_seeders = get_minimum_seeders(indexer);
+        let releases = apply_minimum_seeders_filter(releases, min_seeders);
 
         Ok(releases)
     }

@@ -88,6 +88,10 @@ impl IndexerSearchService {
             release.indexer = indexer.name.clone();
         }
 
+        // Apply minimum seeders filter
+        let min_seeders = get_minimum_seeders(indexer);
+        let releases = apply_minimum_seeders_filter(releases, min_seeders);
+
         Ok(releases)
     }
 
@@ -167,6 +171,10 @@ impl IndexerSearchService {
             release.indexer_id = indexer.id;
             release.indexer = indexer.name.clone();
         }
+
+        // Apply minimum seeders filter
+        let min_seeders = get_minimum_seeders(indexer);
+        let releases = apply_minimum_seeders_filter(releases, min_seeders);
 
         Ok(releases)
     }
@@ -268,6 +276,9 @@ impl IndexerSearchService {
                                 release.indexer_id = indexer.id;
                                 release.indexer = indexer.name.clone();
                             }
+                            let min_seeders = get_minimum_seeders(indexer);
+                            let releases =
+                                apply_minimum_seeders_filter(releases, min_seeders);
                             all_releases.extend(releases);
                         }
                         Err(e) => {
@@ -286,6 +297,51 @@ impl IndexerSearchService {
 
         Ok(all_releases)
     }
+}
+
+/// Parse minimumSeeders from an indexer's settings JSON.
+/// Handles both numeric and string-encoded values.
+pub(crate) fn get_minimum_seeders(indexer: &IndexerDbModel) -> i32 {
+    let settings: serde_json::Value =
+        serde_json::from_str(&indexer.settings).unwrap_or(serde_json::json!({}));
+    settings
+        .get("minimumSeeders")
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+        })
+        .unwrap_or(1) as i32
+}
+
+/// Filter releases below minimum seeders threshold.
+/// Only applies to torrent releases that report a seeders count.
+pub(crate) fn apply_minimum_seeders_filter(releases: Vec<ReleaseInfo>, min_seeders: i32) -> Vec<ReleaseInfo> {
+    if min_seeders <= 1 {
+        return releases;
+    }
+
+    let before = releases.len();
+    let filtered: Vec<ReleaseInfo> = releases
+        .into_iter()
+        .filter(|r| {
+            // Only filter torrent releases that report seeders
+            match r.seeders {
+                Some(s) => s >= min_seeders,
+                None => true, // Keep releases without seeder info
+            }
+        })
+        .collect();
+
+    let removed = before - filtered.len();
+    if removed > 0 {
+        tracing::debug!(
+            "Filtered {} releases below minimum seeders threshold ({})",
+            removed,
+            min_seeders
+        );
+    }
+
+    filtered
 }
 
 /// Sanitize title for search queries

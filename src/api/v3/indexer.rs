@@ -177,7 +177,7 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
     let mut fields = Vec::new();
 
     match implementation {
-        "Newznab" | "Torznab" => {
+        "Newznab" => {
             fields.push(make_field(
                 0,
                 "baseUrl",
@@ -228,6 +228,76 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
                 Some("Comma-separated list of anime category IDs"),
             ));
         }
+        "Torznab" => {
+            fields.push(make_field(
+                0,
+                "baseUrl",
+                "URL",
+                "textbox",
+                settings.get("baseUrl").or(settings.get("url")).cloned(),
+                Some("The URL of the indexer"),
+            ));
+            fields.push(make_field(
+                1,
+                "apiPath",
+                "API Path",
+                "textbox",
+                settings
+                    .get("apiPath")
+                    .cloned()
+                    .or(Some(serde_json::json!("/api"))),
+                Some("Path to the API, usually /api"),
+            ));
+            fields.push(make_field(
+                2,
+                "apiKey",
+                "API Key",
+                "textbox",
+                settings.get("apiKey").cloned(),
+                Some("API key from your indexer"),
+            ));
+            fields.push(make_field(
+                3,
+                "categories",
+                "Categories",
+                "textbox",
+                settings
+                    .get("categories")
+                    .cloned()
+                    .or(Some(serde_json::json!("5000,5010,5020,5030,5040,5045"))),
+                Some("Comma-separated list of category IDs"),
+            ));
+            fields.push(make_field(
+                4,
+                "animeCategories",
+                "Anime Categories",
+                "textbox",
+                settings
+                    .get("animeCategories")
+                    .cloned()
+                    .or(Some(serde_json::json!("5070"))),
+                Some("Comma-separated list of anime category IDs"),
+            ));
+            fields.push(make_field(
+                5,
+                "minimumSeeders",
+                "Minimum Seeders",
+                "number",
+                settings
+                    .get("minimumSeeders")
+                    .cloned()
+                    .or(Some(serde_json::json!(1))),
+                Some("Minimum number of seeders required"),
+            ));
+            fields.push(make_field(
+                6,
+                "seedCriteria",
+                "Seed Ratio",
+                "textbox",
+                settings.get("seedCriteria").cloned(),
+                Some("Seed ratio requirements"),
+            ));
+        }
         "Prowlarr" => {
             fields.push(make_field(
                 0,
@@ -266,6 +336,17 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
                     .cloned()
                     .or(Some(serde_json::json!("5070"))),
                 Some("Comma-separated list of anime category IDs"),
+            ));
+            fields.push(make_field(
+                4,
+                "minimumSeeders",
+                "Minimum Seeders",
+                "number",
+                settings
+                    .get("minimumSeeders")
+                    .cloned()
+                    .or(Some(serde_json::json!(1))),
+                Some("Minimum number of seeders required"),
             ));
         }
         _ => {
@@ -705,9 +786,9 @@ fn create_torznab_schema() -> IndexerResource {
                 5,
                 "minimumSeeders",
                 "Minimum Seeders",
-                "textbox",
+                "number",
                 Some(serde_json::json!(1)),
-                Some("Minimum number of seeders"),
+                Some("Minimum number of seeders required"),
             ),
             make_field(
                 6,
@@ -774,6 +855,14 @@ fn create_prowlarr_schema() -> IndexerResource {
                 "textbox",
                 Some(serde_json::json!("5070")),
                 Some("Comma-separated anime category IDs"),
+            ),
+            make_field(
+                4,
+                "minimumSeeders",
+                "Minimum Seeders",
+                "number",
+                Some(serde_json::json!(1)),
+                Some("Minimum number of seeders required"),
             ),
         ],
         implementation_name: "Prowlarr".to_string(),
