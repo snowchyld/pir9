@@ -65,6 +65,7 @@ class WebSocketManager {
   private maxReconnectAttempts = 10;
   private reconnectDelay = 1000; // Start with 1 second
   private handlers = new Map<string, Set<MessageHandler>>();
+  private seriesInvalidateTimer: number | null = null;
 
   readonly connectionState: Signal<ConnectionState> = signal('disconnected');
   readonly lastMessage: Signal<WebSocketMessage | null> = signal(null);
@@ -314,6 +315,16 @@ class WebSocketManager {
     // Invalidate queue and history
     invalidateQueries(['/queue']);
     invalidateQueries(['/history']);
+
+    // Debounce series invalidation so episode counts update on the index page
+    // without hammering the API during bulk scans (e.g., 164 files)
+    if (this.seriesInvalidateTimer) {
+      clearTimeout(this.seriesInvalidateTimer);
+    }
+    this.seriesInvalidateTimer = window.setTimeout(() => {
+      invalidateQueries(['/series']);
+      this.seriesInvalidateTimer = null;
+    }, 2000);
   }
 
   private handleMovieMessage(message: WebSocketMessage): void {
