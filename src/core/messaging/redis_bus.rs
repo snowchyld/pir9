@@ -14,7 +14,7 @@ use redis::AsyncCommands;
 #[cfg(feature = "redis-events")]
 use tokio::sync::broadcast;
 #[cfg(feature = "redis-events")]
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 #[cfg(feature = "redis-events")]
 use crate::core::messaging::Message;
@@ -103,7 +103,7 @@ impl RedisEventBus {
         if let Err(e) = conn.publish::<_, _, ()>(REDIS_CHANNEL, &json).await {
             warn!("Failed to publish to Redis: {}", e);
         } else {
-            debug!("Published message to Redis channel {}", REDIS_CHANNEL);
+            trace!("Published message to Redis channel {}", REDIS_CHANNEL);
         }
     }
 
@@ -154,12 +154,12 @@ impl RedisEventBus {
 
             // Skip messages from this instance (prevent echo)
             if envelope.instance_id == self.instance_id {
-                debug!("Skipping message from self");
+//                debug!("Skipping message from self");
                 continue;
             }
 
             // Forward to local subscribers
-            debug!(
+            trace!(
                 "Received message from instance {}, forwarding locally",
                 envelope.instance_id
             );

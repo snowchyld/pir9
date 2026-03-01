@@ -11,7 +11,7 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::core::messaging::{KnownFileInfo, Message, ScannedFile, ScanType};
 use crate::core::scanner;
@@ -189,8 +189,10 @@ impl WorkerRunner {
         // Subscribe to events
         let mut receiver = event_bus.subscribe();
 
-        // Create heartbeat interval
+        // Create heartbeat interval — Skip missed ticks so heartbeats don't burst
+        // after a long blocking operation (e.g., 100s file copy)
         let mut heartbeat_interval = tokio::time::interval(HEARTBEAT_INTERVAL);
+        heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         // Handle shutdown signal
         let shutdown = async {
@@ -222,7 +224,7 @@ impl WorkerRunner {
                 _ = heartbeat_interval.tick() => {
                     // Send heartbeat
                     let (scans, files, uptime) = this.get_stats();
-                    debug!("Sending heartbeat: scans={}, files={}, uptime={}s", scans, files, uptime);
+                    trace!("Sending heartbeat: scans={}, files={}, uptime={}s", scans, files, uptime);
                     event_bus.publish(Message::WorkerHeartbeat {
                         worker_id: this.worker_id.clone(),
                         paths: this.paths_as_strings(),
@@ -411,7 +413,7 @@ impl WorkerRunner {
             }
             // Log other worker events at trace level
             Message::WorkerHeartbeat { worker_id, .. } => {
-                debug!("Other worker heartbeat: {}", worker_id);
+                trace!("Other worker heartbeat: {}", worker_id);
             }
             Message::WorkerOnline { worker_id, paths } => {
                 info!("Worker came online: {} with paths {:?}", worker_id, paths);
@@ -585,7 +587,7 @@ impl WorkerRunner {
             }
             // Log other message types at trace level
             other => {
-                debug!("Ignoring message: {}", message_type_name(other));
+                trace!("Ignoring message: {}", message_type_name(other));
             }
         }
     }
