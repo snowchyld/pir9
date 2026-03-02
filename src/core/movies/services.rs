@@ -84,15 +84,15 @@ impl MovieService {
         info!("Refreshing movie: {}", movie.title);
 
         if let Some(ref imdb_id) = movie.imdb_id {
-            // Step 1: Fetch images via TMDB → Radarr cascade
-            if let Some((tmdb_id, images)) =
+            // Step 1: Fetch images + enrichment via cascade
+            if let Some(enrichment) =
                 crate::api::v5::movies::fetch_movie_images_and_tmdb_id(imdb_id).await
             {
-                if tmdb_id > 0 && movie.tmdb_id == 0 {
-                    movie.tmdb_id = tmdb_id;
+                if enrichment.tmdb_id > 0 && movie.tmdb_id == 0 {
+                    movie.tmdb_id = enrichment.tmdb_id;
                 }
-                if !images.is_empty() {
-                    movie.images = images
+                if !enrichment.images.is_empty() {
+                    movie.images = enrichment.images
                         .into_iter()
                         .filter_map(|img| {
                             let cover_type = match img.cover_type.as_str() {

@@ -189,11 +189,6 @@ async fn create_movie(
     let full_path = options.get_full_path();
     let root_folder_path = options.get_root_folder_path();
 
-    let release_date = options
-        .release_date
-        .as_ref()
-        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-
     let status = match options.status.as_deref() {
         Some("announced") => 1,
         Some("inCinemas") => 2,
@@ -204,25 +199,41 @@ async fn create_movie(
     let genres_json = serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string());
     let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
 
-    // Use images from request; if empty, fetch via TMDB → Radarr cascade
-    let (resolved_tmdb_id, images) = if options.images.is_empty() {
-        if let Some(ref imdb_id) = options.imdb_id {
-            let result = fetch_movie_images_and_tmdb_id(imdb_id).await;
-            result.unwrap_or((0, vec![]))
-        } else {
-            (0, vec![])
-        }
+    // Fetch enrichment from cascade (Radarr metadata + images)
+    let enrichment = if let Some(ref imdb_id) = options.imdb_id {
+        fetch_movie_images_and_tmdb_id(imdb_id).await
     } else {
-        (0, options.images.clone())
+        None
+    };
+
+    // Use images from request; if empty, use enrichment images
+    let images = if options.images.is_empty() {
+        enrichment.as_ref().map(|e| e.images.clone()).unwrap_or_default()
+    } else {
+        options.images.clone()
     };
     let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
 
-    // Use TMDB ID from request if provided, otherwise use resolved from image lookup
+    // Use TMDB ID from request if provided, otherwise use resolved from enrichment
     let tmdb_id = if options.tmdb_id > 0 {
         options.tmdb_id
     } else {
-        resolved_tmdb_id
+        enrichment.as_ref().map(|e| e.tmdb_id).unwrap_or(0)
     };
+
+    // Merge enrichment metadata — request fields take priority, enrichment fills gaps
+    let overview = options.overview.clone().or_else(|| enrichment.as_ref().and_then(|e| e.overview.clone()));
+    let studio = options.studio.clone().or_else(|| enrichment.as_ref().and_then(|e| e.studio.clone()));
+    let certification = options.certification.clone().or_else(|| enrichment.as_ref().and_then(|e| e.certification.clone()));
+    let physical_release_date = enrichment.as_ref().and_then(|e| e.physical_release.as_deref()).and_then(parse_date_prefix);
+    let digital_release_date = enrichment.as_ref().and_then(|e| e.digital_release.as_deref()).and_then(parse_date_prefix);
+
+    // For release_date, use request value if provided, otherwise enrichment's inCinemas
+    let release_date = options
+        .release_date
+        .as_deref()
+        .and_then(parse_date_prefix)
+        .or_else(|| enrichment.as_ref().and_then(|e| e.in_cinemas.as_deref()).and_then(parse_date_prefix));
 
     let db_movie = MovieDbModel {
         id: 0,
@@ -232,7 +243,7 @@ async fn create_movie(
         clean_title: clean,
         sort_title: sort,
         status,
-        overview: options.overview.clone(),
+        overview,
         monitored: options.monitored,
         quality_profile_id: options.quality_profile_id,
         title_slug: slug,
@@ -240,11 +251,11 @@ async fn create_movie(
         root_folder_path,
         year: options.year.unwrap_or(0),
         release_date,
-        physical_release_date: None,
-        digital_release_date: None,
+        physical_release_date,
+        digital_release_date,
         runtime: options.runtime.unwrap_or(0),
-        studio: options.studio.clone(),
-        certification: options.certification.clone(),
+        studio,
+        certification,
         genres: genres_json,
         tags: tags_json,
         images: images_json,
@@ -423,13 +434,32 @@ async fn rematch_movie(
         }
     }
 
-    // Fetch images via TMDB → Radarr cascade
-    if let Some((tmdb_id, images)) = fetch_movie_images_and_tmdb_id(&req.imdb_id).await {
-        if tmdb_id > 0 {
-            movie.tmdb_id = tmdb_id;
+    // Fetch images + enrichment via IMDB → Radarr → Fanart cascade
+    if let Some(enrichment) = fetch_movie_images_and_tmdb_id(&req.imdb_id).await {
+        if enrichment.tmdb_id > 0 {
+            movie.tmdb_id = enrichment.tmdb_id;
         }
-        if !images.is_empty() {
-            movie.images = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+        if !enrichment.images.is_empty() {
+            movie.images = serde_json::to_string(&enrichment.images).unwrap_or_else(|_| "[]".to_string());
+        }
+        // Fill metadata gaps from Radarr enrichment
+        if movie.overview.is_none() {
+            movie.overview = enrichment.overview;
+        }
+        if movie.studio.is_none() {
+            movie.studio = enrichment.studio;
+        }
+        if movie.certification.is_none() {
+            movie.certification = enrichment.certification;
+        }
+        if movie.release_date.is_none() {
+            movie.release_date = enrichment.in_cinemas.as_deref().and_then(parse_date_prefix);
+        }
+        if movie.physical_release_date.is_none() {
+            movie.physical_release_date = enrichment.physical_release.as_deref().and_then(parse_date_prefix);
+        }
+        if movie.digital_release_date.is_none() {
+            movie.digital_release_date = enrichment.digital_release.as_deref().and_then(parse_date_prefix);
         }
     }
 
@@ -469,8 +499,8 @@ async fn lookup_movie(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to search movies: {}", e)))?;
 
-    // Fire image lookups in parallel: TMDB (if configured) → Radarr fallback
-    let image_futures: Vec<_> = results
+    // Fire enrichment lookups in parallel: IMDB → Radarr → Fanart cascade
+    let enrichment_futures: Vec<_> = results
         .iter()
         .map(|m| {
             let imdb_id = m.imdb_id.clone();
@@ -478,22 +508,25 @@ async fn lookup_movie(
         })
         .collect();
 
-    let image_results = futures::future::join_all(image_futures).await;
+    let enrichment_results = futures::future::join_all(enrichment_futures).await;
 
     let lookup_results: Vec<MovieLookupResult> = results
         .into_iter()
-        .zip(image_results)
-        .map(|(m, img_result)| {
-            let (tmdb_id, images) = img_result.unwrap_or((0, vec![]));
+        .zip(enrichment_results)
+        .map(|(m, enrichment)| {
+            let (tmdb_id, images, overview, studio, certification) = match enrichment {
+                Some(e) => (e.tmdb_id, e.images, e.overview, e.studio, e.certification),
+                None => (0, vec![], None, None, None),
+            };
 
             MovieLookupResult {
                 tmdb_id,
                 imdb_id: Some(m.imdb_id),
                 title: m.title.clone(),
                 sort_title: m.title.to_lowercase(),
-                overview: None,
+                overview,
                 year: m.year.unwrap_or(0),
-                studio: None,
+                studio,
                 images,
                 ratings: Ratings {
                     votes: m.votes.unwrap_or(0),
@@ -501,7 +534,7 @@ async fn lookup_movie(
                 },
                 genres: m.genres,
                 runtime: m.runtime_minutes.unwrap_or(0),
-                certification: None,
+                certification,
             }
         })
         .collect();
@@ -529,6 +562,12 @@ struct RadarrMovie {
     Runtime: Option<i32>,
     Status: Option<String>,
     Images: Vec<RadarrImage>,
+    // Enrichment fields
+    Studio: Option<String>,
+    Certification: Option<String>,
+    InCinemas: Option<String>,
+    PhysicalRelease: Option<String>,
+    DigitalRelease: Option<String>,
 }
 
 /// Full metadata returned from the Radarr metadata proxy
@@ -540,11 +579,29 @@ pub struct RadarrMovieMetadata {
     pub runtime: Option<i32>,
     pub status: Option<String>,
     pub images: Vec<MovieImage>,
+    pub studio: Option<String>,
+    pub certification: Option<String>,
+    pub in_cinemas: Option<String>,
+    pub physical_release: Option<String>,
+    pub digital_release: Option<String>,
+}
+
+/// Enrichment data extracted from the image/metadata cascade.
+/// Replaces the old `(i64, Vec<MovieImage>)` tuple with structured metadata.
+pub struct MovieEnrichment {
+    pub tmdb_id: i64,
+    pub images: Vec<MovieImage>,
+    pub overview: Option<String>,
+    pub studio: Option<String>,
+    pub certification: Option<String>,
+    pub in_cinemas: Option<String>,
+    pub physical_release: Option<String>,
+    pub digital_release: Option<String>,
 }
 
 /// Fetch movie metadata from Radarr's public metadata proxy (no API key required).
-/// Returns (tmdb_id, images) or None on any error (graceful degradation).
-pub async fn fetch_radarr_metadata(imdb_id: &str) -> Option<(i64, Vec<MovieImage>)> {
+/// Returns a `MovieEnrichment` with tmdb_id, images, and metadata fields, or None on error.
+pub async fn fetch_radarr_metadata(imdb_id: &str) -> Option<MovieEnrichment> {
     let url = format!("https://api.radarr.video/v1/movie/imdb/{}", imdb_id);
     let client = reqwest::Client::new();
 
@@ -598,7 +655,16 @@ pub async fn fetch_radarr_metadata(imdb_id: &str) -> Option<(i64, Vec<MovieImage
         })
         .collect();
 
-    Some((tmdb_id, images))
+    Some(MovieEnrichment {
+        tmdb_id,
+        images,
+        overview: radarr.Overview,
+        studio: radarr.Studio,
+        certification: radarr.Certification,
+        in_cinemas: radarr.InCinemas,
+        physical_release: radarr.PhysicalRelease,
+        digital_release: radarr.DigitalRelease,
+    })
 }
 
 /// Fetch full movie metadata from Radarr's public metadata proxy
@@ -645,6 +711,11 @@ pub async fn fetch_radarr_full_metadata(imdb_id: &str) -> Option<RadarrMovieMeta
         runtime: radarr.Runtime,
         status: radarr.Status,
         images,
+        studio: radarr.Studio,
+        certification: radarr.Certification,
+        in_cinemas: radarr.InCinemas,
+        physical_release: radarr.PhysicalRelease,
+        digital_release: radarr.DigitalRelease,
     })
 }
 
@@ -652,8 +723,119 @@ pub async fn fetch_radarr_full_metadata(imdb_id: &str) -> Option<RadarrMovieMeta
 pub async fn fetch_radarr_images(imdb_id: &str) -> Vec<MovieImage> {
     fetch_radarr_metadata(imdb_id)
         .await
-        .map(|(_, images)| images)
+        .map(|e| e.images)
         .unwrap_or_default()
+}
+
+// ---- Fanart.tv client (supplementary image source) ----
+
+/// Fanart.tv API key from `FANART_API` environment variable.
+static FANART_API_KEY: once_cell::sync::Lazy<Option<String>> =
+    once_cell::sync::Lazy::new(|| std::env::var("FANART_API").ok().filter(|s| !s.is_empty()));
+
+/// Shared HTTP client for Fanart.tv requests.
+static FANART_HTTP_CLIENT: once_cell::sync::Lazy<reqwest::Client> =
+    once_cell::sync::Lazy::new(|| {
+        reqwest::Client::builder()
+            .user_agent(format!("pir9/{}", env!("CARGO_PKG_VERSION")))
+            .build()
+            .expect("failed to build Fanart.tv HTTP client")
+    });
+
+/// Fanart.tv API response — each field is an optional array of image objects.
+#[derive(serde::Deserialize, Default)]
+struct FanartMovieResponse {
+    #[serde(default)]
+    movieposter: Vec<FanartImage>,
+    #[serde(default)]
+    moviebackground: Vec<FanartImage>,
+    #[serde(default)]
+    hdmovielogo: Vec<FanartImage>,
+    #[serde(default)]
+    hdmovieclearart: Vec<FanartImage>,
+    #[serde(default)]
+    moviebanner: Vec<FanartImage>,
+    #[serde(default)]
+    moviethumb: Vec<FanartImage>,
+    #[serde(default)]
+    moviedisc: Vec<FanartImage>,
+}
+
+#[derive(serde::Deserialize)]
+struct FanartImage {
+    url: String,
+    #[serde(default)]
+    likes: String,
+}
+
+/// Fetch movie images from Fanart.tv. Accepts IMDB IDs or TMDB numeric IDs.
+/// Returns a Vec of MovieImage for each available image type, picking the highest-liked
+/// image per category. Returns None if API key absent or request fails.
+async fn fetch_fanart_images(id: &str) -> Option<Vec<MovieImage>> {
+    let api_key = FANART_API_KEY.as_deref()?;
+    let url = format!(
+        "https://webservice.fanart.tv/v3.2/movies/{}?api_key={}",
+        id, api_key
+    );
+
+    let resp = FANART_HTTP_CLIENT.get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        tracing::debug!("Fanart.tv returned {} for {}", resp.status(), id);
+        return None;
+    }
+
+    let fanart: FanartMovieResponse = resp.json().await.ok()?;
+
+    // Pick the highest-liked image from each category
+    fn best_url(images: Vec<FanartImage>) -> Option<String> {
+        images
+            .into_iter()
+            .max_by_key(|img| img.likes.parse::<u32>().unwrap_or(0))
+            .map(|img| img.url)
+    }
+
+    let mappings = [
+        ("poster", fanart.movieposter),
+        ("fanart", fanart.moviebackground),
+        ("logo", fanart.hdmovielogo),
+        ("clearart", fanart.hdmovieclearart),
+        ("banner", fanart.moviebanner),
+        ("thumb", fanart.moviethumb),
+        ("disc", fanart.moviedisc),
+    ];
+
+    let mut images = Vec::new();
+    for (cover_type, items) in mappings {
+        if let Some(url) = best_url(items) {
+            images.push(MovieImage {
+                cover_type: cover_type.to_string(),
+                url: url.clone(),
+                remote_url: Some(url),
+            });
+        }
+    }
+
+    if images.is_empty() {
+        tracing::debug!("Fanart.tv returned no images for {}", id);
+        None
+    } else {
+        tracing::debug!(
+            "Fanart.tv provided {} image types for {}",
+            images.len(),
+            id
+        );
+        Some(images)
+    }
+}
+
+/// Fetch a single image URL from Fanart.tv for a given cover type.
+/// Used by the MediaCover handler to resolve non-poster/fanart types on demand.
+pub async fn fetch_fanart_image_url(imdb_id: &str, cover_type: &str) -> Option<String> {
+    let images = fetch_fanart_images(imdb_id).await?;
+    images
+        .into_iter()
+        .find(|img| img.cover_type == cover_type)
+        .and_then(|img| img.remote_url)
 }
 
 // ---- IMDB service client (for TMDB-enriched lookups) ----
@@ -690,60 +872,6 @@ fn tmdb_get(url: &str) -> Option<reqwest::RequestBuilder> {
         // v3 API Key → query parameter
         Some(TMDB_HTTP_CLIENT.get(url).query(&[("api_key", key)]))
     }
-}
-
-#[derive(serde::Deserialize)]
-struct TmdbFindResponse {
-    movie_results: Vec<TmdbMovieResult>,
-}
-
-#[derive(serde::Deserialize)]
-struct TmdbMovieResult {
-    id: i64,
-    poster_path: Option<String>,
-    backdrop_path: Option<String>,
-}
-
-/// Fetch movie images and TMDB ID directly from TMDB's `/find/{imdb_id}` endpoint.
-/// Requires `PIR9_TMDB_API_KEY` environment variable. Returns None if key absent or API fails.
-async fn fetch_tmdb_movie_data(imdb_id: &str) -> Option<(i64, Vec<MovieImage>)> {
-    let url = format!(
-        "https://api.themoviedb.org/3/find/{}?external_source=imdb_id",
-        imdb_id
-    );
-
-    let resp = tmdb_get(&url)?
-        .send()
-        .await
-        .ok()?;
-
-    if !resp.status().is_success() {
-        tracing::debug!("TMDB API returned {} for {}", resp.status(), imdb_id);
-        return None;
-    }
-
-    let find: TmdbFindResponse = resp.json().await.ok()?;
-    let movie = find.movie_results.into_iter().next()?;
-
-    let mut images = Vec::new();
-    if let Some(ref poster) = movie.poster_path {
-        let url = format!("https://image.tmdb.org/t/p/w500{}", poster);
-        images.push(MovieImage {
-            cover_type: "poster".to_string(),
-            url: url.clone(),
-            remote_url: Some(url),
-        });
-    }
-    if let Some(ref backdrop) = movie.backdrop_path {
-        let url = format!("https://image.tmdb.org/t/p/w1280{}", backdrop);
-        images.push(MovieImage {
-            cover_type: "fanart".to_string(),
-            url: url.clone(),
-            remote_url: Some(url),
-        });
-    }
-
-    Some((movie.id, images))
 }
 
 /// TMDB direct movie detail response (from `/3/movie/{id}`)
@@ -786,16 +914,26 @@ pub async fn fetch_tmdb_movie_by_id(tmdb_id: i64) -> Option<TmdbMovieDetail> {
     resp.json().await.ok()
 }
 
-/// Fetch movie images and TMDB ID using a cascading strategy:
+/// Fetch movie images and metadata using a cascading strategy:
 /// 1. pir9-imdb service (has cached TMDB data) — fastest, no external API call
-/// 2. TMDB direct API (if PIR9_TMDB_API_KEY configured) — fallback
-/// 3. Radarr metadata proxy — last resort
-pub async fn fetch_movie_images_and_tmdb_id(imdb_id: &str) -> Option<(i64, Vec<MovieImage>)> {
-    // Try pir9-imdb service first (returns cached TMDB data)
+/// 2. Radarr metadata proxy — fallback for tmdb_id + poster/fanart + enrichment metadata
+/// 3. Fanart.tv — supplementary enrichment for extra image types (logo, clearart, etc.)
+pub async fn fetch_movie_images_and_tmdb_id(imdb_id: &str) -> Option<MovieEnrichment> {
+    let mut tmdb_id = 0i64;
+    let mut images: Vec<MovieImage> = Vec::new();
+    // Enrichment metadata — populated from Radarr (tier 2) which has the richest metadata
+    let mut overview: Option<String> = None;
+    let mut studio: Option<String> = None;
+    let mut certification: Option<String> = None;
+    let mut in_cinemas: Option<String> = None;
+    let mut physical_release: Option<String> = None;
+    let mut digital_release: Option<String> = None;
+
+    // Tier 1: pir9-imdb service (cached TMDB data)
     if IMDB_CLIENT.is_enabled() {
         if let Ok(Some(movie)) = IMDB_CLIENT.get_movie(imdb_id).await {
-            if let Some(tmdb_id) = movie.tmdb_id {
-                let mut images = Vec::new();
+            if let Some(tid) = movie.tmdb_id {
+                tmdb_id = tid;
                 if let Some(ref poster) = movie.poster_url {
                     images.push(MovieImage {
                         cover_type: "poster".to_string(),
@@ -815,23 +953,86 @@ pub async fn fetch_movie_images_and_tmdb_id(imdb_id: &str) -> Option<(i64, Vec<M
                     imdb_id,
                     tmdb_id
                 );
-                return Some((tmdb_id, images));
             }
         }
     }
 
-    // Fall back to direct TMDB API
-    if let Some(result) = fetch_tmdb_movie_data(imdb_id).await {
+    // Tier 2: Radarr metadata proxy — always call for enrichment metadata even if
+    // tier 1 provided tmdb_id, since Radarr has overview/studio/certification/dates
+    // that pir9-imdb doesn't cache.
+    if let Some(radarr) = fetch_radarr_metadata(imdb_id).await {
+        if tmdb_id == 0 {
+            tmdb_id = radarr.tmdb_id;
+            images = radarr.images;
+        }
+        // Always extract enrichment fields from Radarr (richest metadata source)
+        overview = radarr.overview;
+        studio = radarr.studio;
+        certification = radarr.certification;
+        in_cinemas = radarr.in_cinemas;
+        physical_release = radarr.physical_release;
+        digital_release = radarr.digital_release;
         tracing::debug!(
-            "TMDB direct lookup succeeded for {}: tmdb_id={}",
+            "Radarr proxy provided metadata for {}: tmdb_id={}, has_overview={}",
             imdb_id,
-            result.0
+            radarr.tmdb_id,
+            overview.is_some()
         );
-        return Some(result);
     }
 
-    // Last resort: Radarr metadata proxy
-    fetch_radarr_metadata(imdb_id).await
+    // Must have a tmdb_id from at least one tier to be useful
+    if tmdb_id == 0 {
+        return None;
+    }
+
+    // Tier 3: Fanart.tv supplementary enrichment (adds logo, clearart, banner, etc.)
+    // Try IMDB ID first, then TMDB ID — Fanart.tv accepts both
+    let fanart_result = fetch_fanart_images(imdb_id).await.or_else(|| {
+        // Fanart.tv didn't have it by IMDB ID — we can't async in or_else,
+        // so we'll handle this below
+        None
+    });
+
+    // If IMDB ID lookup failed, try TMDB ID (needs separate await)
+    let fanart_images = match fanart_result {
+        Some(imgs) => Some(imgs),
+        None => fetch_fanart_images(&tmdb_id.to_string()).await,
+    };
+
+    if let Some(extra_images) = fanart_images {
+        let existing_types: std::collections::HashSet<String> =
+            images.iter().map(|i| i.cover_type.clone()).collect();
+        for img in extra_images {
+            if !existing_types.contains(&img.cover_type) {
+                images.push(img);
+            }
+        }
+    }
+
+    Some(MovieEnrichment {
+        tmdb_id,
+        images,
+        overview,
+        studio,
+        certification,
+        in_cinemas,
+        physical_release,
+        digital_release,
+    })
+}
+
+/// Parse a date from a string, tolerating ISO 8601 datetime format (e.g. "2024-03-15T00:00:00Z")
+/// by extracting just the first 10 characters (YYYY-MM-DD prefix).
+pub fn parse_date_prefix(s: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        .ok()
+        .or_else(|| {
+            if s.len() >= 10 {
+                NaiveDate::parse_from_str(&s[..10], "%Y-%m-%d").ok()
+            } else {
+                None
+            }
+        })
 }
 
 pub fn clean_title(title: &str) -> String {
@@ -1441,20 +1642,32 @@ async fn import_movies(
         let tags_json = serde_json::to_string(&import_req.tags.unwrap_or_default())
             .unwrap_or_else(|_| "[]".to_string());
 
-        // Use images from request; if empty, fetch via TMDB → Radarr cascade
-        let (import_tmdb_id, images) = match import_req.images {
-            Some(ref imgs) if !imgs.is_empty() => (0i64, imgs.clone()),
+        // Fetch enrichment from cascade (Radarr metadata + images)
+        let enrichment = match import_req.images {
+            Some(ref imgs) if !imgs.is_empty() => None, // Have images already, skip cascade
             _ => {
                 if let Some(ref id) = resolved_imdb_id {
-                    fetch_movie_images_and_tmdb_id(id)
-                        .await
-                        .unwrap_or((0, vec![]))
+                    fetch_movie_images_and_tmdb_id(id).await
                 } else {
-                    (0, vec![])
+                    None
                 }
             }
         };
+
+        let images = match import_req.images {
+            Some(ref imgs) if !imgs.is_empty() => imgs.clone(),
+            _ => enrichment.as_ref().map(|e| e.images.clone()).unwrap_or_default(),
+        };
+        let import_tmdb_id = enrichment.as_ref().map(|e| e.tmdb_id).unwrap_or(0);
         let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+
+        // Merge enrichment metadata — request/IMDB fields take priority
+        let import_overview = resolved_overview.or_else(|| enrichment.as_ref().and_then(|e| e.overview.clone()));
+        let import_studio = import_req.studio.or_else(|| enrichment.as_ref().and_then(|e| e.studio.clone()));
+        let import_certification = enrichment.as_ref().and_then(|e| e.certification.clone());
+        let import_release_date = enrichment.as_ref().and_then(|e| e.in_cinemas.as_deref()).and_then(parse_date_prefix);
+        let import_physical_release = enrichment.as_ref().and_then(|e| e.physical_release.as_deref()).and_then(parse_date_prefix);
+        let import_digital_release = enrichment.as_ref().and_then(|e| e.digital_release.as_deref()).and_then(parse_date_prefix);
 
         let db_movie = MovieDbModel {
             id: 0,
@@ -1464,19 +1677,19 @@ async fn import_movies(
             clean_title: clean,
             sort_title: sort,
             status: 0, // computed dynamically from dates/year/has_file
-            overview: resolved_overview,
+            overview: import_overview,
             monitored: import_req.monitored.unwrap_or(true),
             quality_profile_id: import_req.quality_profile_id.unwrap_or(1),
             title_slug: slug,
             path: full_path.clone(),
             root_folder_path,
             year,
-            release_date: None,
-            physical_release_date: None,
-            digital_release_date: None,
+            release_date: import_release_date,
+            physical_release_date: import_physical_release,
+            digital_release_date: import_digital_release,
             runtime: resolved_runtime.unwrap_or(0),
-            studio: import_req.studio,
-            certification: None,
+            studio: import_studio,
+            certification: import_certification,
             genres: genres_json,
             tags: tags_json,
             images: images_json,

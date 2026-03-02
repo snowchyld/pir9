@@ -1059,19 +1059,38 @@ async fn execute_refresh_movies(
             }
         }
 
-        // Step 2: If we have an imdb_id, fetch images via TMDB → Radarr cascade
+        // Step 2: If we have an imdb_id, fetch images + enrichment via cascade
         if let Some(ref imdb_id) = movie.imdb_id {
-            if let Some((tmdb_id, images)) =
+            if let Some(enrichment) =
                 super::movies::fetch_movie_images_and_tmdb_id(imdb_id).await
             {
-                if tmdb_id > 0 && movie.tmdb_id == 0 {
-                    movie.tmdb_id = tmdb_id;
+                if enrichment.tmdb_id > 0 && movie.tmdb_id == 0 {
+                    movie.tmdb_id = enrichment.tmdb_id;
                 }
-                if !images.is_empty() {
+                if !enrichment.images.is_empty() {
                     let images_json =
-                        serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+                        serde_json::to_string(&enrichment.images).unwrap_or_else(|_| "[]".to_string());
                     movie.images = images_json;
                     images_found += 1;
+                }
+                // Fill metadata gaps from Radarr enrichment
+                if movie.overview.is_none() {
+                    movie.overview = enrichment.overview;
+                }
+                if movie.studio.is_none() {
+                    movie.studio = enrichment.studio;
+                }
+                if movie.certification.is_none() {
+                    movie.certification = enrichment.certification;
+                }
+                if movie.release_date.is_none() {
+                    movie.release_date = enrichment.in_cinemas.as_deref().and_then(super::movies::parse_date_prefix);
+                }
+                if movie.physical_release_date.is_none() {
+                    movie.physical_release_date = enrichment.physical_release.as_deref().and_then(super::movies::parse_date_prefix);
+                }
+                if movie.digital_release_date.is_none() {
+                    movie.digital_release_date = enrichment.digital_release.as_deref().and_then(super::movies::parse_date_prefix);
                 }
             }
         }

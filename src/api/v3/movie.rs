@@ -199,20 +199,22 @@ async fn lookup_by_imdb_id(
         None
     };
 
-    // 2. Fetch TMDB images + tmdb_id
-    let (tmdb_id, images) = movies::fetch_movie_images_and_tmdb_id(imdb_id)
-        .await
-        .unwrap_or((0, vec![]));
+    // 2. Fetch enrichment (images + metadata) from cascade
+    let enrichment = movies::fetch_movie_images_and_tmdb_id(imdb_id).await;
 
     let result = if let Some(m) = imdb_movie {
+        let (tmdb_id, images, overview, studio, certification) = match &enrichment {
+            Some(e) => (e.tmdb_id, e.images.clone(), e.overview.clone(), e.studio.clone(), e.certification.clone()),
+            None => (0, vec![], None, None, None),
+        };
         MovieLookupResult {
             tmdb_id,
             imdb_id: Some(m.imdb_id),
             title: m.title.clone(),
             sort_title: m.title.to_lowercase(),
-            overview: None,
+            overview,
             year: m.year.unwrap_or(0),
-            studio: None,
+            studio,
             images,
             ratings: Ratings {
                 votes: m.votes.unwrap_or(0),
@@ -220,7 +222,7 @@ async fn lookup_by_imdb_id(
             },
             genres: m.genres,
             runtime: m.runtime_minutes.unwrap_or(0),
-            certification: None,
+            certification,
         }
     } else {
         // No IMDB data — try Radarr metadata as fallback
@@ -232,7 +234,7 @@ async fn lookup_by_imdb_id(
                 sort_title: meta.title.unwrap_or_default().to_lowercase(),
                 overview: meta.overview,
                 year: meta.year.unwrap_or(0),
-                studio: None,
+                studio: meta.studio,
                 images: meta.images,
                 ratings: Ratings {
                     votes: 0,
@@ -240,7 +242,7 @@ async fn lookup_by_imdb_id(
                 },
                 genres: vec![],
                 runtime: meta.runtime.unwrap_or(0),
-                certification: None,
+                certification: meta.certification,
             },
             None => return Ok(Json(vec![])),
         }
@@ -260,8 +262,8 @@ async fn lookup_by_text(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to search movies: {}", e)))?;
 
-    // Parallel image lookups
-    let image_futures: Vec<_> = results
+    // Parallel enrichment lookups
+    let enrichment_futures: Vec<_> = results
         .iter()
         .map(|m| {
             let imdb_id = m.imdb_id.clone();
@@ -269,21 +271,24 @@ async fn lookup_by_text(
         })
         .collect();
 
-    let image_results = futures::future::join_all(image_futures).await;
+    let enrichment_results = futures::future::join_all(enrichment_futures).await;
 
     let lookup_results: Vec<MovieLookupResult> = results
         .into_iter()
-        .zip(image_results)
-        .map(|(m, img_result)| {
-            let (tmdb_id, images) = img_result.unwrap_or((0, vec![]));
+        .zip(enrichment_results)
+        .map(|(m, enrichment)| {
+            let (tmdb_id, images, overview, studio, certification) = match enrichment {
+                Some(e) => (e.tmdb_id, e.images, e.overview, e.studio, e.certification),
+                None => (0, vec![], None, None, None),
+            };
             MovieLookupResult {
                 tmdb_id,
                 imdb_id: Some(m.imdb_id),
                 title: m.title.clone(),
                 sort_title: m.title.to_lowercase(),
-                overview: None,
+                overview,
                 year: m.year.unwrap_or(0),
-                studio: None,
+                studio,
                 images,
                 ratings: Ratings {
                     votes: m.votes.unwrap_or(0),
@@ -291,7 +296,7 @@ async fn lookup_by_text(
                 },
                 genres: m.genres,
                 runtime: m.runtime_minutes.unwrap_or(0),
-                certification: None,
+                certification,
             }
         })
         .collect();
@@ -413,25 +418,33 @@ async fn add_movie(
     let genres_json = serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string());
     let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
 
-    // Resolve images: use request images, or fetch via TMDB/Radarr cascade
-    let (resolved_tmdb_id, images) = if options.images.is_empty() {
-        if let Some(ref imdb_id) = options.imdb_id {
-            movies::fetch_movie_images_and_tmdb_id(imdb_id)
-                .await
-                .unwrap_or((0, vec![]))
-        } else {
-            (0, vec![])
-        }
+    // Fetch enrichment from cascade (Radarr metadata + images)
+    let enrichment = if let Some(ref imdb_id) = options.imdb_id {
+        movies::fetch_movie_images_and_tmdb_id(imdb_id).await
     } else {
-        (0, options.images.clone())
+        None
+    };
+
+    let images = if options.images.is_empty() {
+        enrichment.as_ref().map(|e| e.images.clone()).unwrap_or_default()
+    } else {
+        options.images.clone()
     };
     let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
 
     let tmdb_id = if options.tmdb_id > 0 {
         options.tmdb_id
     } else {
-        resolved_tmdb_id
+        enrichment.as_ref().map(|e| e.tmdb_id).unwrap_or(0)
     };
+
+    // Merge enrichment metadata — request fields take priority
+    let overview = options.overview.clone().or_else(|| enrichment.as_ref().and_then(|e| e.overview.clone()));
+    let studio = options.studio.clone().or_else(|| enrichment.as_ref().and_then(|e| e.studio.clone()));
+    let certification = options.certification.clone().or_else(|| enrichment.as_ref().and_then(|e| e.certification.clone()));
+    let physical_release_date = enrichment.as_ref().and_then(|e| e.physical_release.as_deref()).and_then(|s| movies::parse_date_prefix(s));
+    let digital_release_date = enrichment.as_ref().and_then(|e| e.digital_release.as_deref()).and_then(|s| movies::parse_date_prefix(s));
+    let release_date = release_date.or_else(|| enrichment.as_ref().and_then(|e| e.in_cinemas.as_deref()).and_then(|s| movies::parse_date_prefix(s)));
 
     use crate::core::datastore::models::MovieDbModel;
 
@@ -443,7 +456,7 @@ async fn add_movie(
         clean_title: clean,
         sort_title: sort,
         status,
-        overview: options.overview.clone(),
+        overview,
         monitored: options.monitored,
         quality_profile_id: options.quality_profile_id,
         title_slug: slug,
@@ -451,11 +464,11 @@ async fn add_movie(
         root_folder_path,
         year: options.year.unwrap_or(0),
         release_date,
-        physical_release_date: None,
-        digital_release_date: None,
+        physical_release_date,
+        digital_release_date,
         runtime: options.runtime.unwrap_or(0),
-        studio: options.studio.clone(),
-        certification: options.certification.clone(),
+        studio,
+        certification,
         genres: genres_json,
         tags: tags_json,
         images: images_json,
