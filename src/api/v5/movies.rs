@@ -1004,15 +1004,61 @@ pub struct Ratings {
     pub value: f64,
 }
 
+/// Compute movie status from objective facts (dates, year, has_file) rather than
+/// blindly trusting the stored value from external metadata sources.
+///
+/// Priority:
+/// 1. has_file → Released (you have the file on disk)
+/// 2. physical/digital release date in the past → Released
+/// 3. theatrical release date in the past → InCinemas
+/// 4. year < current year → Released
+/// 5. year >= current year with no dates → Announced
+/// 6. no year → TBA
+pub fn compute_movie_status(m: &MovieDbModel) -> &'static str {
+    use chrono::Datelike;
+
+    // If the movie has a file on disk, it's definitely released
+    if m.has_file {
+        return "released";
+    }
+
+    let today = Utc::now().date_naive();
+
+    // Check physical/digital release dates — if in the past, it's released
+    if let Some(date) = m.physical_release_date {
+        if date <= today {
+            return "released";
+        }
+    }
+    if let Some(date) = m.digital_release_date {
+        if date <= today {
+            return "released";
+        }
+    }
+
+    // Check theatrical release date — if in the past, it's in cinemas
+    if let Some(date) = m.release_date {
+        if date <= today {
+            return "inCinemas";
+        }
+    }
+
+    // Fall back to year-based estimation
+    if m.year > 0 {
+        let current_year = today.year();
+        if m.year < current_year {
+            return "released";
+        }
+        // Current year or future — we know it exists but can't confirm release
+        return "announced";
+    }
+
+    "tba"
+}
+
 impl From<MovieDbModel> for MovieResponse {
     fn from(m: MovieDbModel) -> Self {
-        let status = match m.status {
-            0 => "tba",
-            1 => "announced",
-            2 => "inCinemas",
-            3 => "released",
-            _ => "deleted",
-        };
+        let status = compute_movie_status(&m);
 
         let genres: Vec<String> = serde_json::from_str(&m.genres).unwrap_or_default();
         let tags: Vec<i64> = serde_json::from_str(&m.tags).unwrap_or_default();
@@ -1380,7 +1426,7 @@ async fn import_movies(
             title: title.clone(),
             clean_title: clean,
             sort_title: sort,
-            status: 3, // released (imported from disk)
+            status: 0, // computed dynamically from dates/year/has_file
             overview: resolved_overview,
             monitored: import_req.monitored.unwrap_or(true),
             quality_profile_id: import_req.quality_profile_id.unwrap_or(1),

@@ -380,7 +380,13 @@ pub async fn execute_command_with_options(
             .await
         }
         "RescanMovie" => {
-            execute_rescan_movie(body, db, options.hybrid_event_bus.as_ref()).await
+            execute_rescan_movie(
+                body,
+                db,
+                options.hybrid_event_bus.as_ref(),
+                options.scan_result_consumer.as_ref(),
+            )
+            .await
         }
         "RefreshMonitoredDownloads" => {
             let service = crate::core::queue::TrackedDownloadService::new(db.clone());
@@ -908,7 +914,7 @@ async fn execute_refresh_movies(
     cancel_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<String, String> {
     use crate::core::datastore::repositories::MovieRepository;
-    use chrono::{Datelike, Utc};
+    use chrono::Utc;
 
     let repo = MovieRepository::new(db.clone());
 
@@ -1070,16 +1076,18 @@ async fn execute_refresh_movies(
             }
         }
 
-        // Step 3: Derive movie status from year when no release date is set
-        if movie.status == 0 && movie.year > 0 {
-            let current_year = Utc::now().year();
-            if movie.year < current_year {
-                movie.status = 3; // Released
-            } else if movie.year == current_year {
-                movie.status = 2; // InCinemas
-            } else {
-                movie.status = 1; // Announced
-            }
+        // Step 3: Recompute movie status from dates/year
+        // The API response computes status dynamically, but we also update the DB
+        // so other consumers (e.g. filters, sorts) see the correct value.
+        {
+            let computed = super::movies::compute_movie_status(&movie);
+            movie.status = match computed {
+                "tba" => 0,
+                "announced" => 1,
+                "inCinemas" => 2,
+                "released" => 3,
+                _ => 0,
+            };
         }
 
         movie.last_info_sync = Some(Utc::now());
@@ -2466,6 +2474,7 @@ async fn execute_rescan_movie(
     body: &serde_json::Value,
     db: &crate::core::datastore::Database,
     hybrid_event_bus: Option<&crate::core::messaging::HybridEventBus>,
+    scan_result_consumer: Option<&std::sync::Arc<crate::core::scanner::ScanResultConsumer>>,
 ) -> Result<String, String> {
     let movie_id = body
         .get("movieId")
@@ -2512,6 +2521,18 @@ async fn execute_rescan_movie(
                 movie.title,
                 job_id
             );
+
+            // Register the job with the consumer so it routes to movie handler
+            if let Some(consumer) = scan_result_consumer {
+                consumer
+                    .register_job(
+                        &job_id,
+                        crate::core::messaging::ScanType::RescanMovie,
+                        vec![movie_id],
+                    )
+                    .await;
+            }
+
             hybrid_bus.publish(message).await;
             return Ok(format!(
                 "Dispatched movie scan for '{}' to worker (job_id: {})",
