@@ -409,12 +409,18 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
 
     let mut all_downloads = Vec::new();
 
-    // Collect ALL tracked download IDs before filtering, so that untracked
-    // duplicates are always suppressed even when a tracked download is hidden
-    // by the episode_has_file filter. Without this, a manually re-matched
-    // download can be hidden from the tracked section, then re-appear from
-    // the untracked section with a stale title-parsed series match.
-    let mut tracked_ids: HashSet<String> = HashSet::new();
+    // Collect ALL tracked download IDs (regardless of status) so that
+    // completed/imported downloads still suppress their untracked duplicates.
+    // Without this, a status=4 (Imported) record drops out of the active set
+    // and the torrent re-appears from the client as an untracked "ready to import".
+    let td_repo = TrackedDownloadRepository::new(state.db.clone());
+    let tracked_ids: HashSet<String> = match td_repo.get_all_download_ids().await {
+        Ok(ids) => ids.into_iter().collect(),
+        Err(e) => {
+            tracing::warn!("Failed to load tracked download IDs: {}", e);
+            HashSet::new()
+        }
+    };
 
     // Get tracked downloads with live status merged.
     // `get_queue()` returns a QueueResult containing both items and the raw
@@ -427,11 +433,6 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
             client_downloads,
         }) => {
             cached_client_downloads = client_downloads;
-            for item in &queue_items {
-                if let Some(ref did) = item.download_id {
-                    tracked_ids.insert(did.clone());
-                }
-            }
             for item in queue_items {
                 // Skip downloads where the episode already has a file and
                 // the download is waiting to be imported — already in the library
@@ -1374,17 +1375,13 @@ async fn import_queue_item(
                             movie_file.path,
                         );
 
-                        // Update tracked download state to Imported
+                        // Delete tracked download — the import is complete and the
+                        // record no longer needs to linger. Leaving it as status=4
+                        // caused the torrent to re-appear as "untracked" because
+                        // get_all_active() (status < 4) excluded it from suppression.
                         if id < 10000 {
                             let td_repo = TrackedDownloadRepository::new(db);
-                            let _ = td_repo
-                                .update_status(
-                                    id,
-                                    crate::core::queue::TrackedDownloadState::Imported as i32,
-                                    "[]",
-                                    None,
-                                )
-                                .await;
+                            let _ = td_repo.delete(id).await;
                         }
                     }
                     Err(e) => {
@@ -1613,17 +1610,11 @@ async fn import_queue_item(
                     result.episode_ids.len()
                 );
 
-                // Update tracked download state to Imported (if tracked)
+                // Delete tracked download — import is complete, no need to
+                // keep the record (status=4 records caused ghost duplicates).
                 if id < 10000 {
                     let td_repo = TrackedDownloadRepository::new(db);
-                    let _ = td_repo
-                        .update_status(
-                            id,
-                            crate::core::queue::TrackedDownloadState::Imported as i32,
-                            "[]",
-                            None,
-                        )
-                        .await;
+                    let _ = td_repo.delete(id).await;
                 }
             }
             Ok(result) => {

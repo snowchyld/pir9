@@ -650,20 +650,13 @@ impl TrackedDownloadService {
         let episode_file_repo = EpisodeFileRepository::new(self.db.clone());
         let movie_file_repo = MovieFileRepository::new(self.db.clone());
 
-        let active = repo.get_all_active().await?;
+        // Query only ImportPending (2) and Imported (4) records directly.
+        // Previously this used get_all_active() (status < 4) which could
+        // never return Imported records — making the Imported cleanup dead code.
+        let candidates = repo.get_import_candidates().await?;
         let mut cleaned = 0usize;
 
-        for td in &active {
-            // Only clean up downloads that reached import stages — never
-            // touch actively downloading items (user may have manually
-            // assigned them to a different movie/show).
-            let state = TrackedDownloadState::from_i32(td.status);
-            if !matches!(
-                state,
-                TrackedDownloadState::ImportPending | TrackedDownloadState::Imported
-            ) {
-                continue;
-            }
+        for td in &candidates {
 
             // Need an output_path to locate the source file
             let output_path = match td.output_path.as_deref() {

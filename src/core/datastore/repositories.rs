@@ -2235,6 +2235,30 @@ impl TrackedDownloadRepository {
         Ok(())
     }
 
+    /// Get download_ids of ALL tracked downloads (regardless of status).
+    /// Used to suppress duplicates in the untracked downloads section.
+    pub async fn get_all_download_ids(&self) -> Result<Vec<String>> {
+        let pool = self.db.pool();
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT download_id FROM tracked_downloads")
+                .fetch_all(pool)
+                .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// Get tracked downloads eligible for import cleanup (ImportPending or Imported).
+    pub async fn get_import_candidates(
+        &self,
+    ) -> Result<Vec<super::models::TrackedDownloadDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::TrackedDownloadDbModel>(
+            "SELECT * FROM tracked_downloads WHERE status IN (2, 4) ORDER BY added DESC",
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Delete a tracked download
     pub async fn delete(&self, id: i64) -> Result<()> {
         let pool = self.db.pool();
