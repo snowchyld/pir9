@@ -215,6 +215,18 @@ export class SeriesIndexPage extends BaseComponent {
               <span>Refresh All</span>
             </button>
 
+            <!-- Rescan All button -->
+            <button
+              class="rescan-all-btn"
+              onclick="this.closest('series-index-page').handleRescanAll()"
+              title="Rescan disk files for all series"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+              </svg>
+              <span>Rescan All</span>
+            </button>
+
             <!-- View mode buttons -->
             <div class="view-modes">
               ${this.renderViewModeButton('posters', 'Posters')}
@@ -374,8 +386,36 @@ export class SeriesIndexPage extends BaseComponent {
           transform: none;
         }
 
-        .refresh-all-btn.loading svg {
+        .refresh-all-btn.loading svg,
+        .rescan-all-btn.loading svg {
           animation: spin 1s linear infinite;
+        }
+
+        .rescan-all-btn {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.5rem 0.875rem;
+          background: var(--bg-input);
+          color: var(--text-primary);
+          border: 1px solid var(--border-input);
+          border-radius: 0.5rem;
+          font-size: 0.875rem;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all var(--transition-normal) var(--ease-out-expo);
+        }
+
+        .rescan-all-btn:hover {
+          background: var(--bg-card-hover);
+          border-color: var(--color-primary);
+          transform: translateY(-1px);
+        }
+
+        .rescan-all-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+          transform: none;
         }
 
         .view-modes {
@@ -1167,6 +1207,65 @@ export class SeriesIndexPage extends BaseComponent {
     } catch (error) {
       console.error('[SeriesIndex] Failed to refresh all series:', error);
       showError('Failed to start refresh command', 'Refresh Failed');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.classList.remove('loading');
+      }
+    }
+  }
+
+  async handleRescanAll(): Promise<void> {
+    const btn = this.querySelector('.rescan-all-btn') as HTMLButtonElement;
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add('loading');
+    }
+
+    try {
+      const filter = seriesFilter.value;
+      const networkFilter = seriesNetworkFilter.value;
+      const rootFolderFilter = seriesRootFolderFilter.value;
+      const hasActiveFilter =
+        filter !== 'all' || networkFilter !== 'all' || rootFolderFilter !== 'all';
+
+      if (hasActiveFilter) {
+        const allSeries = this.seriesQuery.data.value ?? [];
+        let filtered = allSeries.filter((s) => s.seriesType !== 'anime');
+
+        if (filter !== 'all') {
+          filtered = filtered.filter((s) => {
+            switch (filter) {
+              case 'monitored':
+                return s.monitored;
+              case 'unmonitored':
+                return !s.monitored;
+              case 'continuing':
+                return s.status === 'continuing';
+              case 'ended':
+                return s.status === 'ended';
+              default:
+                return true;
+            }
+          });
+        }
+        if (networkFilter !== 'all') {
+          filtered = filtered.filter((s) => (s.network || 'Unknown Network') === networkFilter);
+        }
+        if (rootFolderFilter !== 'all') {
+          filtered = filtered.filter((s) => getRootFolder(s.path) === rootFolderFilter);
+        }
+
+        const seriesIds = filtered.map((s) => s.id);
+        await http.post('/command', { name: 'RescanSeries', seriesIds });
+        showInfo(`Rescanning ${seriesIds.length} series...`, 'Rescan Started');
+      } else {
+        await http.post('/command', { name: 'RescanSeries' });
+        showInfo('Rescanning all series files...', 'Rescan Started');
+      }
+    } catch (error) {
+      console.error('[SeriesIndex] Failed to rescan all series:', error);
+      showError('Failed to start rescan command', 'Rescan Failed');
     } finally {
       if (btn) {
         btn.disabled = false;

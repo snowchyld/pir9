@@ -2476,49 +2476,94 @@ async fn execute_rescan_movie(
     hybrid_event_bus: Option<&crate::core::messaging::HybridEventBus>,
     scan_result_consumer: Option<&std::sync::Arc<crate::core::scanner::ScanResultConsumer>>,
 ) -> Result<String, String> {
-    let movie_id = body
-        .get("movieId")
-        .and_then(|v| v.as_i64())
-        .ok_or_else(|| "Missing movieId".to_string())?;
+    // Parse movie IDs — supports both singular movieId and plural movieIds
+    let mut movie_ids: Vec<i64> = body
+        .get("movieIds")
+        .or_else(|| body.get("body").and_then(|b| b.get("movieIds")))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+        .unwrap_or_default();
+
+    if movie_ids.is_empty() {
+        if let Some(id) = body
+            .get("movieId")
+            .or_else(|| body.get("body").and_then(|b| b.get("movieId")))
+            .and_then(|v| v.as_i64())
+        {
+            movie_ids.push(id);
+        }
+    }
+
+    // If no IDs provided, rescan ALL movies
+    if movie_ids.is_empty() {
+        tracing::info!("RescanMovie: no movie IDs provided, rescanning all movies");
+        let repo = crate::core::datastore::repositories::MovieRepository::new(db.clone());
+        let all_movies = repo
+            .get_all()
+            .await
+            .map_err(|e| format!("Failed to fetch movie list: {}", e))?;
+        movie_ids = all_movies.into_iter().map(|m| m.id).collect();
+
+        if movie_ids.is_empty() {
+            return Ok("No movies to rescan".to_string());
+        }
+        tracing::info!("RescanMovie: found {} movies to rescan", movie_ids.len());
+    }
 
     let repo = crate::core::datastore::repositories::MovieRepository::new(db.clone());
     let file_repo = crate::core::datastore::repositories::MovieFileRepository::new(db.clone());
 
-    let movie = repo
-        .get_by_id(movie_id)
-        .await
-        .map_err(|e| format!("Failed to fetch movie: {}", e))?
-        .ok_or_else(|| format!("Movie {} not found", movie_id))?;
-
-    tracing::info!("RescanMovie: scanning '{}' at {}", movie.title, movie.path);
-
-    // Prefer worker scanning when Redis is available
+    // Prefer worker scanning when Redis is available — dispatch all movies in one batch
     if let Some(hybrid_bus) = hybrid_event_bus {
         if hybrid_bus.is_redis_enabled() {
-            // Build known_files map from existing movie file for skip-enrichment
+            let mut all_ids = Vec::new();
+            let mut all_paths = Vec::new();
             let mut known_files = std::collections::HashMap::new();
-            if let Ok(Some(mf)) = file_repo.get_by_movie_id(movie_id).await {
-                if mf.file_hash.is_some() {
-                    known_files.insert(
-                        mf.path.clone(),
-                        crate::core::messaging::KnownFileInfo {
-                            size: mf.size,
-                            media_info: mf.media_info.clone(),
-                            quality: Some(mf.quality.clone()),
-                            file_hash: mf.file_hash.clone(),
-                        },
-                    );
+
+            for movie_id in &movie_ids {
+                let movie = match repo.get_by_id(*movie_id).await {
+                    Ok(Some(m)) => m,
+                    Ok(None) => {
+                        tracing::warn!("RescanMovie: movie {} not found, skipping", movie_id);
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::warn!("RescanMovie: failed to fetch movie {}: {}", movie_id, e);
+                        continue;
+                    }
+                };
+
+                // Build known_files for skip-enrichment
+                if let Ok(Some(mf)) = file_repo.get_by_movie_id(*movie_id).await {
+                    if mf.file_hash.is_some() {
+                        known_files.insert(
+                            mf.path.clone(),
+                            crate::core::messaging::KnownFileInfo {
+                                size: mf.size,
+                                media_info: mf.media_info.clone(),
+                                quality: Some(mf.quality.clone()),
+                                file_hash: mf.file_hash.clone(),
+                            },
+                        );
+                    }
                 }
+
+                all_ids.push(*movie_id);
+                all_paths.push(movie.path.clone());
+            }
+
+            if all_ids.is_empty() {
+                return Ok("No valid movies to rescan".to_string());
             }
 
             let (job_id, message) = crate::core::scanner::create_movie_scan_request(
-                vec![movie_id],
-                vec![movie.path.clone()],
+                all_ids.clone(),
+                all_paths,
                 known_files,
             );
             tracing::info!(
-                "RescanMovie: dispatching '{}' to worker (job_id={})",
-                movie.title,
+                "RescanMovie: dispatching {} movies to worker (job_id={})",
+                all_ids.len(),
                 job_id
             );
 
@@ -2528,20 +2573,30 @@ async fn execute_rescan_movie(
                     .register_job(
                         &job_id,
                         crate::core::messaging::ScanType::RescanMovie,
-                        vec![movie_id],
+                        all_ids.clone(),
                     )
                     .await;
             }
 
             hybrid_bus.publish(message).await;
             return Ok(format!(
-                "Dispatched movie scan for '{}' to worker (job_id: {})",
-                movie.title, job_id
+                "Dispatched {} movies to worker for scanning (job_id: {})",
+                all_ids.len(),
+                job_id
             ));
         }
     }
 
-    // No Redis/workers — scan locally (fallback)
+    // No Redis/workers — scan locally (fallback), one movie at a time
+    let movie_id = movie_ids[0]; // Local fallback handles one at a time
+    let movie = repo
+        .get_by_id(movie_id)
+        .await
+        .map_err(|e| format!("Failed to fetch movie: {}", e))?
+        .ok_or_else(|| format!("Movie {} not found", movie_id))?;
+
+    tracing::info!("RescanMovie: scanning '{}' locally at {}", movie.title, movie.path);
+
     let mut folder_path = movie.path.clone();
 
     // If the expected path doesn't exist, try to find a matching folder

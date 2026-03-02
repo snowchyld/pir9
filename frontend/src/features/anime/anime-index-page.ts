@@ -211,6 +211,18 @@ export class AnimeIndexPage extends BaseComponent {
               <span>Refresh All</span>
             </button>
 
+            <!-- Rescan All button -->
+            <button
+              class="rescan-all-btn"
+              onclick="this.closest('anime-index-page').handleRescanAll()"
+              title="Rescan disk files for all anime"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+              </svg>
+              <span>Rescan All</span>
+            </button>
+
             <!-- View mode buttons -->
             <div class="view-modes">
               ${this.renderViewModeButton('posters', 'Posters')}
@@ -364,8 +376,36 @@ export class AnimeIndexPage extends BaseComponent {
           transform: none;
         }
 
-        .refresh-all-btn.loading svg {
+        .refresh-all-btn.loading svg,
+        .rescan-all-btn.loading svg {
           animation: spin 1s linear infinite;
+        }
+
+        .rescan-all-btn {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.5rem 0.875rem;
+          background: var(--bg-input);
+          color: var(--text-primary);
+          border: 1px solid var(--border-input);
+          border-radius: 0.5rem;
+          font-size: 0.875rem;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all var(--transition-normal) var(--ease-out-expo);
+        }
+
+        .rescan-all-btn:hover {
+          background: var(--bg-card-hover);
+          border-color: var(--color-primary);
+          transform: translateY(-1px);
+        }
+
+        .rescan-all-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+          transform: none;
         }
 
         .view-modes {
@@ -1052,6 +1092,69 @@ export class AnimeIndexPage extends BaseComponent {
     } catch (error) {
       console.error('[AnimeIndex] Failed to refresh anime:', error);
       showError('Failed to start refresh command', 'Refresh Failed');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.classList.remove('loading');
+      }
+    }
+  }
+
+  async handleRescanAll(): Promise<void> {
+    const btn = this.querySelector('.rescan-all-btn') as HTMLButtonElement;
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add('loading');
+    }
+
+    try {
+      const allSeries = this.seriesQuery.data.value ?? [];
+      let animeSeries = allSeries.filter((s) => s.seriesType === 'anime');
+
+      const filter = animeFilter.value;
+      const networkFilter = animeNetworkFilter.value;
+      const rootFolderFilter = animeRootFolderFilter.value;
+      const hasActiveFilter =
+        filter !== 'all' || networkFilter !== 'all' || rootFolderFilter !== 'all';
+
+      if (hasActiveFilter) {
+        if (filter !== 'all') {
+          animeSeries = animeSeries.filter((s) => {
+            switch (filter) {
+              case 'monitored':
+                return s.monitored;
+              case 'unmonitored':
+                return !s.monitored;
+              case 'continuing':
+                return s.status === 'continuing';
+              case 'ended':
+                return s.status === 'ended';
+              default:
+                return true;
+            }
+          });
+        }
+        if (networkFilter !== 'all') {
+          animeSeries = animeSeries.filter(
+            (s) => (s.network || 'Unknown Network') === networkFilter,
+          );
+        }
+        if (rootFolderFilter !== 'all') {
+          animeSeries = animeSeries.filter((s) => getRootFolder(s.path) === rootFolderFilter);
+        }
+      }
+
+      const seriesIds = animeSeries.map((s) => s.id);
+      await http.post('/command', { name: 'RescanSeries', seriesIds });
+
+      if (hasActiveFilter) {
+        showInfo(`Rescanning ${seriesIds.length} anime...`, 'Rescan Started');
+      } else {
+        showInfo(`Rescanning all ${seriesIds.length} anime...`, 'Rescan Started');
+      }
+    } catch (error) {
+      console.error('[AnimeIndex] Failed to rescan anime:', error);
+      showError('Failed to start rescan command', 'Rescan Failed');
     } finally {
       if (btn) {
         btn.disabled = false;

@@ -190,6 +190,18 @@ export class MoviesIndexPage extends BaseComponent {
                 </button>`
             }
 
+            <!-- Rescan All button -->
+            <button
+              class="rescan-all-btn"
+              onclick="this.closest('movies-index-page').handleRescanAll()"
+              title="Rescan disk files for all movies"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+              </svg>
+              <span>Rescan All</span>
+            </button>
+
             <div class="view-modes">
               ${this.renderViewModeButton('posters', 'Posters')}
               ${this.renderViewModeButton('table', 'Table')}
@@ -337,8 +349,36 @@ export class MoviesIndexPage extends BaseComponent {
           transform: none;
         }
 
-        .refresh-all-btn.loading svg {
+        .refresh-all-btn.loading svg,
+        .rescan-all-btn.loading svg {
           animation: spin 1s linear infinite;
+        }
+
+        .rescan-all-btn {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.5rem 0.875rem;
+          background: var(--bg-input);
+          color: var(--text-primary);
+          border: 1px solid var(--border-input);
+          border-radius: 0.5rem;
+          font-size: 0.875rem;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all var(--transition-normal) var(--ease-out-expo);
+        }
+
+        .rescan-all-btn:hover {
+          background: var(--bg-card-hover);
+          border-color: var(--color-primary);
+          transform: translateY(-1px);
+        }
+
+        .rescan-all-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+          transform: none;
         }
 
         .refresh-all-btn.stop {
@@ -914,6 +954,66 @@ export class MoviesIndexPage extends BaseComponent {
       this.requestUpdate();
       // Refetch to show whatever was updated so far
       this.moviesQuery.refetch();
+    }
+  }
+
+  async handleRescanAll(): Promise<void> {
+    const btn = this.querySelector('.rescan-all-btn') as HTMLButtonElement;
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add('loading');
+    }
+
+    try {
+      const filter = movieFilter.value;
+      const rootFolderFilter = movieRootFolderFilter.value;
+      const hasActiveFilter = filter !== 'all' || rootFolderFilter !== 'all';
+
+      if (hasActiveFilter) {
+        const allMovies = this.moviesQuery.data.value ?? [];
+        let filtered = allMovies;
+
+        if (filter !== 'all') {
+          filtered = filtered.filter((m) => {
+            switch (filter) {
+              case 'monitored':
+                return m.monitored;
+              case 'unmonitored':
+                return !m.monitored;
+              case 'released':
+                return m.status === 'released';
+              case 'inCinemas':
+                return m.status === 'inCinemas';
+              case 'announced':
+                return m.status === 'announced';
+              case 'missing':
+                return m.monitored && !m.hasFile;
+              default:
+                return true;
+            }
+          });
+        }
+        if (rootFolderFilter !== 'all') {
+          filtered = filtered.filter(
+            (m) => (m.rootFolderPath || getRootFolder(m.path)) === rootFolderFilter,
+          );
+        }
+
+        const movieIds = filtered.map((m) => m.id);
+        await http.post('/command', { name: 'RescanMovie', movieIds });
+        showInfo(`Rescanning ${movieIds.length} movies...`, 'Rescan Started');
+      } else {
+        await http.post('/command', { name: 'RescanMovie' });
+        showInfo('Rescanning all movie files...', 'Rescan Started');
+      }
+    } catch (error) {
+      console.error('[MoviesIndex] Failed to rescan all movies:', error);
+      showError('Failed to start rescan command', 'Rescan Failed');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.classList.remove('loading');
+      }
     }
   }
 
