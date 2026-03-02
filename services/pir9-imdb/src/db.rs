@@ -305,6 +305,16 @@ impl DbRepository {
             .await
             .unwrap_or(0);
 
+        let people_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM imdb_people")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap_or(0);
+
+        let credits_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM imdb_credits")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap_or(0);
+
         // Get last sync time
         let last_sync: Option<String> = sqlx::query_scalar(
             r#"
@@ -331,6 +341,8 @@ impl DbRepository {
             series_count,
             episode_count,
             movie_count,
+            people_count,
+            credits_count,
             last_sync,
             db_size_bytes: db_size,
         })
@@ -371,6 +383,8 @@ impl DbRepository {
             title_basics: get_dataset_status(&self.pool, "title.basics.tsv.gz").await?,
             title_episodes: get_dataset_status(&self.pool, "title.episode.tsv.gz").await?,
             title_ratings: get_dataset_status(&self.pool, "title.ratings.tsv.gz").await?,
+            name_basics: get_dataset_status(&self.pool, "name.basics.tsv.gz").await?,
+            title_principals: get_dataset_status(&self.pool, "title.principals.tsv.gz").await?,
         })
     }
 
@@ -1064,6 +1078,183 @@ impl DbRepository {
         .await?;
 
         Ok(result.rows_affected())
+    }
+
+    // ── People & Credits methods ───────────────────────────────────
+
+    /// Batch upsert people using UNNEST arrays
+    pub async fn upsert_people_batch(&self, batch: &[DbPerson]) -> Result<u64> {
+        if batch.is_empty() {
+            return Ok(0);
+        }
+
+        let mut nconsts = Vec::with_capacity(batch.len());
+        let mut names = Vec::with_capacity(batch.len());
+        let mut birth_years = Vec::with_capacity(batch.len());
+        let mut death_years = Vec::with_capacity(batch.len());
+        let mut professions = Vec::with_capacity(batch.len());
+        let mut known_fors = Vec::with_capacity(batch.len());
+
+        for p in batch {
+            nconsts.push(p.nconst);
+            names.push(p.primary_name.as_str());
+            birth_years.push(p.birth_year);
+            death_years.push(p.death_year);
+            professions.push(p.primary_profession.as_deref());
+            known_fors.push(p.known_for_titles.as_deref());
+        }
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO imdb_people (nconst, primary_name, birth_year, death_year, primary_profession, known_for_titles)
+            SELECT * FROM UNNEST(
+                $1::bigint[], $2::text[], $3::smallint[], $4::smallint[], $5::text[], $6::text[]
+            )
+            ON CONFLICT (nconst) DO UPDATE SET
+                primary_name = EXCLUDED.primary_name,
+                birth_year = EXCLUDED.birth_year,
+                death_year = EXCLUDED.death_year,
+                primary_profession = EXCLUDED.primary_profession,
+                known_for_titles = EXCLUDED.known_for_titles
+            "#,
+        )
+        .bind(&nconsts)
+        .bind(&names)
+        .bind(&birth_years)
+        .bind(&death_years)
+        .bind(&professions)
+        .bind(&known_fors)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Batch upsert credits using UNNEST arrays
+    pub async fn upsert_credits_batch(&self, batch: &[DbCredit]) -> Result<u64> {
+        if batch.is_empty() {
+            return Ok(0);
+        }
+
+        let mut tconsts = Vec::with_capacity(batch.len());
+        let mut nconsts = Vec::with_capacity(batch.len());
+        let mut orderings = Vec::with_capacity(batch.len());
+        let mut categories = Vec::with_capacity(batch.len());
+        let mut jobs = Vec::with_capacity(batch.len());
+        let mut characters_vec = Vec::with_capacity(batch.len());
+
+        for c in batch {
+            tconsts.push(c.tconst);
+            nconsts.push(c.nconst);
+            orderings.push(c.ordering);
+            categories.push(c.category.as_str());
+            jobs.push(c.job.as_deref());
+            characters_vec.push(c.characters.as_deref());
+        }
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO imdb_credits (tconst, nconst, ordering, category, job, characters)
+            SELECT * FROM UNNEST(
+                $1::bigint[], $2::bigint[], $3::smallint[], $4::text[], $5::text[], $6::text[]
+            )
+            ON CONFLICT (tconst, nconst, ordering) DO UPDATE SET
+                category = EXCLUDED.category,
+                job = EXCLUDED.job,
+                characters = EXCLUDED.characters
+            "#,
+        )
+        .bind(&tconsts)
+        .bind(&nconsts)
+        .bind(&orderings)
+        .bind(&categories)
+        .bind(&jobs)
+        .bind(&characters_vec)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Get credits for a title (JOIN with people for names), ordered by billing
+    pub async fn get_credits_for_title(&self, imdb_id: &str) -> Result<Vec<ImdbCredit>> {
+        let numeric_id = parse_imdb_id(imdb_id).ok_or_else(|| anyhow::anyhow!("Invalid IMDB ID"))?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT c.nconst, p.primary_name, c.ordering, c.category, c.job, c.characters
+            FROM imdb_credits c
+            JOIN imdb_people p ON p.nconst = c.nconst
+            WHERE c.tconst = $1
+            ORDER BY c.ordering
+            "#,
+        )
+        .bind(numeric_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let credits = rows
+            .iter()
+            .map(|row| {
+                let nconst: i64 = row.get("nconst");
+                let characters_raw: Option<String> = row.get("characters");
+                // IMDB stores characters as JSON array string: ["Char1","Char2"]
+                let characters = characters_raw.and_then(|s| {
+                    serde_json::from_str::<Vec<String>>(&s).ok()
+                });
+
+                ImdbCredit {
+                    nconst: format!("nm{:07}", nconst),
+                    name: row.get("primary_name"),
+                    category: row.get("category"),
+                    job: row.get("job"),
+                    characters,
+                    ordering: row.get("ordering"),
+                }
+            })
+            .collect();
+
+        Ok(credits)
+    }
+
+    /// Get a person by nconst
+    pub async fn get_person(&self, nconst: &str) -> Result<Option<ImdbPerson>> {
+        let numeric_id = parse_nconst(nconst).ok_or_else(|| anyhow::anyhow!("Invalid nconst"))?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT nconst, primary_name, birth_year, death_year, primary_profession, known_for_titles
+            FROM imdb_people
+            WHERE nconst = $1
+            "#,
+        )
+        .bind(numeric_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| {
+            let nconst_val: i64 = r.get("nconst");
+            let profession_str: Option<String> = r.get("primary_profession");
+            let known_for_str: Option<String> = r.get("known_for_titles");
+
+            ImdbPerson {
+                nconst: format!("nm{:07}", nconst_val),
+                name: r.get("primary_name"),
+                birth_year: r.get("birth_year"),
+                death_year: r.get("death_year"),
+                professions: profession_str
+                    .map(|s| s.split(',').map(String::from).collect())
+                    .unwrap_or_default(),
+                known_for: known_for_str
+                    .map(|s| {
+                        s.split(',')
+                            .filter_map(|t| t.trim().parse::<i64>().ok())
+                            .map(|id| format!("tt{:07}", id))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            }
+        }))
     }
 
     /// Get pool for direct access (used by sync)

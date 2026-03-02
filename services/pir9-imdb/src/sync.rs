@@ -10,6 +10,8 @@ use flate2::read::GzDecoder;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
+use std::collections::HashSet;
+
 use crate::db::{DbRepository, ResumeInfo};
 use crate::models::*;
 
@@ -151,6 +153,60 @@ pub async fn run_full_sync(db: &DbRepository, token: CancellationToken) -> Resul
         Err(e) => {
             error!("title.ratings failed: {}", e);
             report.errors.push(format!("title.ratings: {}", e));
+        }
+    }
+
+    if token.is_cancelled() {
+        return Ok(report);
+    }
+
+    // Sync name.basics (people) — must run before title.principals
+    info!("Syncing name.basics...");
+    match sync_name_basics(db, &token).await {
+        Ok(DatasetResult::Completed(stats)) => {
+            info!(
+                "name.basics completed: {} processed, {} inserted",
+                stats.rows_processed, stats.rows_inserted
+            );
+            report.name_basics = Some(stats);
+        }
+        Ok(DatasetResult::Skipped) => {
+            info!("name.basics skipped (recently synced)");
+        }
+        Ok(DatasetResult::Cancelled) => {
+            info!("name.basics cancelled");
+            return Ok(report);
+        }
+        Err(e) => {
+            error!("name.basics failed: {}", e);
+            report.errors.push(format!("name.basics: {}", e));
+        }
+    }
+
+    if token.is_cancelled() {
+        return Ok(report);
+    }
+
+    // Sync title.principals (credits) — requires name.basics to have run first
+    info!("Syncing title.principals...");
+    match sync_title_principals(db, &token).await {
+        Ok(DatasetResult::Completed(stats)) => {
+            info!(
+                "title.principals completed: {} processed, {} inserted",
+                stats.rows_processed, stats.rows_inserted
+            );
+            report.title_principals = Some(stats);
+        }
+        Ok(DatasetResult::Skipped) => {
+            info!("title.principals skipped (recently synced)");
+        }
+        Ok(DatasetResult::Cancelled) => {
+            info!("title.principals cancelled");
+            return Ok(report);
+        }
+        Err(e) => {
+            error!("title.principals failed: {}", e);
+            report.errors.push(format!("title.principals: {}", e));
         }
     }
 
@@ -467,7 +523,7 @@ async fn sync_title_episodes_inner(
     }
 
     // First, get all our series IDs for filtering
-    let series_ids: std::collections::HashSet<i64> =
+    let series_ids: HashSet<i64> =
         sqlx::query_scalar("SELECT imdb_id FROM imdb_series")
             .fetch_all(db.pool())
             .await?
@@ -756,6 +812,414 @@ async fn sync_title_ratings_inner(
     }))
 }
 
+// ── name.basics sync ────────────────────────────────────────────────
+
+/// Sync name.basics.tsv.gz (people, pre-filtered by known titles)
+async fn sync_name_basics(db: &DbRepository, token: &CancellationToken) -> Result<DatasetResult> {
+    let dataset = "name.basics.tsv.gz";
+
+    if should_skip_dataset(db, dataset).await {
+        return Ok(DatasetResult::Skipped);
+    }
+
+    let url = format!("{}/{}", IMDB_BASE_URL, dataset);
+    let start_time = std::time::Instant::now();
+
+    let (sync_id, resume) = get_or_resume_sync(db, dataset).await?;
+
+    let result = sync_name_basics_inner(db, &url, sync_id, &resume, token).await;
+
+    match result {
+        Ok(DatasetResult::Completed(stats)) => {
+            db.complete_sync(sync_id).await?;
+            Ok(DatasetResult::Completed(SyncStats {
+                rows_processed: stats.rows_processed,
+                rows_inserted: stats.rows_inserted,
+                rows_updated: stats.rows_updated,
+                duration_seconds: start_time.elapsed().as_secs() as i64,
+            }))
+        }
+        Ok(DatasetResult::Cancelled) => {
+            db.cancel_sync(sync_id).await?;
+            Ok(DatasetResult::Cancelled)
+        }
+        Ok(DatasetResult::Skipped) => Ok(DatasetResult::Skipped),
+        Err(e) => {
+            db.fail_sync(sync_id, &e.to_string()).await?;
+            Err(e)
+        }
+    }
+}
+
+async fn sync_name_basics_inner(
+    db: &DbRepository,
+    url: &str,
+    sync_id: i64,
+    resume: &ResumeInfo,
+    token: &CancellationToken,
+) -> Result<DatasetResult> {
+    let resume_from = resume.last_processed_id;
+    if resume_from > 0 {
+        info!("Downloading {} (resuming from id {})", url, resume_from);
+    } else {
+        info!("Downloading {}", url);
+    }
+
+    // Load known title IDs (series + movies) for pre-filtering
+    let series_ids: HashSet<i64> =
+        sqlx::query_scalar("SELECT imdb_id FROM imdb_series")
+            .fetch_all(db.pool())
+            .await?
+            .into_iter()
+            .collect();
+
+    let movie_ids: HashSet<i64> =
+        sqlx::query_scalar("SELECT imdb_id FROM imdb_movies")
+            .fetch_all(db.pool())
+            .await?
+            .into_iter()
+            .collect();
+
+    let title_ids: HashSet<i64> = series_ids.union(&movie_ids).copied().collect();
+    info!(
+        "Pre-filter: {} known titles ({} series + {} movies)",
+        title_ids.len(),
+        series_ids.len(),
+        movie_ids.len()
+    );
+
+    let bytes = match download_dataset(url, token).await? {
+        Ok(b) => b,
+        Err(cancelled) => return Ok(cancelled),
+    };
+
+    let decoder = GzDecoder::new(&bytes[..]);
+    let reader = BufReader::new(decoder);
+
+    let mut rows_processed = resume.rows_processed;
+    let mut rows_inserted = resume.rows_inserted;
+    let mut last_id: i64 = 0;
+
+    let mut people_batch: Vec<DbPerson> = Vec::with_capacity(BATCH_SIZE);
+
+    // name.basics.tsv format:
+    // nconst \t primaryName \t birthYear \t deathYear \t primaryProfession \t knownForTitles
+    for (line_num, line_result) in reader.lines().enumerate() {
+        if line_num == 0 {
+            continue; // Skip header
+        }
+
+        let line = match line_result {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 6 {
+            continue;
+        }
+
+        let nconst = match parse_nconst(fields[0]) {
+            Some(id) => id,
+            None => continue,
+        };
+
+        // Skip rows we've already processed (resume support)
+        if nconst <= resume_from {
+            continue;
+        }
+
+        // Pre-filter: skip person if none of their knownForTitles are in our set
+        let known_for = fields[5];
+        if known_for == "\\N" || known_for.is_empty() {
+            continue;
+        }
+
+        let has_known_title = known_for.split(',').any(|tt| {
+            if tt.len() > 2 && tt.starts_with("tt") {
+                tt[2..].parse::<i64>().ok().map_or(false, |id| title_ids.contains(&id))
+            } else {
+                false
+            }
+        });
+
+        if !has_known_title {
+            continue;
+        }
+
+        people_batch.push(DbPerson {
+            nconst,
+            primary_name: fields[1].to_string(),
+            birth_year: parse_smallint(fields[2]),
+            death_year: parse_smallint(fields[3]),
+            primary_profession: if fields[4] != "\\N" {
+                Some(fields[4].to_string())
+            } else {
+                None
+            },
+            known_for_titles: if known_for != "\\N" {
+                // Store as comma-separated numeric IDs
+                let numeric: String = known_for
+                    .split(',')
+                    .filter_map(|tt| {
+                        if tt.len() > 2 && tt.starts_with("tt") {
+                            tt[2..].parse::<i64>().ok().map(|id| id.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                if numeric.is_empty() { None } else { Some(numeric) }
+            } else {
+                None
+            },
+        });
+
+        if people_batch.len() >= BATCH_SIZE {
+            rows_inserted += flush_people(db, &mut people_batch).await? as i64;
+        }
+
+        rows_processed += 1;
+        last_id = nconst;
+
+        if rows_processed % PROGRESS_INTERVAL == 0 {
+            rows_inserted += flush_people(db, &mut people_batch).await? as i64;
+            info!("name.basics progress: {} rows", rows_processed);
+            db.update_sync_progress_with_resume(sync_id, rows_processed, rows_inserted, 0, last_id)
+                .await?;
+        }
+
+        if rows_processed % CANCEL_CHECK_INTERVAL == 0 && token.is_cancelled() {
+            rows_inserted += flush_people(db, &mut people_batch).await? as i64;
+            info!(
+                "name.basics cancelled at row {} (last_id={})",
+                rows_processed, last_id
+            );
+            db.update_sync_progress_with_resume(sync_id, rows_processed, rows_inserted, 0, last_id)
+                .await?;
+            return Ok(DatasetResult::Cancelled);
+        }
+    }
+
+    // Flush remaining
+    rows_inserted += flush_people(db, &mut people_batch).await? as i64;
+
+    db.update_sync_progress_with_resume(sync_id, rows_processed, rows_inserted, 0, last_id)
+        .await?;
+
+    Ok(DatasetResult::Completed(SyncStats {
+        rows_processed,
+        rows_inserted,
+        rows_updated: 0,
+        duration_seconds: 0,
+    }))
+}
+
+// ── title.principals sync ───────────────────────────────────────────
+
+/// Sync title.principals.tsv.gz (credits, dual pre-filtered by titles + people)
+async fn sync_title_principals(db: &DbRepository, token: &CancellationToken) -> Result<DatasetResult> {
+    let dataset = "title.principals.tsv.gz";
+
+    if should_skip_dataset(db, dataset).await {
+        return Ok(DatasetResult::Skipped);
+    }
+
+    let url = format!("{}/{}", IMDB_BASE_URL, dataset);
+    let start_time = std::time::Instant::now();
+
+    let (sync_id, resume) = get_or_resume_sync(db, dataset).await?;
+
+    let result = sync_title_principals_inner(db, &url, sync_id, &resume, token).await;
+
+    match result {
+        Ok(DatasetResult::Completed(stats)) => {
+            db.complete_sync(sync_id).await?;
+            Ok(DatasetResult::Completed(SyncStats {
+                rows_processed: stats.rows_processed,
+                rows_inserted: stats.rows_inserted,
+                rows_updated: stats.rows_updated,
+                duration_seconds: start_time.elapsed().as_secs() as i64,
+            }))
+        }
+        Ok(DatasetResult::Cancelled) => {
+            db.cancel_sync(sync_id).await?;
+            Ok(DatasetResult::Cancelled)
+        }
+        Ok(DatasetResult::Skipped) => Ok(DatasetResult::Skipped),
+        Err(e) => {
+            db.fail_sync(sync_id, &e.to_string()).await?;
+            Err(e)
+        }
+    }
+}
+
+async fn sync_title_principals_inner(
+    db: &DbRepository,
+    url: &str,
+    sync_id: i64,
+    resume: &ResumeInfo,
+    token: &CancellationToken,
+) -> Result<DatasetResult> {
+    let resume_from = resume.last_processed_id;
+    if resume_from > 0 {
+        info!("Downloading {} (resuming from id {})", url, resume_from);
+    } else {
+        info!("Downloading {}", url);
+    }
+
+    // Dual pre-filter: load known title IDs and person IDs
+    let series_ids: HashSet<i64> =
+        sqlx::query_scalar("SELECT imdb_id FROM imdb_series")
+            .fetch_all(db.pool())
+            .await?
+            .into_iter()
+            .collect();
+
+    let movie_ids: HashSet<i64> =
+        sqlx::query_scalar("SELECT imdb_id FROM imdb_movies")
+            .fetch_all(db.pool())
+            .await?
+            .into_iter()
+            .collect();
+
+    let title_ids: HashSet<i64> = series_ids.union(&movie_ids).copied().collect();
+
+    let person_ids: HashSet<i64> =
+        sqlx::query_scalar("SELECT nconst FROM imdb_people")
+            .fetch_all(db.pool())
+            .await?
+            .into_iter()
+            .collect();
+
+    info!(
+        "Pre-filter: {} known titles, {} known people",
+        title_ids.len(),
+        person_ids.len()
+    );
+
+    let bytes = match download_dataset(url, token).await? {
+        Ok(b) => b,
+        Err(cancelled) => return Ok(cancelled),
+    };
+
+    let decoder = GzDecoder::new(&bytes[..]);
+    let reader = BufReader::new(decoder);
+
+    let mut rows_processed = resume.rows_processed;
+    let mut rows_inserted = resume.rows_inserted;
+    let mut last_id: i64 = 0;
+
+    let mut credit_batch: Vec<DbCredit> = Vec::with_capacity(BATCH_SIZE);
+
+    // title.principals.tsv format:
+    // tconst \t ordering \t nconst \t category \t job \t characters
+    for (line_num, line_result) in reader.lines().enumerate() {
+        if line_num == 0 {
+            continue; // Skip header
+        }
+
+        let line = match line_result {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 6 {
+            continue;
+        }
+
+        let tconst = match parse_imdb_id(fields[0]) {
+            Some(id) => id,
+            None => continue,
+        };
+
+        // Dual pre-filter: skip if title not in our set
+        if !title_ids.contains(&tconst) {
+            continue;
+        }
+
+        let nconst = match parse_nconst(fields[2]) {
+            Some(id) => id,
+            None => continue,
+        };
+
+        // Dual pre-filter: skip if person not in our set
+        if !person_ids.contains(&nconst) {
+            continue;
+        }
+
+        let ordering: i16 = match fields[1].parse() {
+            Ok(o) => o,
+            Err(_) => continue,
+        };
+
+        // Skip rows we've already processed (resume support)
+        // title.principals doesn't have monotonic IDs per se, but tconst is close enough
+        // We use a composite key: tconst * 100 + ordering as a rough resume marker
+        let resume_key = tconst * 100 + ordering as i64;
+        if resume_key <= resume_from {
+            continue;
+        }
+
+        credit_batch.push(DbCredit {
+            tconst,
+            nconst,
+            ordering,
+            category: fields[3].to_string(),
+            job: if fields[4] != "\\N" {
+                Some(fields[4].to_string())
+            } else {
+                None
+            },
+            characters: if fields[5] != "\\N" {
+                Some(fields[5].to_string())
+            } else {
+                None
+            },
+        });
+
+        if credit_batch.len() >= BATCH_SIZE {
+            rows_inserted += flush_credits(db, &mut credit_batch).await? as i64;
+        }
+
+        rows_processed += 1;
+        last_id = resume_key;
+
+        if rows_processed % PROGRESS_INTERVAL == 0 {
+            rows_inserted += flush_credits(db, &mut credit_batch).await? as i64;
+            info!("title.principals progress: {} rows", rows_processed);
+            db.update_sync_progress_with_resume(sync_id, rows_processed, rows_inserted, 0, last_id)
+                .await?;
+        }
+
+        if rows_processed % CANCEL_CHECK_INTERVAL == 0 && token.is_cancelled() {
+            rows_inserted += flush_credits(db, &mut credit_batch).await? as i64;
+            info!(
+                "title.principals cancelled at row {} (last_id={})",
+                rows_processed, last_id
+            );
+            db.update_sync_progress_with_resume(sync_id, rows_processed, rows_inserted, 0, last_id)
+                .await?;
+            return Ok(DatasetResult::Cancelled);
+        }
+    }
+
+    // Flush remaining
+    rows_inserted += flush_credits(db, &mut credit_batch).await? as i64;
+
+    db.update_sync_progress_with_resume(sync_id, rows_processed, rows_inserted, 0, last_id)
+        .await?;
+
+    Ok(DatasetResult::Completed(SyncStats {
+        rows_processed,
+        rows_inserted,
+        rows_updated: 0,
+        duration_seconds: 0,
+    }))
+}
+
 // ── Batch flush helpers ──────────────────────────────────────────────
 
 async fn flush_series(db: &DbRepository, batch: &mut Vec<DbSeries>) -> Result<u64> {
@@ -802,8 +1266,35 @@ async fn flush_ratings(
     Ok((series_count + movie_count) as i64)
 }
 
+async fn flush_people(db: &DbRepository, batch: &mut Vec<DbPerson>) -> Result<u64> {
+    if batch.is_empty() {
+        return Ok(0);
+    }
+    let count = db.upsert_people_batch(batch).await?;
+    batch.clear();
+    Ok(count)
+}
+
+async fn flush_credits(db: &DbRepository, batch: &mut Vec<DbCredit>) -> Result<u64> {
+    if batch.is_empty() {
+        return Ok(0);
+    }
+    let count = db.upsert_credits_batch(batch).await?;
+    batch.clear();
+    Ok(count)
+}
+
 /// Parse an integer from a string, handling IMDB null values
 fn parse_int<T: std::str::FromStr>(s: &str) -> Option<T> {
+    if s == "\\N" || s.is_empty() {
+        None
+    } else {
+        s.parse().ok()
+    }
+}
+
+/// Parse a smallint (i16) from a string, handling IMDB null values
+fn parse_smallint(s: &str) -> Option<i16> {
     if s == "\\N" || s.is_empty() {
         None
     } else {
@@ -814,6 +1305,15 @@ fn parse_int<T: std::str::FromStr>(s: &str) -> Option<T> {
 /// Parse IMDB ID string to numeric
 fn parse_imdb_id(s: &str) -> Option<i64> {
     if s.len() > 2 && s.starts_with("tt") {
+        s[2..].parse().ok()
+    } else {
+        None
+    }
+}
+
+/// Parse IMDB person ID (nconst) to numeric
+fn parse_nconst(s: &str) -> Option<i64> {
+    if s.len() > 2 && s.starts_with("nm") {
         s[2..].parse().ok()
     } else {
         None

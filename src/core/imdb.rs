@@ -232,6 +232,26 @@ impl ImdbClient {
         }
     }
 
+    /// Get credits (cast/crew) for a title by IMDB ID
+    pub async fn get_title_credits(&self, imdb_id: &str) -> anyhow::Result<Option<TitleCredits>> {
+        if !self.config.enabled {
+            return Ok(None);
+        }
+        let url = format!("{}/api/movies/{}/credits", self.config.base_url, imdb_id);
+        match self.client.get(&url).send().await {
+            Ok(response) if response.status().is_success() => Ok(response.json().await.ok()),
+            Ok(response) if response.status().as_u16() == 404 => Ok(None),
+            Ok(response) => {
+                warn!("IMDB service returned error for credits: {}", response.status());
+                Ok(None)
+            }
+            Err(e) => {
+                warn!("Failed to connect to IMDB service for credits: {}", e);
+                Ok(None)
+            }
+        }
+    }
+
     pub async fn cancel_sync(&self) -> anyhow::Result<ImdbProxyResponse> {
         if !self.config.enabled {
             return Ok(ImdbProxyResponse {
@@ -322,4 +342,26 @@ pub struct ImdbStats {
     pub movie_count: Option<i64>,
     pub last_sync: Option<String>,
     pub db_size_bytes: Option<i64>,
+}
+
+/// A single credit entry (cast/crew member) for a title
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImdbCredit {
+    pub nconst: String,
+    pub name: String,
+    pub category: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub characters: Option<Vec<String>>,
+    pub ordering: i16,
+}
+
+/// Credits for a title (movie or series)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TitleCredits {
+    pub imdb_id: String,
+    pub credits: Vec<ImdbCredit>,
 }

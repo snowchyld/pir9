@@ -37,6 +37,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_movie).put(update_movie).delete(delete_movie),
         )
         .route("/{id}/rematch", post(rematch_movie))
+        .route("/{id}/credits", get(get_movie_credits))
         .route("/lookup", get(lookup_movie))
         .route("/import", post(import_movies))
 }
@@ -486,6 +487,47 @@ async fn rematch_movie(
     let mut response = MovieResponse::from(movie);
     enrich_movie_response(&mut response, &state.db).await;
     Ok(Json(response))
+}
+
+/// Get credits (cast/crew) for a movie by its database ID
+async fn get_movie_credits(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let repo = MovieRepository::new(state.db.clone());
+    let movie = repo
+        .get_by_id(id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch movie: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
+
+    // Need an IMDB ID to look up credits
+    let imdb_id = match movie.imdb_id {
+        Some(ref id) if !id.is_empty() => id.clone(),
+        _ => {
+            let empty: Vec<serde_json::Value> = vec![];
+            return Ok(Json(serde_json::json!({
+                "imdbId": serde_json::Value::Null,
+                "credits": empty
+            })));
+        }
+    };
+
+    let empty: Vec<serde_json::Value> = vec![];
+    match IMDB_CLIENT.get_title_credits(&imdb_id).await {
+        Ok(Some(credits)) => Ok(Json(serde_json::to_value(credits).unwrap_or_default())),
+        Ok(None) => Ok(Json(serde_json::json!({
+            "imdbId": imdb_id,
+            "credits": empty
+        }))),
+        Err(e) => {
+            tracing::warn!("Failed to fetch credits for movie {}: {}", id, e);
+            Ok(Json(serde_json::json!({
+                "imdbId": imdb_id,
+                "credits": empty
+            })))
+        }
+    }
 }
 
 /// Lookup movies from pir9-imdb service, enriched with Radarr metadata images

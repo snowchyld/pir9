@@ -628,14 +628,14 @@ async fn movie_media_cover_handler(
         .find(|img| img.cover_type.eq_ignore_ascii_case(cover_type))
         .and_then(|img| img.remote_url);
 
-    // Resolve the image URL: use stored remote_url, or fall back to Radarr metadata API
+    // Resolve the image URL: use stored remote_url, or fall back to external APIs
     let image_url = if let Some(url) = stored_url {
         Some(url)
     } else if let Some(ref imdb_id) = movie.imdb_id {
-        // Call Radarr metadata proxy (mirrors the series Skyhook pattern)
+        // Try Radarr metadata proxy first (has poster + fanart)
         let radarr_url = format!("https://api.radarr.video/v1/movie/imdb/{}", imdb_id);
         let client = reqwest::Client::new();
-        match client
+        let radarr_result = match client
             .get(&radarr_url)
             .header("User-Agent", format!("pir9/{}", env!("CARGO_PKG_VERSION")))
             .send()
@@ -654,19 +654,19 @@ async fn movie_media_cover_handler(
                     Images: Vec<RadarrImage>,
                 }
 
-                match resp.json::<RadarrMovie>().await {
-                    Ok(radarr) => {
+                match resp.json::<Vec<RadarrMovie>>().await {
+                    Ok(movies) => movies.into_iter().next().and_then(|radarr| {
                         let radarr_cover = match cover_type {
                             "poster" => "Poster",
                             "fanart" | "backdrop" => "Fanart",
-                            _ => "Poster",
+                            _ => return None,
                         };
                         radarr
                             .Images
                             .into_iter()
                             .find(|img| img.CoverType == radarr_cover)
                             .map(|img| img.Url)
-                    }
+                    }),
                     Err(e) => {
                         tracing::warn!("Failed to parse Radarr response for {}: {}", imdb_id, e);
                         None
@@ -674,6 +674,13 @@ async fn movie_media_cover_handler(
                 }
             }
             _ => None,
+        };
+
+        // If Radarr didn't have it, try Fanart.tv (has logo, clearart, banner, thumb, disc)
+        if radarr_result.is_some() {
+            radarr_result
+        } else {
+            crate::api::v5::movies::fetch_fanart_image_url(imdb_id, cover_type).await
         }
     } else {
         None

@@ -93,6 +93,8 @@ pub struct ImdbStats {
     pub series_count: i64,
     pub episode_count: i64,
     pub movie_count: i64,
+    pub people_count: i64,
+    pub credits_count: i64,
     pub last_sync: Option<String>,
     pub db_size_bytes: Option<i64>,
 }
@@ -107,6 +109,8 @@ pub struct SyncStatus {
     pub title_basics: Option<DatasetSyncStatus>,
     pub title_episodes: Option<DatasetSyncStatus>,
     pub title_ratings: Option<DatasetSyncStatus>,
+    pub name_basics: Option<DatasetSyncStatus>,
+    pub title_principals: Option<DatasetSyncStatus>,
 }
 
 /// Status for a single dataset sync
@@ -132,6 +136,8 @@ pub struct SyncReport {
     pub title_basics: Option<SyncStats>,
     pub title_episodes: Option<SyncStats>,
     pub title_ratings: Option<SyncStats>,
+    pub name_basics: Option<SyncStats>,
+    pub title_principals: Option<SyncStats>,
     pub errors: Vec<String>,
 }
 
@@ -259,9 +265,76 @@ impl DbMovie {
     }
 }
 
+/// Internal database row for a person (from name.basics)
+#[derive(Debug, Clone)]
+pub struct DbPerson {
+    pub nconst: i64,
+    pub primary_name: String,
+    pub birth_year: Option<i16>,
+    pub death_year: Option<i16>,
+    pub primary_profession: Option<String>,
+    pub known_for_titles: Option<String>,
+}
+
+/// Internal database row for a credit (from title.principals)
+#[derive(Debug, Clone)]
+pub struct DbCredit {
+    pub tconst: i64,
+    pub nconst: i64,
+    pub ordering: i16,
+    pub category: String,
+    pub job: Option<String>,
+    pub characters: Option<String>,
+}
+
+/// API response: a single credit entry with resolved person name
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImdbCredit {
+    pub nconst: String,
+    pub name: String,
+    pub category: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub characters: Option<Vec<String>>,
+    pub ordering: i16,
+}
+
+/// API response: all credits for a title
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TitleCredits {
+    pub imdb_id: String,
+    pub credits: Vec<ImdbCredit>,
+}
+
+/// API response: person details with filmography
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImdbPerson {
+    pub nconst: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub birth_year: Option<i16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub death_year: Option<i16>,
+    pub professions: Vec<String>,
+    pub known_for: Vec<String>,
+}
+
 /// Parse IMDB ID string to numeric (e.g., "tt10234724" -> 10234724)
 pub fn parse_imdb_id(id_str: &str) -> Option<i64> {
     if id_str.len() > 2 && id_str.starts_with("tt") {
+        id_str[2..].parse().ok()
+    } else {
+        id_str.parse().ok()
+    }
+}
+
+/// Parse IMDB person ID to numeric (e.g., "nm0000001" -> 1)
+pub fn parse_nconst(id_str: &str) -> Option<i64> {
+    if id_str.len() > 2 && id_str.starts_with("nm") {
         id_str[2..].parse().ok()
     } else {
         id_str.parse().ok()

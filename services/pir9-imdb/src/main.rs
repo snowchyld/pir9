@@ -112,6 +112,11 @@ async fn main() -> anyhow::Result<()> {
         // Movie endpoints
         .route("/api/movies/search", get(search_movies))
         .route("/api/movies/{imdb_id}", get(get_movie))
+        .route("/api/movies/{imdb_id}/credits", get(get_title_credits))
+        // Series credits (same handler, different route for clarity)
+        .route("/api/series/{imdb_id}/credits", get(get_title_credits))
+        // People
+        .route("/api/people/{nconst}", get(get_person))
         // Stats
         .route("/api/stats", get(get_stats))
         // Sync endpoints
@@ -317,6 +322,51 @@ async fn get_movie(
     (StatusCode::OK, Json(db_movie.to_api())).into_response()
 }
 
+async fn get_title_credits(
+    State(state): State<Arc<AppState>>,
+    Path(imdb_id): Path<String>,
+) -> impl IntoResponse {
+    match state.db.get_credits_for_title(&imdb_id).await {
+        Ok(credits) => {
+            let result = models::TitleCredits {
+                imdb_id,
+                credits,
+            };
+            (StatusCode::OK, Json(result)).into_response()
+        }
+        Err(e) => {
+            error!("Get credits error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn get_person(
+    State(state): State<Arc<AppState>>,
+    Path(nconst): Path<String>,
+) -> impl IntoResponse {
+    match state.db.get_person(&nconst).await {
+        Ok(Some(person)) => (StatusCode::OK, Json(person)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Person not found" })),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Get person error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
 async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.db.get_stats().await {
         Ok(stats) => (StatusCode::OK, Json(stats)).into_response(),
@@ -405,6 +455,12 @@ async fn get_sync_status(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 ds.is_running = is_running && ds.status == "running";
             }
             if let Some(ref mut ds) = status.title_ratings {
+                ds.is_running = is_running && ds.status == "running";
+            }
+            if let Some(ref mut ds) = status.name_basics {
+                ds.is_running = is_running && ds.status == "running";
+            }
+            if let Some(ref mut ds) = status.title_principals {
                 ds.is_running = is_running && ds.status == "running";
             }
 

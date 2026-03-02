@@ -89,6 +89,7 @@ services:
       - PIR9_IMDB_ENABLED=${PIR9_IMDB_ENABLED:-true}
       - PIR9_TVDB_API_KEY=${PIR9_TVDB_API_KEY:-}
       - PIR9_TMDB_API_KEY=${PIR9_TMDB_API_KEY:-}
+      - FANART_API=${FANART_API:-}
       - TZ=${TZ:-UTC}
     depends_on:
       redis:
