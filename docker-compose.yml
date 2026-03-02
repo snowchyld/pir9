@@ -194,6 +194,7 @@ services:
       - RUST_LOG=info,pir9_imdb=debug
       - PIR9_IMDB_PORT=8990
       - PIR9_IMDB_DB_URL=postgresql://${POSTGRES_USER:-pir9}:${POSTGRES_PASSWORD:-pir9}@postgres-imdb:5432/pir9_imdb
+      - PIR9_TMDB_API_KEY=${PIR9_TMDB_API_KEY:-}
     depends_on:
       postgres-imdb:
         condition: service_healthy

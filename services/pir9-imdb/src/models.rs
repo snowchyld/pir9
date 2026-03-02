@@ -75,6 +75,15 @@ pub struct ImdbMovie {
     pub rating: Option<f64>,
     /// Number of votes
     pub votes: Option<i64>,
+    /// TMDB ID (cached from on-demand TMDB lookup)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tmdb_id: Option<i64>,
+    /// Poster image URL (cached from TMDB)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poster_url: Option<String>,
+    /// Fanart/backdrop image URL (cached from TMDB)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fanart_url: Option<String>,
 }
 
 /// Service statistics
@@ -220,6 +229,10 @@ pub struct DbMovie {
     pub rating: Option<f64>,
     pub votes: Option<i64>,
     pub last_synced_at: DateTime<Utc>,
+    pub tmdb_id: Option<i64>,
+    pub poster_url: Option<String>,
+    pub fanart_url: Option<String>,
+    pub tmdb_fetched_at: Option<DateTime<Utc>>,
 }
 
 impl DbMovie {
@@ -239,6 +252,9 @@ impl DbMovie {
             is_adult: self.is_adult,
             rating: self.rating,
             votes: self.votes,
+            tmdb_id: self.tmdb_id,
+            poster_url: self.poster_url.clone(),
+            fanart_url: self.fanart_url.clone(),
         }
     }
 }

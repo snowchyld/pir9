@@ -303,6 +303,15 @@ pub struct ImdbMovie {
     pub is_adult: bool,
     pub rating: Option<f64>,
     pub votes: Option<i64>,
+    /// TMDB ID (cached by pir9-imdb service)
+    #[serde(default)]
+    pub tmdb_id: Option<i64>,
+    /// Poster image URL (cached from TMDB)
+    #[serde(default)]
+    pub poster_url: Option<String>,
+    /// Fanart/backdrop image URL (cached from TMDB)
+    #[serde(default)]
+    pub fanart_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

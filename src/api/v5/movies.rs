@@ -656,7 +656,13 @@ pub async fn fetch_radarr_images(imdb_id: &str) -> Vec<MovieImage> {
         .unwrap_or_default()
 }
 
-// ---- TMDB direct API ----
+// ---- IMDB service client (for TMDB-enriched lookups) ----
+
+/// Lazy-initialized IMDB service client, used as primary source for TMDB data.
+static IMDB_CLIENT: once_cell::sync::Lazy<crate::core::imdb::ImdbClient> =
+    once_cell::sync::Lazy::new(crate::core::imdb::ImdbClient::from_env);
+
+// ---- TMDB direct API (fallback when IMDB service unavailable) ----
 
 /// TMDB API key from `PIR9_TMDB_API_KEY` environment variable.
 /// Empty strings are treated as absent to avoid 401 errors.
@@ -781,20 +787,50 @@ pub async fn fetch_tmdb_movie_by_id(tmdb_id: i64) -> Option<TmdbMovieDetail> {
 }
 
 /// Fetch movie images and TMDB ID using a cascading strategy:
-/// 1. TMDB direct API (if PIR9_TMDB_API_KEY configured) — most reliable
-/// 2. Radarr metadata proxy — fallback
+/// 1. pir9-imdb service (has cached TMDB data) — fastest, no external API call
+/// 2. TMDB direct API (if PIR9_TMDB_API_KEY configured) — fallback
+/// 3. Radarr metadata proxy — last resort
 pub async fn fetch_movie_images_and_tmdb_id(imdb_id: &str) -> Option<(i64, Vec<MovieImage>)> {
-    // Try TMDB first
+    // Try pir9-imdb service first (returns cached TMDB data)
+    if IMDB_CLIENT.is_enabled() {
+        if let Ok(Some(movie)) = IMDB_CLIENT.get_movie(imdb_id).await {
+            if let Some(tmdb_id) = movie.tmdb_id {
+                let mut images = Vec::new();
+                if let Some(ref poster) = movie.poster_url {
+                    images.push(MovieImage {
+                        cover_type: "poster".to_string(),
+                        url: poster.clone(),
+                        remote_url: Some(poster.clone()),
+                    });
+                }
+                if let Some(ref fanart) = movie.fanart_url {
+                    images.push(MovieImage {
+                        cover_type: "fanart".to_string(),
+                        url: fanart.clone(),
+                        remote_url: Some(fanart.clone()),
+                    });
+                }
+                tracing::debug!(
+                    "IMDB service provided TMDB data for {}: tmdb_id={}",
+                    imdb_id,
+                    tmdb_id
+                );
+                return Some((tmdb_id, images));
+            }
+        }
+    }
+
+    // Fall back to direct TMDB API
     if let Some(result) = fetch_tmdb_movie_data(imdb_id).await {
         tracing::debug!(
-            "TMDB lookup succeeded for {}: tmdb_id={}",
+            "TMDB direct lookup succeeded for {}: tmdb_id={}",
             imdb_id,
             result.0
         );
         return Some(result);
     }
 
-    // Fall back to Radarr
+    // Last resort: Radarr metadata proxy
     fetch_radarr_metadata(imdb_id).await
 }
 

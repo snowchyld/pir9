@@ -180,6 +180,7 @@ impl DbRepository {
     /// Relevance ranking: exact match > starts-with > contains.
     /// Within each tier, sorts by votes (popularity) then rating.
     /// Excludes adult content from search results.
+    /// Returns cached TMDB data if available (no on-demand TMDB fetches for search).
     pub async fn search_movies(&self, query: &str, limit: u32) -> Result<Vec<ImdbMovie>> {
         let exact_pattern = query.to_string();
         let starts_pattern = format!("{}%", query);
@@ -198,7 +199,8 @@ impl DbRepository {
         let rows = sqlx::query(
             r#"
             SELECT imdb_id, title, original_title, year,
-                   runtime_minutes, genres, is_adult, rating, votes, last_synced_at
+                   runtime_minutes, genres, is_adult, rating, votes, last_synced_at,
+                   tmdb_id, poster_url, fanart_url, tmdb_fetched_at
             FROM imdb_movies
             WHERE (
                 title ILIKE $3 OR original_title ILIKE $3
@@ -239,6 +241,10 @@ impl DbRepository {
                     rating: row.get("rating"),
                     votes: row.get("votes"),
                     last_synced_at: row.get("last_synced_at"),
+                    tmdb_id: row.get("tmdb_id"),
+                    poster_url: row.get("poster_url"),
+                    fanart_url: row.get("fanart_url"),
+                    tmdb_fetched_at: row.get("tmdb_fetched_at"),
                 };
                 db_movie.to_api()
             })
@@ -247,14 +253,15 @@ impl DbRepository {
         Ok(results)
     }
 
-    /// Get a movie by IMDB ID
-    pub async fn get_movie(&self, imdb_id: &str) -> Result<Option<ImdbMovie>> {
+    /// Get a movie by IMDB ID (returns DbMovie so handler can check tmdb_fetched_at)
+    pub async fn get_movie(&self, imdb_id: &str) -> Result<Option<DbMovie>> {
         let numeric_id = parse_imdb_id(imdb_id).ok_or_else(|| anyhow::anyhow!("Invalid IMDB ID"))?;
 
         let row = sqlx::query(
             r#"
             SELECT imdb_id, title, original_title, year,
-                   runtime_minutes, genres, is_adult, rating, votes, last_synced_at
+                   runtime_minutes, genres, is_adult, rating, votes, last_synced_at,
+                   tmdb_id, poster_url, fanart_url, tmdb_fetched_at
             FROM imdb_movies
             WHERE imdb_id = $1
             "#,
@@ -263,20 +270,21 @@ impl DbRepository {
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(row.map(|row| {
-            let db_movie = DbMovie {
-                imdb_id: row.get("imdb_id"),
-                title: row.get("title"),
-                original_title: row.get("original_title"),
-                year: row.get("year"),
-                runtime_minutes: row.get("runtime_minutes"),
-                genres: row.get("genres"),
-                is_adult: row.get("is_adult"),
-                rating: row.get("rating"),
-                votes: row.get("votes"),
-                last_synced_at: row.get("last_synced_at"),
-            };
-            db_movie.to_api()
+        Ok(row.map(|row| DbMovie {
+            imdb_id: row.get("imdb_id"),
+            title: row.get("title"),
+            original_title: row.get("original_title"),
+            year: row.get("year"),
+            runtime_minutes: row.get("runtime_minutes"),
+            genres: row.get("genres"),
+            is_adult: row.get("is_adult"),
+            rating: row.get("rating"),
+            votes: row.get("votes"),
+            last_synced_at: row.get("last_synced_at"),
+            tmdb_id: row.get("tmdb_id"),
+            poster_url: row.get("poster_url"),
+            fanart_url: row.get("fanart_url"),
+            tmdb_fetched_at: row.get("tmdb_fetched_at"),
         }))
     }
 
@@ -677,6 +685,31 @@ impl DbRepository {
         .bind(imdb_id)
         .bind(rating)
         .bind(votes)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Cache TMDB data for a movie (on-demand enrichment)
+    pub async fn update_movie_tmdb_data(
+        &self,
+        imdb_id: i64,
+        tmdb_id: Option<i64>,
+        poster_url: Option<&str>,
+        fanart_url: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE imdb_movies
+            SET tmdb_id = $2, poster_url = $3, fanart_url = $4, tmdb_fetched_at = NOW()
+            WHERE imdb_id = $1
+            "#,
+        )
+        .bind(imdb_id)
+        .bind(tmdb_id)
+        .bind(poster_url)
+        .bind(fanart_url)
         .execute(&self.pool)
         .await?;
 

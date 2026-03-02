@@ -33,6 +33,7 @@ use tracing::{error, info, warn};
 mod db;
 mod models;
 mod sync;
+mod tmdb;
 mod tvmaze;
 
 use db::DbRepository;
@@ -47,6 +48,7 @@ struct SyncHandle {
 #[derive(Clone)]
 pub struct AppState {
     pub db: DbRepository,
+    pub tmdb_client: Option<Arc<tmdb::TmdbClient>>,
     sync_handle: Arc<Mutex<Option<SyncHandle>>>,
 }
 
@@ -85,8 +87,17 @@ async fn main() -> anyhow::Result<()> {
     // Startup cleanup: mark any stale 'running' syncs as failed (crash recovery)
     db.fail_stale_running_syncs().await?;
 
+    // Initialize TMDB client (optional — enriches movie lookups with TMDB IDs + images)
+    let tmdb_client = tmdb::TmdbClient::from_env().map(Arc::new);
+    if tmdb_client.is_some() {
+        info!("TMDB client initialized — movie lookups will be enriched with TMDB data");
+    } else {
+        info!("No PIR9_TMDB_API_KEY configured — movie lookups will return IMDB data only");
+    }
+
     let state = AppState {
         db,
+        tmdb_client,
         sync_handle: Arc::new(Mutex::new(None)),
     };
 
@@ -230,26 +241,80 @@ async fn search_movies(
     }
 }
 
+/// TMDB cache staleness threshold: re-fetch after 30 days
+const TMDB_CACHE_DAYS: i64 = 30;
+
 async fn get_movie(
     State(state): State<Arc<AppState>>,
     Path(imdb_id): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_movie(&imdb_id).await {
-        Ok(Some(movie)) => (StatusCode::OK, Json(movie)).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Movie not found" })),
-        )
-            .into_response(),
-        Err(e) => {
-            error!("Get movie error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
+    let mut db_movie = match state.db.get_movie(&imdb_id).await {
+        Ok(Some(m)) => m,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Movie not found" })),
             )
                 .into_response()
         }
+        Err(e) => {
+            error!("Get movie error: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    // On-demand TMDB enrichment: fetch if never fetched or cache is stale
+    if let Some(ref tmdb) = state.tmdb_client {
+        let needs_fetch = match db_movie.tmdb_fetched_at {
+            None => true,
+            Some(fetched_at) => {
+                let age = chrono::Utc::now() - fetched_at;
+                age.num_days() > TMDB_CACHE_DAYS
+            }
+        };
+
+        if needs_fetch {
+            let imdb_str = format!("tt{:07}", db_movie.imdb_id);
+            match tmdb.find_movie_by_imdb_id(&imdb_str).await {
+                Some(data) => {
+                    info!("TMDB enriched {} → tmdb_id={}", imdb_str, data.tmdb_id);
+                    // Update DB cache
+                    if let Err(e) = state
+                        .db
+                        .update_movie_tmdb_data(
+                            db_movie.imdb_id,
+                            Some(data.tmdb_id),
+                            data.poster_url.as_deref(),
+                            data.fanart_url.as_deref(),
+                        )
+                        .await
+                    {
+                        warn!("Failed to cache TMDB data for {}: {}", imdb_str, e);
+                    }
+                    // Update in-memory for this response
+                    db_movie.tmdb_id = Some(data.tmdb_id);
+                    db_movie.poster_url = data.poster_url;
+                    db_movie.fanart_url = data.fanart_url;
+                }
+                None => {
+                    // TMDB has no mapping — record that we checked
+                    if let Err(e) = state
+                        .db
+                        .update_movie_tmdb_data(db_movie.imdb_id, None, None, None)
+                        .await
+                    {
+                        warn!("Failed to mark TMDB check for {}: {}", imdb_id, e);
+                    }
+                }
+            }
+        }
     }
+
+    (StatusCode::OK, Json(db_movie.to_api())).into_response()
 }
 
 async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {

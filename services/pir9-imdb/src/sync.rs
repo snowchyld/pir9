@@ -351,6 +351,10 @@ async fn sync_title_basics_inner(
                 rating: None,
                 votes: None,
                 last_synced_at: Utc::now(),
+                tmdb_id: None,
+                poster_url: None,
+                fanart_url: None,
+                tmdb_fetched_at: None,
             });
 
             if movie_batch.len() >= BATCH_SIZE {
