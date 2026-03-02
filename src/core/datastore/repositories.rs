@@ -1238,6 +1238,9 @@ impl EpisodeRepository {
     }
 
     /// Get missing episodes (monitored, no file, aired in past)
+    ///
+    /// `exclude_episode_ids` omits episodes that are actively downloading from both
+    /// the result set and the total count, so pagination stays accurate.
     pub async fn get_missing(
         &self,
         monitored_only: bool,
@@ -1245,6 +1248,7 @@ impl EpisodeRepository {
         page_size: i32,
         sort_key: &str,
         sort_direction: &str,
+        exclude_episode_ids: &[i64],
     ) -> Result<(Vec<super::models::EpisodeDbModel>, i64)> {
         let order = if sort_direction.to_lowercase() == "descending" {
             "DESC"
@@ -1259,27 +1263,53 @@ impl EpisodeRepository {
             _ => "air_date_utc",
         };
         let offset = (page - 1) * page_size;
+        let has_exclusions = !exclude_episode_ids.is_empty();
 
         let pool = self.db.pool();
-        let mut where_clause =
-            "has_file = false AND air_date_utc IS NOT NULL AND air_date_utc < NOW()".to_string();
+        let mut base_where =
+            "has_file = false AND air_date_utc IS NOT NULL AND air_date_utc < NOW() AND season_number > 0".to_string();
         if monitored_only {
-            where_clause.push_str(" AND monitored = true");
+            base_where.push_str(" AND monitored = true");
         }
 
-        let count_query = format!("SELECT COUNT(*) FROM episodes WHERE {}", where_clause);
-        let total: (i64,) = sqlx::query_as(&count_query).fetch_one(pool).await?;
+        // Count query: exclude IDs are $1 (no LIMIT/OFFSET params)
+        let total: (i64,) = if has_exclusions {
+            let count_sql = format!(
+                "SELECT COUNT(*) FROM episodes WHERE {} AND id NOT IN (SELECT UNNEST($1::bigint[]))",
+                base_where
+            );
+            sqlx::query_as(&count_sql)
+                .bind(exclude_episode_ids)
+                .fetch_one(pool)
+                .await?
+        } else {
+            let count_sql = format!("SELECT COUNT(*) FROM episodes WHERE {}", base_where);
+            sqlx::query_as(&count_sql).fetch_one(pool).await?
+        };
 
-        let query = format!(
-            "SELECT * FROM episodes WHERE {} ORDER BY {} {} LIMIT $1 OFFSET $2",
-            where_clause, order_by, order
-        );
-
-        let rows = sqlx::query_as::<_, super::models::EpisodeDbModel>(&query)
-            .bind(page_size)
-            .bind(offset)
-            .fetch_all(pool)
-            .await?;
+        // Data query: LIMIT=$1, OFFSET=$2, exclude IDs=$3
+        let rows = if has_exclusions {
+            let data_sql = format!(
+                "SELECT * FROM episodes WHERE {} AND id NOT IN (SELECT UNNEST($3::bigint[])) ORDER BY {} {} LIMIT $1 OFFSET $2",
+                base_where, order_by, order
+            );
+            sqlx::query_as::<_, super::models::EpisodeDbModel>(&data_sql)
+                .bind(page_size)
+                .bind(offset)
+                .bind(exclude_episode_ids)
+                .fetch_all(pool)
+                .await?
+        } else {
+            let data_sql = format!(
+                "SELECT * FROM episodes WHERE {} ORDER BY {} {} LIMIT $1 OFFSET $2",
+                base_where, order_by, order
+            );
+            sqlx::query_as::<_, super::models::EpisodeDbModel>(&data_sql)
+                .bind(page_size)
+                .bind(offset)
+                .fetch_all(pool)
+                .await?
+        };
 
         Ok((rows, total.0))
     }

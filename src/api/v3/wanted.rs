@@ -110,8 +110,8 @@ pub async fn get_wanted_missing(
     let series_repo = SeriesRepository::new(state.db.clone());
     let tracked_repo = TrackedDownloadRepository::new(state.db.clone());
 
-    // Get episode IDs that are actively downloading so we can exclude them
-    let downloading_episode_ids: std::collections::HashSet<i64> = tracked_repo
+    // Exclude episodes that are actively downloading (pushed into SQL for correct pagination)
+    let exclude_ids: Vec<i64> = tracked_repo
         .get_all_active()
         .await
         .unwrap_or_default()
@@ -119,9 +119,15 @@ pub async fn get_wanted_missing(
         .flat_map(|d| serde_json::from_str::<Vec<i64>>(&d.episode_ids).unwrap_or_default())
         .collect();
 
-    // Fetch missing episodes
     let (episodes, total) = match episode_repo
-        .get_missing(monitored_only, page, page_size, &sort_key, &sort_direction)
+        .get_missing(
+            monitored_only,
+            page,
+            page_size,
+            &sort_key,
+            &sort_direction,
+            &exclude_ids,
+        )
         .await
     {
         Ok(result) => result,
@@ -137,14 +143,6 @@ pub async fn get_wanted_missing(
             });
         }
     };
-
-    // Filter out episodes that are currently downloading
-    let filtered_count = episodes.len();
-    let episodes: Vec<_> = episodes
-        .into_iter()
-        .filter(|ep| !downloading_episode_ids.contains(&ep.id))
-        .collect();
-    let total = total - (filtered_count - episodes.len()) as i64;
 
     // Optionally include series data
     let mut records = Vec::new();
