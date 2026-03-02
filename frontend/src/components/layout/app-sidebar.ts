@@ -3,7 +3,7 @@
  */
 
 import { BaseComponent, customElement, html } from '../../core/component';
-import { isActive, navigate } from '../../router';
+import { currentRoute, isActive, navigate } from '../../router';
 import { closeMobileMenu, sidebarCollapsed, toggleSidebar } from '../../stores/app.store';
 
 interface NavItem {
@@ -29,6 +29,7 @@ const NAV_ITEMS: NavItem[] = [
 export class AppSidebar extends BaseComponent {
   protected onInit(): void {
     this.watch(sidebarCollapsed);
+    this.watch(currentRoute);
   }
 
   protected template(): string {
