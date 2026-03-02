@@ -21,12 +21,17 @@ type QueueSortKey =
   | 'timeleft';
 type ContentTab = 'all' | 'shows' | 'movies' | 'anime';
 
+// Module-level state survives component destruction/recreation (SPA navigation)
+let savedSortKey: QueueSortKey = 'timeleft';
+let savedSortDirection: 'asc' | 'desc' = 'asc';
+let savedActiveTab: ContentTab = 'all';
+
 @customElement('queue-page')
 export class QueuePage extends BaseComponent {
   private queueQuery = useQueueQuery();
-  private sortKey: QueueSortKey = 'timeleft';
-  private sortDirection: 'asc' | 'desc' = 'asc';
-  private activeTab: ContentTab = 'all';
+  private sortKey: QueueSortKey = savedSortKey;
+  private sortDirection: 'asc' | 'desc' = savedSortDirection;
+  private activeTab: ContentTab = savedActiveTab;
   private dialogOpen = false;
 
   private removeItemMutation = createMutation({
@@ -757,11 +762,14 @@ export class QueuePage extends BaseComponent {
       this.sortKey = key;
       this.sortDirection = 'asc';
     }
+    savedSortKey = this.sortKey;
+    savedSortDirection = this.sortDirection;
     this.requestUpdate();
   }
 
   handleTabClick(tab: ContentTab): void {
     this.activeTab = tab;
+    savedActiveTab = this.activeTab;
     this.requestUpdate();
   }
 
