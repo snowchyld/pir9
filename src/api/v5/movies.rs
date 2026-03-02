@@ -659,8 +659,9 @@ pub async fn fetch_radarr_images(imdb_id: &str) -> Vec<MovieImage> {
 // ---- TMDB direct API ----
 
 /// TMDB API key from `PIR9_TMDB_API_KEY` environment variable.
+/// Empty strings are treated as absent to avoid 401 errors.
 static TMDB_API_KEY: once_cell::sync::Lazy<Option<String>> =
-    once_cell::sync::Lazy::new(|| std::env::var("PIR9_TMDB_API_KEY").ok());
+    once_cell::sync::Lazy::new(|| std::env::var("PIR9_TMDB_API_KEY").ok().filter(|s| !s.is_empty()));
 
 /// Shared HTTP client for TMDB requests.
 static TMDB_HTTP_CLIENT: once_cell::sync::Lazy<reqwest::Client> =
