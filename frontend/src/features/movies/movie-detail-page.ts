@@ -7,6 +7,8 @@ import { BaseComponent, customElement, escapeHtml, html } from '../../core/compo
 import { http, type Movie } from '../../core/http';
 import { createMutation, createQuery, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
+import type { ScanProgressMessage } from '../../core/websocket';
+import { wsManager } from '../../core/websocket';
 import { navigate } from '../../router';
 import { showError, showInfo, showSuccess } from '../../stores/app.store';
 import '../../components/release-search-modal';
@@ -19,6 +21,8 @@ import type { MovieMatchDialog } from './movie-match-dialog';
 export class MovieDetailPage extends BaseComponent {
   private movieId = signal<number | null>(null);
   private titleSlug = signal<string | null>(null);
+  private scanProgress = signal<ScanProgressMessage | null>(null);
+  private unsubScanProgress: (() => void) | null = null;
 
   private handleDocumentClick = (event: MouseEvent): void => {
     const dropdown = this.querySelector('.search-dropdown');
@@ -87,10 +91,31 @@ export class MovieDetailPage extends BaseComponent {
       this.lookupMovieId(slug);
     }
     document.addEventListener('click', this.handleDocumentClick);
+
+    // Subscribe to scan progress events for this movie
+    this.unsubScanProgress = wsManager.on('scan_progress', (msg) => {
+      const progress = msg as ScanProgressMessage;
+      const id = this.movieId.value;
+      if (id && progress.scan_type === 'rescan_movie' && progress.entity_ids.includes(id)) {
+        this.scanProgress.set(progress);
+        this.requestUpdate();
+
+        // Clear progress after completion
+        if (progress.percent >= 100) {
+          setTimeout(() => {
+            this.scanProgress.set(null);
+            // Refetch movie data now that scan is done
+            this.movieQuery?.refetch();
+            this.requestUpdate();
+          }, 2000);
+        }
+      }
+    });
   }
 
   protected onDestroy(): void {
     document.removeEventListener('click', this.handleDocumentClick);
+    this.unsubScanProgress?.();
   }
 
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
@@ -251,6 +276,9 @@ export class MovieDetailPage extends BaseComponent {
             </div>
           </div>
         </div>
+
+        <!-- Scan progress indicator -->
+        ${this.renderScanProgress()}
 
         <!-- Actions -->
         <div class="actions-panel">
@@ -619,6 +647,53 @@ export class MovieDetailPage extends BaseComponent {
           margin: 0.25rem 0;
         }
 
+        .scan-progress-bar {
+          padding: 0.75rem 1.25rem;
+          background: var(--bg-card);
+          border: 1px solid var(--border-glass);
+          border-radius: 0.75rem;
+        }
+
+        .scan-progress-info {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          margin-bottom: 0.5rem;
+          font-size: 0.8125rem;
+        }
+
+        .scan-progress-stage {
+          font-weight: 600;
+          color: var(--pir9-blue);
+        }
+
+        .scan-progress-file {
+          color: var(--text-color-muted);
+          flex: 1;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .scan-progress-pct {
+          font-weight: 600;
+          font-variant-numeric: tabular-nums;
+        }
+
+        .scan-progress-track {
+          height: 4px;
+          background: var(--border-glass);
+          border-radius: 2px;
+          overflow: hidden;
+        }
+
+        .scan-progress-fill {
+          height: 100%;
+          background: var(--pir9-blue);
+          border-radius: 2px;
+          transition: width 0.3s ease;
+        }
+
         .error-container {
           display: flex;
           flex-direction: column;
@@ -640,6 +715,35 @@ export class MovieDetailPage extends BaseComponent {
           }
         }
       </style>
+    `;
+  }
+
+  private renderScanProgress(): string {
+    const progress = this.scanProgress.value;
+    if (!progress) return '';
+
+    const stageLabel =
+      progress.stage === 'hashing'
+        ? 'Hashing'
+        : progress.stage === 'probing'
+          ? 'Probing'
+          : 'Scanning';
+    const fileLabel = progress.current_file
+      ? (progress.current_file.split('/').pop() ?? progress.current_file)
+      : '';
+    const detailLabel = progress.detail ? ` - ${progress.detail}` : '';
+
+    return html`
+      <div class="scan-progress-bar">
+        <div class="scan-progress-info">
+          <span class="scan-progress-stage">${stageLabel}${detailLabel}</span>
+          <span class="scan-progress-file">${escapeHtml(fileLabel)}</span>
+          <span class="scan-progress-pct">${progress.percent}%</span>
+        </div>
+        <div class="scan-progress-track">
+          <div class="scan-progress-fill" style="width: ${progress.percent}%"></div>
+        </div>
+      </div>
     `;
   }
 
@@ -720,11 +824,8 @@ export class MovieDetailPage extends BaseComponent {
     try {
       await http.post('/command', { name: 'RescanMovie', movieId: id });
       showInfo('Scanning for movie files...');
-
-      setTimeout(() => {
-        this.movieQuery?.refetch();
-        showSuccess('File scan complete');
-      }, 5000);
+      // Progress updates arrive via WebSocket — no fake timeout needed.
+      // The scan_progress handler refetches movie data on completion.
     } catch {
       showError('Failed to scan files');
     }

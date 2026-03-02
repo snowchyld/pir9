@@ -1039,6 +1039,8 @@ async fn publish_progress(
             files_processed,
             percent,
             detail,
+            entity_ids: vec![],
+            scan_type: None,
         })
         .await;
 }

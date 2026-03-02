@@ -222,6 +222,8 @@ async fn run_server_mode(args: &Args) -> Result<()> {
                 hybrid_bus.clone(),
             );
             consumer_inner.set_media_config(media_config);
+            // Bridge scan progress to WebSocket event bus so frontend gets real-time updates
+            consumer_inner.set_ws_event_bus(state.event_bus.clone());
             let consumer = std::sync::Arc::new(consumer_inner);
 
             // Store in AppState for command.rs to register download imports

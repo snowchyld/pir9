@@ -315,6 +315,12 @@ pub enum Message {
         percent: u8,
         /// Detail string after probe: e.g. "1080p x265 HDR10", or "unchanged" for skipped files
         detail: Option<String>,
+        /// Entity IDs associated with this scan (filled by consumer, not by worker)
+        #[serde(default)]
+        entity_ids: Vec<i64>,
+        /// Scan type (filled by consumer, not by worker)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scan_type: Option<ScanType>,
     },
     /// Result sent from worker back to server
     ScanResult {

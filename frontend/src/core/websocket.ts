@@ -53,6 +53,20 @@ export interface QueueMessage extends WebSocketMessage {
   queue_id?: number;
 }
 
+export interface ScanProgressMessage extends WebSocketMessage {
+  type: 'scan_progress';
+  job_id: string;
+  worker_id: string;
+  stage: string;
+  current_file?: string;
+  files_total: number;
+  files_processed: number;
+  percent: number;
+  detail?: string;
+  entity_ids: number[];
+  scan_type?: string;
+}
+
 type MessageHandler = (message: WebSocketMessage) => void;
 
 /**
@@ -69,6 +83,7 @@ class WebSocketManager {
 
   readonly connectionState: Signal<ConnectionState> = signal('disconnected');
   readonly lastMessage: Signal<WebSocketMessage | null> = signal(null);
+  readonly scanProgress: Signal<ScanProgressMessage | null> = signal(null);
 
   /**
    * Connect to WebSocket server
@@ -239,6 +254,10 @@ class WebSocketManager {
       case 'queue_item_removed':
         this.handleQueueMessage(message as QueueMessage);
         break;
+
+      case 'scan_progress':
+        this.handleScanProgressMessage(message);
+        break;
     }
   }
 
@@ -336,6 +355,24 @@ class WebSocketManager {
   private handleQueueMessage(_message: QueueMessage): void {
     // Invalidate queue queries
     invalidateQueries(['/queue']);
+  }
+
+  private handleScanProgressMessage(message: WebSocketMessage): void {
+    const progress = message as ScanProgressMessage;
+    this.scanProgress.set(progress);
+
+    // Clear progress when scan reaches 100%
+    if (progress.percent >= 100) {
+      setTimeout(() => {
+        // Only clear if this is still the latest progress
+        if (this.scanProgress.value?.job_id === progress.job_id) {
+          this.scanProgress.set(null);
+        }
+      }, 2000);
+    }
+
+    // Invalidate running tasks so system status page updates in real-time
+    invalidateQueries(['/system/task/running']);
   }
 
   private scheduleReconnect(): void {

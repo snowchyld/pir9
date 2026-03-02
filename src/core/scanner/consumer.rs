@@ -20,7 +20,7 @@ use crate::core::datastore::repositories::{
 };
 use crate::core::datastore::Database;
 use crate::core::mediafiles::{compute_file_hash, derive_quality_from_media, MediaAnalyzer};
-use crate::core::messaging::{HybridEventBus, ImportFileSpec, Message, ScanType, ScannedFile};
+use crate::core::messaging::{EventBus, HybridEventBus, ImportFileSpec, Message, ScanType, ScannedFile};
 
 /// Tracks pending scan jobs and their results
 #[derive(Debug, Default)]
@@ -152,6 +152,9 @@ pub struct RunningJobInfo {
 pub struct ScanResultConsumer {
     db: Database,
     event_bus: HybridEventBus,
+    /// WebSocket event bus — when set, scan progress is forwarded here so
+    /// the frontend receives real-time updates via the WebSocket channel.
+    ws_event_bus: Option<EventBus>,
     pending_jobs: Arc<RwLock<PendingScanJobs>>,
     media_config: MediaConfig,
 }
@@ -162,6 +165,7 @@ impl ScanResultConsumer {
         Self {
             db,
             event_bus,
+            ws_event_bus: None,
             pending_jobs: Arc::new(RwLock::new(PendingScanJobs::default())),
             media_config: MediaConfig::default(),
         }
@@ -170,6 +174,11 @@ impl ScanResultConsumer {
     /// Set media config for episode naming during download imports
     pub fn set_media_config(&mut self, config: MediaConfig) {
         self.media_config = config;
+    }
+
+    /// Set the WebSocket event bus for forwarding scan progress to frontend clients
+    pub fn set_ws_event_bus(&mut self, bus: EventBus) {
+        self.ws_event_bus = Some(bus);
     }
 
     /// Get info about currently running scan jobs (for the UI).
@@ -346,22 +355,46 @@ impl ScanResultConsumer {
                             files_processed,
                             percent,
                             detail,
+                            ..
                         } => {
-                            let mut jobs = self.pending_jobs.write().await;
-                            if let Some(job) = jobs.jobs.get_mut(&job_id) {
-                                if !job.completed {
-                                    if job.worker_id.is_none() {
-                                        job.worker_id = Some(worker_id);
+                            // Look up entity context from pending job
+                            let (entity_ids, job_scan_type) = {
+                                let mut jobs = self.pending_jobs.write().await;
+                                let ctx = if let Some(job) = jobs.jobs.get_mut(&job_id) {
+                                    if !job.completed {
+                                        if job.worker_id.is_none() {
+                                            job.worker_id = Some(worker_id.clone());
+                                        }
+                                        job.progress = Some(ScanProgressInfo {
+                                            stage: stage.clone(),
+                                            current_file: current_file.clone(),
+                                            files_total,
+                                            files_processed,
+                                            percent,
+                                            detail: detail.clone(),
+                                        });
                                     }
-                                    job.progress = Some(ScanProgressInfo {
-                                        stage,
-                                        current_file,
-                                        files_total,
-                                        files_processed,
-                                        percent,
-                                        detail,
-                                    });
-                                }
+                                    (job.entity_ids.clone(), Some(job.scan_type))
+                                } else {
+                                    (vec![], None)
+                                };
+                                ctx
+                            };
+
+                            // Forward enriched progress to WebSocket
+                            if let Some(ref ws_bus) = self.ws_event_bus {
+                                ws_bus.publish(Message::ScanProgress {
+                                    job_id,
+                                    worker_id,
+                                    stage,
+                                    current_file,
+                                    files_total,
+                                    files_processed,
+                                    percent,
+                                    detail,
+                                    entity_ids,
+                                    scan_type: job_scan_type,
+                                }).await;
                             }
                         }
                         Message::ImportFilesResult {

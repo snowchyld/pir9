@@ -7,6 +7,8 @@ import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../
 import { type Episode, http, type QueueItem, type Series } from '../../core/http';
 import { createMutation, createQuery, invalidateQueries, useQueueQuery } from '../../core/query';
 import { signal } from '../../core/reactive';
+import type { ScanProgressMessage } from '../../core/websocket';
+import { wsManager } from '../../core/websocket';
 import { showError, showSuccess } from '../../stores/app.store';
 import type { EpisodeRenameDialog } from './episode-rename-dialog';
 import type { SeriesEditDialog } from './series-edit-dialog';
@@ -35,6 +37,8 @@ export class SeriesDetailPage extends BaseComponent {
   private seriesId = signal<number | null>(null);
   private titleSlug = signal<string | null>(null);
   private expandedSeasons = signal<Set<number>>(new Set());
+  private scanProgress = signal<ScanProgressMessage | null>(null);
+  private unsubScanProgress: (() => void) | null = null;
 
   private handleDocumentClick = (event: MouseEvent): void => {
     const dropdown = this.querySelector('.search-dropdown');
@@ -199,10 +203,30 @@ export class SeriesDetailPage extends BaseComponent {
       this.lookupSeriesId(slug);
     }
     document.addEventListener('click', this.handleDocumentClick);
+
+    // Subscribe to scan progress events for this series
+    this.unsubScanProgress = wsManager.on('scan_progress', (msg) => {
+      const progress = msg as ScanProgressMessage;
+      const id = this.seriesId.value;
+      if (id && progress.scan_type === 'rescan_series' && progress.entity_ids.includes(id)) {
+        this.scanProgress.set(progress);
+        this.requestUpdate();
+
+        if (progress.percent >= 100) {
+          setTimeout(() => {
+            this.scanProgress.set(null);
+            this.seriesQuery?.refetch();
+            this.episodesQuery?.refetch();
+            this.requestUpdate();
+          }, 2000);
+        }
+      }
+    });
   }
 
   protected onDestroy(): void {
     document.removeEventListener('click', this.handleDocumentClick);
+    this.unsubScanProgress?.();
   }
 
   protected template(): string {
@@ -365,6 +389,8 @@ export class SeriesDetailPage extends BaseComponent {
             </div>
           </div>
         </div>
+
+        ${this.renderScanProgress()}
 
         <div class="seasons-section">
           <h2 class="section-title">Seasons</h2>
@@ -828,6 +854,53 @@ export class SeriesDetailPage extends BaseComponent {
           margin: 0.25rem 0;
           background-color: var(--border-color);
         }
+
+        .scan-progress-bar {
+          padding: 0.75rem 1.25rem;
+          background: var(--bg-card);
+          border: 1px solid var(--border-glass);
+          border-radius: 0.75rem;
+        }
+
+        .scan-progress-info {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          margin-bottom: 0.5rem;
+          font-size: 0.8125rem;
+        }
+
+        .scan-progress-stage {
+          font-weight: 600;
+          color: var(--pir9-blue);
+        }
+
+        .scan-progress-file {
+          color: var(--text-color-muted);
+          flex: 1;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .scan-progress-pct {
+          font-weight: 600;
+          font-variant-numeric: tabular-nums;
+        }
+
+        .scan-progress-track {
+          height: 4px;
+          background: var(--border-glass);
+          border-radius: 2px;
+          overflow: hidden;
+        }
+
+        .scan-progress-fill {
+          height: 100%;
+          background: var(--pir9-blue);
+          border-radius: 2px;
+          transition: width 0.3s ease;
+        }
       </style>
     `;
   }
@@ -866,6 +939,35 @@ export class SeriesDetailPage extends BaseComponent {
     });
 
     return seasons.sort((a, b) => b.seasonNumber - a.seasonNumber);
+  }
+
+  private renderScanProgress(): string {
+    const progress = this.scanProgress.value;
+    if (!progress) return '';
+
+    const stageLabel =
+      progress.stage === 'hashing'
+        ? 'Hashing'
+        : progress.stage === 'probing'
+          ? 'Probing'
+          : 'Scanning';
+    const fileLabel = progress.current_file
+      ? (progress.current_file.split('/').pop() ?? progress.current_file)
+      : '';
+    const detailLabel = progress.detail ? ` - ${progress.detail}` : '';
+
+    return html`
+      <div class="scan-progress-bar">
+        <div class="scan-progress-info">
+          <span class="scan-progress-stage">${stageLabel}${detailLabel}</span>
+          <span class="scan-progress-file">${escapeHtml(fileLabel)}</span>
+          <span class="scan-progress-pct">${progress.percent}%</span>
+        </div>
+        <div class="scan-progress-track">
+          <div class="scan-progress-fill" style="width: ${progress.percent}%"></div>
+        </div>
+      </div>
+    `;
   }
 
   private renderSeason(
