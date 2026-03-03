@@ -2151,13 +2151,25 @@ async fn execute_episode_search(
     ))
 }
 
-/// Execute SeasonSearch command - search indexers for a whole season
+/// Execute SeasonSearch command - search indexers for a season pack
+///
+/// Searches with season_number set and episode_numbers empty so indexers return
+/// season packs (e.g. "Show S02 1080p BluRay"). If a pack is grabbed, all missing
+/// episodes in that season are tracked against the download.
 async fn execute_season_search(
     body: &serde_json::Value,
-    _db: &crate::core::datastore::Database,
+    db: &crate::core::datastore::Database,
     event_bus: &crate::core::messaging::EventBus,
 ) -> Result<String, String> {
-    // Parse series ID and season number from body
+    use crate::core::datastore::repositories::{
+        EpisodeRepository, IndexerRepository, QualityProfileRepository, SeriesRepository,
+        TrackedDownloadRepository,
+    };
+    use crate::core::indexers::search::IndexerSearchService;
+    use crate::core::indexers::SearchCriteria;
+    use crate::core::profiles::QualityProfileItem;
+    use crate::core::queue::service::TrackedDownloadService;
+
     let series_id = body
         .get("seriesId")
         .or_else(|| body.get("body").and_then(|b| b.get("seriesId")))
@@ -2171,13 +2183,208 @@ async fn execute_season_search(
         .map(|n| n as i32)
         .ok_or_else(|| "Missing seasonNumber".to_string())?;
 
+    // Load series
+    let series_repo = SeriesRepository::new(db.clone());
+    let series = series_repo
+        .get_by_id(series_id)
+        .await
+        .map_err(|e| format!("Failed to fetch series: {}", e))?
+        .ok_or_else(|| format!("Series {} not found", series_id))?;
+
     tracing::info!(
-        "SeasonSearch: searching for series {} season {}",
-        series_id,
+        "SeasonSearch: searching for {} (TVDB: {}) season {}",
+        series.title,
+        series.tvdb_id,
         season_number
     );
 
-    // Publish search event
+    // Get enabled indexers
+    let indexer_repo = IndexerRepository::new(db.clone());
+    let indexers = indexer_repo
+        .get_all()
+        .await
+        .map_err(|e| format!("Failed to fetch indexers: {}", e))?;
+    let enabled_indexers: Vec<_> = indexers
+        .into_iter()
+        .filter(|i| i.enable_automatic_search)
+        .collect();
+    if enabled_indexers.is_empty() {
+        return Ok("No indexers have automatic search enabled".to_string());
+    }
+
+    // Search with season-only criteria (no episode numbers = season pack search)
+    let criteria = SearchCriteria {
+        series_id: series.tvdb_id,
+        series_title: series.title.clone(),
+        episode_id: None,
+        season_number: Some(season_number),
+        episode_numbers: vec![],
+        absolute_episode_numbers: vec![],
+        special: false,
+    };
+
+    let search_service = IndexerSearchService::new(enabled_indexers);
+    let releases = match search_service.search(&criteria).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(
+                "SeasonSearch: search failed for {} S{:02}: {}",
+                series.title,
+                season_number,
+                e
+            );
+            return Err(format!("Search failed: {}", e));
+        }
+    };
+
+    let total_releases = releases.len();
+    tracing::info!(
+        "SeasonSearch: found {} releases for {} S{:02}",
+        total_releases,
+        series.title,
+        season_number
+    );
+
+    for (i, release) in releases.iter().take(5).enumerate() {
+        tracing::debug!(
+            "  {}. {} ({} - {:?})",
+            i + 1,
+            release.title,
+            release.indexer,
+            release.quality.quality
+        );
+    }
+
+    // Collect missing episode IDs for this season to track against the grab
+    let episode_repo = EpisodeRepository::new(db.clone());
+    let all_episodes = episode_repo
+        .get_by_series_id(series_id)
+        .await
+        .unwrap_or_default();
+    let season_episodes: Vec<_> = all_episodes
+        .iter()
+        .filter(|ep| ep.season_number == season_number)
+        .collect();
+
+    let tracked_repo = TrackedDownloadRepository::new(db.clone());
+    let active_downloads = tracked_repo.get_all_active().await.unwrap_or_default();
+    let downloading_ids: std::collections::HashSet<i64> = active_downloads
+        .iter()
+        .flat_map(|d| serde_json::from_str::<Vec<i64>>(&d.episode_ids).unwrap_or_default())
+        .collect();
+
+    let missing_episode_ids: Vec<i64> = season_episodes
+        .iter()
+        .filter(|ep| {
+            ep.monitored
+                && !ep.has_file
+                && ep.air_date_utc.is_some_and(|d| d < chrono::Utc::now())
+                && !downloading_ids.contains(&ep.id)
+        })
+        .map(|ep| ep.id)
+        .collect();
+
+    if missing_episode_ids.is_empty() {
+        tracing::info!(
+            "SeasonSearch: no missing episodes in {} S{:02}, skipping grab",
+            series.title,
+            season_number
+        );
+        return Ok(format!(
+            "Season search found {} releases for {} S{:02} but no missing episodes to grab",
+            total_releases,
+            series.title,
+            season_number
+        ));
+    }
+
+    tracing::info!(
+        "SeasonSearch: {} missing episodes in S{:02}: {:?}",
+        missing_episode_ids.len(),
+        season_number,
+        missing_episode_ids
+    );
+
+    // Quality check and auto-grab
+    let quality_repo = QualityProfileRepository::new(db.clone());
+    let mut grabbed = 0u32;
+
+    if let Ok(Some(profile)) = quality_repo.get_by_id(series.quality_profile_id).await {
+        let profile_items: Vec<QualityProfileItem> =
+            serde_json::from_str(&profile.items).unwrap_or_default();
+
+        let accept_any = profile.cutoff == 0
+            && profile_items
+                .iter()
+                .all(|item| !item.allowed || item.quality.id == 0);
+
+        let tracked_service = TrackedDownloadService::new(db.clone());
+
+        for mut release in releases {
+            let release_weight = release.quality.quality.weight();
+
+            if !accept_any {
+                let is_quality_allowed = profile_items.iter().any(|item| {
+                    item.allowed
+                        && (item.quality.id == release_weight
+                            || item.items.iter().any(|q| q.id == release_weight))
+                });
+
+                if !is_quality_allowed {
+                    tracing::debug!(
+                        "SeasonSearch: release '{}' weight={} rejected (quality not allowed)",
+                        release.title,
+                        release_weight
+                    );
+                    continue;
+                }
+
+                if release_weight < profile.cutoff {
+                    tracing::debug!(
+                        "SeasonSearch: release '{}' weight={} rejected (below cutoff {})",
+                        release.title,
+                        release_weight,
+                        profile.cutoff
+                    );
+                    continue;
+                }
+            }
+
+            // Grab season pack — track ALL missing episodes against this download
+            release.series_id = Some(series.id);
+            tracing::info!(
+                "SeasonSearch auto-grab: '{}' → {} S{:02} ({:?}, {} episodes)",
+                release.title,
+                series.title,
+                season_number,
+                release.quality.quality,
+                missing_episode_ids.len()
+            );
+
+            match tracked_service
+                .grab_release(&release, missing_episode_ids.clone(), None)
+                .await
+            {
+                Ok(tracked_id) => {
+                    grabbed += 1;
+                    tracing::info!(
+                        "SeasonSearch: grabbed successfully (tracked_id={})",
+                        tracked_id
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "SeasonSearch: failed to grab '{}': {}",
+                        release.title,
+                        e
+                    );
+                }
+            }
+            break; // Only grab the best matching release
+        }
+    }
+
+    // Publish search event for notifications
     event_bus
         .publish(crate::core::messaging::Message::SeasonSearchRequested {
             series_id,
@@ -2186,8 +2393,8 @@ async fn execute_season_search(
         .await;
 
     Ok(format!(
-        "Season search started for series {} season {}",
-        series_id, season_number
+        "Season search for {} S{:02}: found {} releases, grabbed {}",
+        series.title, season_number, total_releases, grabbed
     ))
 }
 

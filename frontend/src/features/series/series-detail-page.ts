@@ -128,6 +128,21 @@ export class SeriesDetailPage extends BaseComponent {
     },
   });
 
+  private seasonSearchMutation = createMutation({
+    mutationFn: (params: { seriesId: number; seasonNumber: number }) =>
+      http.post('/command', {
+        name: 'SeasonSearch',
+        seriesId: params.seriesId,
+        seasonNumber: params.seasonNumber,
+      }),
+    onSuccess: () => {
+      showSuccess('Season pack search started');
+    },
+    onError: () => {
+      showError('Failed to start season search');
+    },
+  });
+
   private rescanSeasonMutation = createMutation({
     mutationFn: (params: { seriesId: number; seasonNumber: number }) =>
       http.post('/command', {
@@ -1003,6 +1018,16 @@ export class SeriesDetailPage extends BaseComponent {
           </div>
           <button
             class="season-action-btn"
+            onclick="event.stopPropagation(); this.closest('series-detail-page').searchSeason(${season.seasonNumber})"
+            title="Search for ${seasonLabel} pack"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+          </button>
+          <button
+            class="season-action-btn"
             onclick="event.stopPropagation(); this.closest('series-detail-page').rescanSeason(${season.seasonNumber})"
             title="Rescan ${seasonLabel} files on disk"
           >
@@ -1205,6 +1230,12 @@ export class SeriesDetailPage extends BaseComponent {
     const episodeIds = episodes.filter((e) => e.seasonNumber === seasonNumber).map((e) => e.id);
     if (episodeIds.length === 0) return;
     this.monitorMutation.mutate({ episodeIds, monitored });
+  }
+
+  searchSeason(seasonNumber: number): void {
+    const id = this.seriesId.value;
+    if (!id) return;
+    this.seasonSearchMutation.mutate({ seriesId: id, seasonNumber });
   }
 
   rescanSeason(seasonNumber: number): void {
