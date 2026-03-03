@@ -74,6 +74,10 @@ pub struct WorkerRunner {
     /// Redis connection for job claiming (distributed lock)
     #[cfg(feature = "redis-events")]
     redis_conn: tokio::sync::Mutex<Option<redis::aio::ConnectionManager>>,
+    /// Limits the worker to one scan job at a time. When busy, incoming scan
+    /// requests are skipped (not claimed) so the other worker can pick them up.
+    /// ImportFilesRequest is NOT gated — it's part of the active scan workflow.
+    scan_semaphore: Arc<tokio::sync::Semaphore>,
     /// Statistics: number of scans completed
     scans_completed: std::sync::atomic::AtomicU64,
     /// Statistics: total files found
@@ -100,6 +104,7 @@ impl WorkerRunner {
             redis_url: redis_url.to_string(),
             #[cfg(feature = "redis-events")]
             redis_conn: tokio::sync::Mutex::new(None),
+            scan_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
             scans_completed: std::sync::atomic::AtomicU64::new(0),
             files_found: std::sync::atomic::AtomicU64::new(0),
             start_time: std::time::Instant::now(),
@@ -298,6 +303,15 @@ impl WorkerRunner {
                     return;
                 }
 
+                // Only accept one scan at a time — if busy, skip so the other worker can claim it
+                let permit = match self.scan_semaphore.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        info!("Worker busy with another scan, skipping job {}", job_id);
+                        return;
+                    }
+                };
+
                 // Try to claim this job — only one worker should process each scan
                 if !self.try_claim_job(job_id).await {
                     return;
@@ -312,6 +326,9 @@ impl WorkerRunner {
                     let job_id = job_id.clone();
 
                     tokio::spawn(async move {
+                        // Hold the permit for the duration of the scan — dropped when this
+                        // block exits, allowing the worker to accept the next job.
+                        let _permit = permit;
                         let mut total_files: u64 = 0;
                         let scan_start = std::time::Instant::now();
 
@@ -393,6 +410,8 @@ impl WorkerRunner {
                     });
                 } else {
                     // Batch mode for non-download scans (RescanSeries, RescanMovie, etc.)
+                    // Hold permit until scan completes — dropped at end of block
+                    let _permit = permit;
                     let relevant_refs: Vec<(i64, &String)> =
                         relevant.iter().map(|(id, p)| (*id, p)).collect();
                     let result = self.execute_scan(job_id, scan_type, &relevant_refs, known_files, event_bus).await;
