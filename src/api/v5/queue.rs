@@ -2530,7 +2530,11 @@ async fn get_import_preview(
             season_number: Some(season),
             episode_number: Some(first_ep),
             episode_numbers: all_ep_nums,
-            episode_title: matched_episodes.first().map(|e| e.title.clone()),
+            episode_title: if matched_episodes.len() > 1 {
+                Some(matched_episodes.iter().map(|e| e.title.as_str()).collect::<Vec<_>>().join(" + "))
+            } else {
+                matched_episodes.first().map(|e| e.title.clone())
+            },
             destination_path: dest,
             matched: !matched_episodes.is_empty(),
             existing_file: has_file,

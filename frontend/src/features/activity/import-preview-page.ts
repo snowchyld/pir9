@@ -395,7 +395,10 @@ export class ImportPreviewPage extends BaseComponent {
     } else {
       episodeLabel = '-';
     }
-    const epTitle = firstOverrideEp?.title ?? file.episodeTitle;
+    const epTitle =
+      overrideEps.length > 1
+        ? overrideEps.map((e) => e.title).join(' + ')
+        : (firstOverrideEp?.title ?? file.episodeTitle);
     const destFilename = file.destinationPath?.split('/').pop() ?? '';
     const hasExistingFile = isManuallyMatched
       ? (firstOverrideEp?.hasFile ?? false)
