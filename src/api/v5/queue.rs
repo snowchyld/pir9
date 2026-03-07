@@ -507,8 +507,15 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                 "torrent"
             };
 
+            let total_dl_count = downloads.len();
+            let mut skip_tracked = 0usize;
+            let mut skip_category = 0usize;
+            let mut skip_has_file = 0usize;
+            let mut included = 0usize;
+
             for dl in downloads {
                 if tracked_ids.contains(&dl.id) {
+                    skip_tracked += 1;
                     continue;
                 }
 
@@ -517,6 +524,7 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                 if !client_categories.all.is_empty()
                     && !client_categories.all.iter().any(|c| c == &dl_cat)
                 {
+                    skip_category += 1;
                     continue;
                 }
 
@@ -721,19 +729,27 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                         media_has_file = ep.has_file;
                     }
                 } else if matched_series_id.is_some() {
-                    // For season packs (no specific episode matched),
-                    // check if all episodes in the season already have files
+                    // For season/series packs (no specific episode matched),
+                    // check if all relevant episodes already have files.
+                    // Use the full series episode list to avoid false positives
+                    // when a multi-season pack (e.g. "S01-S02") only parses
+                    // the first season number.
                     if let Some(ref info) = parsed {
                         if info.full_season {
-                            if let (Some(season), Some(series_id)) =
-                                (info.season_number, matched_series_id)
-                            {
-                                let season_eps = episode_repo
-                                    .get_by_series_and_season(series_id, season)
+                            if let Some(series_id) = matched_series_id {
+                                let all_eps = episode_repo
+                                    .get_by_series_id(series_id)
                                     .await
                                     .unwrap_or_default();
-                                if !season_eps.is_empty()
-                                    && season_eps.iter().all(|e| e.has_file)
+                                // Check all non-special episodes in the series.
+                                // A season pack that matches a series should only
+                                // be hidden if the entire series is complete.
+                                let regular_eps: Vec<_> = all_eps
+                                    .iter()
+                                    .filter(|e| e.season_number > 0)
+                                    .collect();
+                                if !regular_eps.is_empty()
+                                    && regular_eps.iter().all(|e| e.has_file)
                                 {
                                     media_has_file = true;
                                 }
@@ -749,6 +765,7 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                         DownloadState::Completed | DownloadState::Seeding
                     )
                 {
+                    skip_has_file += 1;
                     continue;
                 }
 
@@ -873,7 +890,13 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                 });
 
                 id_counter += 1;
+                included += 1;
             }
+
+            tracing::debug!(
+                "Queue filter for client '{}': total={}, skip_tracked={}, skip_category={}, skip_has_file={}, included={}",
+                db_client.name, total_dl_count, skip_tracked, skip_category, skip_has_file, included
+            );
         }
     }
 
