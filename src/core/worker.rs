@@ -340,7 +340,7 @@ impl WorkerRunner {
                             }
 
                             info!("[scan][download] Scanning {}", path_str);
-                            let mut files = scanner::scan_series_directory(&path);
+                            let mut files = scanner::scan_download_directory(&path);
                             let file_count = files.len();
                             info!(
                                 "[scan][download] Found {} video file(s) in {}",
@@ -899,7 +899,7 @@ impl WorkerRunner {
 
                     let scan_start = std::time::Instant::now();
                     info!("[scan][download] Scanning {}", path_str);
-                    let mut files = scanner::scan_series_directory(&path);
+                    let mut files = scanner::scan_download_directory(&path);
                     let file_count = files.len();
                     info!("[scan][download] Found {} video file(s) in {}", file_count, path_str);
 

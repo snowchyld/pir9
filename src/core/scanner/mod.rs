@@ -425,6 +425,62 @@ pub fn scan_series_directory(series_path: &Path) -> Vec<ScannedFile> {
     results
 }
 
+/// Scan a download directory for video files, including files that can't be parsed.
+///
+/// Unlike `scan_series_directory`, this includes unparseable files (with empty
+/// episode_numbers) so the consumer can apply manual overrides from the import
+/// preview UI. Without this, files like "Serenity.2005.1080p.BrRip.mkv" are
+/// silently dropped and manual overrides never get a chance to match.
+pub fn scan_download_directory(dir: &Path) -> Vec<ScannedFile> {
+    let video_files = scan_directory_for_videos(dir);
+    let mut results = Vec::with_capacity(video_files.len());
+
+    for file_path in video_files {
+        let filename = match file_path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+
+        let mut parsed_episodes = parse_episodes_from_filename(&filename);
+
+        if is_bare_number_match(&filename) {
+            if let Some(parent) = file_path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+            {
+                if let Some(folder_season) = season_from_folder(parent) {
+                    for ep in &mut parsed_episodes {
+                        ep.0 = folder_season;
+                    }
+                }
+            }
+        }
+
+        let file_size = std::fs::metadata(&file_path)
+            .map(|m| m.len() as i64)
+            .unwrap_or(0);
+
+        let release_group = extract_release_group(&filename);
+        let season_number = parsed_episodes.first().map(|(s, _)| *s);
+        let episode_numbers: Vec<i32> = parsed_episodes.iter().map(|(_, e)| *e).collect();
+
+        results.push(ScannedFile {
+            path: file_path,
+            size: file_size,
+            season_number,
+            episode_numbers,
+            release_group,
+            filename,
+            media_info: None,
+            quality: None,
+            file_hash: None,
+        });
+    }
+
+    results
+}
+
 /// Scan a movie folder for the largest video file (max depth 2).
 ///
 /// Returns at most one ScannedFile — the largest video file found.
