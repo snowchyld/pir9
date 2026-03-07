@@ -65,6 +65,9 @@ struct PendingDownloadImport {
     file_mappings: HashMap<PathBuf, ImportMapping>,
     /// Manual episode overrides from import preview UI: source_file → [(season, episode)]
     overrides: HashMap<String, Vec<(i32, i32)>>,
+    /// Pre-resolved episodes from the import handler (season, episode) pairs.
+    /// Used as fallback when filename has no S##E## pattern and no overrides are provided.
+    pre_resolved_episodes: Vec<(i32, i32)>,
 }
 
 /// Per-file data needed to insert episode_file records after the worker moves the file
@@ -250,6 +253,11 @@ impl ScanResultConsumer {
         // For now we key by job_id and store one at a time (imports dispatched per-download)
         for import_info in &imports {
             let key = format!("{}:{}", job_id, import_info.download_id);
+            let pre_resolved: Vec<(i32, i32)> = import_info
+                .episodes
+                .iter()
+                .map(|ep| (ep.season_number, ep.episode_number))
+                .collect();
             jobs.download_imports.insert(
                 key,
                 PendingDownloadImport {
@@ -259,6 +267,7 @@ impl ScanResultConsumer {
                     series_id: import_info.series.as_ref().map(|s| s.id),
                     file_mappings: HashMap::new(),
                     overrides: import_info.overrides.clone(),
+                    pre_resolved_episodes: pre_resolved,
                 },
             );
         }
@@ -708,19 +717,23 @@ impl ScanResultConsumer {
         let mut download_title = String::new();
         let file_overrides: HashMap<String, Vec<(i32, i32)>>;
         let known_series_id: Option<i64>;
+        let pre_resolved_episodes: Vec<(i32, i32)>;
         if let Some(key) = download_keys.first() {
             let jobs = self.pending_jobs.read().await;
             if let Some(pending) = jobs.download_imports.get(key) {
                 download_title = pending.download_title.clone();
                 file_overrides = pending.overrides.clone();
                 known_series_id = pending.series_id;
+                pre_resolved_episodes = pending.pre_resolved_episodes.clone();
             } else {
                 file_overrides = HashMap::new();
                 known_series_id = None;
+                pre_resolved_episodes = Vec::new();
             }
         } else {
             file_overrides = HashMap::new();
             known_series_id = None;
+            pre_resolved_episodes = Vec::new();
         }
 
         // Process each file (typically 1 in per-file streaming mode)
@@ -748,6 +761,15 @@ impl ScanResultConsumer {
                     info!(
                         "[worker:{}] manual override for '{}' → {:?}",
                         worker_id, filename, pairs
+                    );
+                } else if !pre_resolved_episodes.is_empty() {
+                    // Fallback: use pre-resolved episodes from the import handler.
+                    // This covers files without S##E## patterns (e.g., movie-style names)
+                    // where the user previously assigned episodes via the import preview UI.
+                    parsed_eps = pre_resolved_episodes.clone();
+                    info!(
+                        "[worker:{}] using pre-resolved episodes for '{}' → {:?}",
+                        worker_id, filename, pre_resolved_episodes
                     );
                 } else {
                     debug!("[worker:{}] skipping unmatched file '{}'", worker_id, filename);
@@ -960,6 +982,7 @@ impl ScanResultConsumer {
                         series_id: known_series_id,
                         file_mappings,
                         overrides: HashMap::new(),
+                        pre_resolved_episodes: Vec::new(),
                     },
                 );
                 // Map import_job_id back to scan job for tracker updates
