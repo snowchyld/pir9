@@ -59,6 +59,8 @@ struct PendingDownloadImport {
     download_id: String,
     download_client_id: i64,
     download_title: String,
+    /// Series ID from the download tracker (known at dispatch time)
+    series_id: Option<i64>,
     /// Mapping: dest_path → import details for DB insert
     file_mappings: HashMap<PathBuf, ImportMapping>,
     /// Manual episode overrides from import preview UI: source_file → (season, episode)
@@ -254,6 +256,7 @@ impl ScanResultConsumer {
                     download_id: import_info.download_id.clone(),
                     download_client_id: import_info.download_client_id,
                     download_title: import_info.title.clone(),
+                    series_id: import_info.series.as_ref().map(|s| s.id),
                     file_mappings: HashMap::new(),
                     overrides: import_info.overrides.clone(),
                 },
@@ -704,16 +707,20 @@ impl ScanResultConsumer {
         // Get download info from the registered import
         let mut download_title = String::new();
         let file_overrides: HashMap<String, (i32, i32)>;
+        let known_series_id: Option<i64>;
         if let Some(key) = download_keys.first() {
             let jobs = self.pending_jobs.read().await;
             if let Some(pending) = jobs.download_imports.get(key) {
                 download_title = pending.download_title.clone();
                 file_overrides = pending.overrides.clone();
+                known_series_id = pending.series_id;
             } else {
                 file_overrides = HashMap::new();
+                known_series_id = None;
             }
         } else {
             file_overrides = HashMap::new();
+            known_series_id = None;
         }
 
         // Process each file (typically 1 in per-file streaming mode)
@@ -736,63 +743,118 @@ impl ScanResultConsumer {
                 }
             }
 
-            // Try to match to a series using the full filename as a parsed title
+            // Try to match to a series and episodes.
+            // Strategy 1: parse filename → match series → match episodes (standard path)
+            // Strategy 2: use known series_id + manual overrides (fallback for unparseable filenames)
             let parsed_info = crate::core::parser::parse_title(filename);
-            let parsed_info = match parsed_info {
-                Some(pi) => pi,
-                None => {
-                    debug!(
-                        "[worker:{}] could not parse title from '{}'",
-                        worker_id, filename
-                    );
-                    continue;
-                }
-            };
 
-            // Match series
-            let series = match crate::core::download::import::match_series_standalone(
-                &self.db,
-                &parsed_info,
-            )
-            .await
-            {
-                Ok(Some(s)) => s,
-                _ => {
-                    info!(
-                        "[worker:{}] no series match for '{}'",
-                        worker_id, filename
-                    );
-                    continue;
-                }
-            };
+            let (series, episodes, parsed_info) = if let Some(pi) = parsed_info {
+                // Standard path: parse title succeeded, match series and episodes
+                let s = match crate::core::download::import::match_series_standalone(
+                    &self.db,
+                    &pi,
+                )
+                .await
+                {
+                    Ok(Some(s)) => s,
+                    _ => {
+                        info!(
+                            "[worker:{}] no series match for '{}'",
+                            worker_id, filename
+                        );
+                        continue;
+                    }
+                };
 
-            // Match episodes
-            let episodes = match crate::core::download::import::match_episodes_standalone(
-                &self.db,
-                &series,
-                &parsed_info,
-            )
-            .await
-            {
-                Ok(eps) if !eps.is_empty() => {
-                    let ep_list: String = eps
-                        .iter()
-                        .map(|e| format!("S{:02}E{:02}", e.season_number, e.episode_number))
-                        .collect::<Vec<_>>()
-                        .join("+");
-                    info!(
-                        "[worker:{}] '{}' → '{}' {} (parsed {:?})",
-                        worker_id, filename, series.title, ep_list, parsed_eps
-                    );
-                    eps
+                let eps = match crate::core::download::import::match_episodes_standalone(
+                    &self.db,
+                    &s,
+                    &pi,
+                )
+                .await
+                {
+                    Ok(eps) if !eps.is_empty() => {
+                        let ep_list: String = eps
+                            .iter()
+                            .map(|e| format!("S{:02}E{:02}", e.season_number, e.episode_number))
+                            .collect::<Vec<_>>()
+                            .join("+");
+                        info!(
+                            "[worker:{}] '{}' → '{}' {} (parsed {:?})",
+                            worker_id, filename, s.title, ep_list, parsed_eps
+                        );
+                        eps
+                    }
+                    _ => {
+                        info!(
+                            "[worker:{}] '{}' → '{}' — no episode match (parsed {:?})",
+                            worker_id, filename, s.title, parsed_eps
+                        );
+                        continue;
+                    }
+                };
+                (s, eps, pi)
+            } else if let Some(sid) = known_series_id {
+                // Fallback: filename unparseable but we know the series from the download tracker
+                let series_repo = SeriesRepository::new(self.db.clone());
+                let s = match series_repo.get_by_id(sid).await {
+                    Ok(Some(s)) => s,
+                    _ => {
+                        debug!(
+                            "[worker:{}] could not look up known series_id={} for '{}'",
+                            worker_id, sid, filename
+                        );
+                        continue;
+                    }
+                };
+
+                // Use manual overrides (parsed_eps) to find the episodes
+                let episode_repo = EpisodeRepository::new(self.db.clone());
+                let mut eps = Vec::new();
+                for &(season, episode) in &parsed_eps {
+                    if let Ok(Some(ep)) = episode_repo
+                        .get_by_series_season_episode(sid, season, episode)
+                        .await
+                    {
+                        eps.push(ep);
+                    }
                 }
-                _ => {
+
+                if eps.is_empty() {
                     info!(
-                        "[worker:{}] '{}' → '{}' — no episode match (parsed {:?})",
-                        worker_id, filename, series.title, parsed_eps
+                        "[worker:{}] '{}' → '{}' — no episode match for overrides {:?}",
+                        worker_id, filename, s.title, parsed_eps
                     );
                     continue;
                 }
+
+                let ep_list: String = eps
+                    .iter()
+                    .map(|e| format!("S{:02}E{:02}", e.season_number, e.episode_number))
+                    .collect::<Vec<_>>()
+                    .join("+");
+                info!(
+                    "[worker:{}] '{}' → '{}' {} (override, known series)",
+                    worker_id, filename, s.title, ep_list
+                );
+
+                // Build a minimal ParsedEpisodeInfo for downstream use
+                // Quality comes from the worker probe (file.quality), not parsed_info
+                let first_season = parsed_eps.first().map(|&(s, _)| s).unwrap_or(1);
+                let ep_numbers: Vec<i32> = parsed_eps.iter().map(|&(_, e)| e).collect();
+                let pi = crate::core::parser::ParsedEpisodeInfo {
+                    series_title: s.title.clone(),
+                    season_number: Some(first_season),
+                    episode_numbers: ep_numbers,
+                    ..Default::default()
+                };
+                (s, eps, pi)
+            } else {
+                debug!(
+                    "[worker:{}] could not parse title from '{}' and no known series",
+                    worker_id, filename
+                );
+                continue;
             };
 
             // Same-size skip: if ALL matched episodes already have files of the same size,
@@ -872,6 +934,7 @@ impl ScanResultConsumer {
                         download_id: String::new(), // cleanup handled by tracker
                         download_client_id: 0,
                         download_title: download_title.clone(),
+                        series_id: known_series_id,
                         file_mappings,
                         overrides: HashMap::new(),
                     },
