@@ -422,6 +422,7 @@ export interface QueueResponse {
   pageSize: number;
   totalRecords: number;
   records: QueueItem[];
+  hiddenImportedCount: number;
 }
 
 export interface HistoryRecord {

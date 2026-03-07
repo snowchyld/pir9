@@ -51,6 +51,17 @@ export class QueuePage extends BaseComponent {
     },
   });
 
+  private clearImportedMutation = createMutation({
+    mutationFn: () => http.delete<void>('/queue/tracked', { params: { status: 4 } }),
+    onSuccess: () => {
+      invalidateQueries(['/queue']);
+      showSuccess('Cleared imported download tracking — torrents will reappear for reimport');
+    },
+    onError: () => {
+      showError('Failed to clear imported downloads');
+    },
+  });
+
   protected onInit(): void {
     this.watch(this.queueQuery.data);
     this.watch(this.queueQuery.isLoading);
@@ -67,6 +78,7 @@ export class QueuePage extends BaseComponent {
   protected template(): string {
     const response = this.queueQuery.data.value as QueueResponse | undefined;
     const allItems = response?.records ?? [];
+    const hiddenImported = response?.hiddenImportedCount ?? 0;
     const isLoading = this.queueQuery.isLoading.value;
     const isError = this.queueQuery.isError.value;
 
@@ -108,6 +120,22 @@ export class QueuePage extends BaseComponent {
           ${safeHtml(this.renderTab('movies', 'Movies', moviesCount))}
           ${safeHtml(this.renderTab('anime', 'Anime', animeCount))}
         </div>
+
+        ${
+          hiddenImported > 0
+            ? `<div class="hidden-imports-banner">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="12" y1="8" x2="12" y2="12"></line>
+                  <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                </svg>
+                <span>${hiddenImported} previously imported download${hiddenImported === 1 ? '' : 's'} hidden from queue</span>
+                <button class="clear-imported-btn" onclick="this.closest('queue-page').handleClearImported()">
+                  Clear Import Tracking
+                </button>
+              </div>`
+            : ''
+        }
 
         <div class="queue-content">
           ${isLoading ? this.renderLoading() : ''}
@@ -169,6 +197,45 @@ export class QueuePage extends BaseComponent {
 
         .refresh-btn:hover {
           background-color: var(--btn-default-bg-hover);
+        }
+
+        /* Hidden imports banner */
+        .hidden-imports-banner {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          padding: 0.75rem 1rem;
+          background-color: var(--bg-card);
+          border: 1px solid var(--color-warning, #f39c12);
+          border-radius: 0.375rem;
+          font-size: 0.875rem;
+          color: var(--text-color);
+        }
+
+        .hidden-imports-banner svg {
+          flex-shrink: 0;
+          color: var(--color-warning, #f39c12);
+        }
+
+        .hidden-imports-banner span {
+          flex: 1;
+        }
+
+        .clear-imported-btn {
+          flex-shrink: 0;
+          padding: 0.375rem 0.75rem;
+          background-color: var(--color-warning, #f39c12);
+          color: var(--color-white, #fff);
+          border: none;
+          border-radius: 0.25rem;
+          font-size: 0.8125rem;
+          font-weight: 500;
+          cursor: pointer;
+          transition: opacity 0.15s;
+        }
+
+        .clear-imported-btn:hover {
+          opacity: 0.85;
         }
 
         /* Loading / Error */
@@ -737,6 +804,16 @@ export class QueuePage extends BaseComponent {
   handleRemove(id: number): void {
     if (confirm('Remove this item from the queue?')) {
       this.removeItemMutation.mutate({ id, removeFromClient: true });
+    }
+  }
+
+  handleClearImported(): void {
+    if (
+      confirm(
+        'Clear all import tracking records? Previously imported torrents will reappear in the queue for reimport.',
+      )
+    ) {
+      this.clearImportedMutation.mutate(undefined);
     }
   }
 

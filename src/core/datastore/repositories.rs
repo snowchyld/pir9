@@ -2342,6 +2342,27 @@ impl TrackedDownloadRepository {
         .await?;
         Ok(())
     }
+
+    /// Delete all tracked downloads with a given status. Returns count deleted.
+    pub async fn delete_all_by_status(&self, status: i32) -> Result<u64> {
+        let pool = self.db.pool();
+        let result = sqlx::query("DELETE FROM tracked_downloads WHERE status = $1")
+            .bind(status)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Count tracked downloads with a given status.
+    pub async fn count_by_status(&self, status: i32) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM tracked_downloads WHERE status = $1")
+                .bind(status)
+                .fetch_one(pool)
+                .await?;
+        Ok(row.0)
+    }
 }
 
 /// Repository for indexers

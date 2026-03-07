@@ -255,6 +255,10 @@ pub struct QueueResponse {
     pub sort_direction: String,
     pub total_records: i64,
     pub records: Vec<QueueResource>,
+    /// Number of previously imported downloads hidden from the queue.
+    /// These have tracked_download records with status=4 (Imported) that
+    /// suppress the torrent from reappearing. Clear them to reimport.
+    pub hidden_imported_count: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -885,6 +889,10 @@ async fn list_queue(
     let include_series = params.include_series.unwrap_or(true);
     let mut all_downloads = fetch_all_downloads(&state, include_unknown).await;
 
+    // Count hidden imported downloads (status=4) so the frontend can offer to clear them
+    let td_repo = TrackedDownloadRepository::new(state.db.clone());
+    let hidden_imported_count = td_repo.count_by_status(4).await.unwrap_or(0);
+
     // Enrich with episode/series/movie metadata
     if include_episode || include_series {
         let episode_repo = EpisodeRepository::new(state.db.clone());
@@ -955,6 +963,7 @@ async fn list_queue(
             .unwrap_or_else(|| "ascending".to_string()),
         total_records,
         records,
+        hidden_imported_count,
     })
 }
 
@@ -2492,11 +2501,57 @@ async fn get_import_preview(
     }))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackedDeleteQuery {
+    /// Filter by tracked download status (e.g. 4 = Imported)
+    pub status: Option<i32>,
+}
+
+/// Clear tracked download records, optionally filtered by status.
+/// This allows previously imported torrents to reappear in the queue for reimport.
+async fn clear_tracked_downloads(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<TrackedDeleteQuery>,
+) -> Json<QueueActionResponse> {
+    let td_repo = TrackedDownloadRepository::new(state.db.clone());
+
+    let deleted = if let Some(status) = query.status {
+        td_repo.delete_all_by_status(status).await.unwrap_or(0)
+    } else {
+        // Without a status filter, only clear imported (status=4) as a safe default
+        td_repo.delete_all_by_status(4).await.unwrap_or(0)
+    };
+
+    tracing::info!("Cleared {} tracked download records (status filter: {:?})", deleted, query.status);
+    Json(QueueActionResponse { success: true })
+}
+
+/// Delete a single tracked download record by ID.
+async fn delete_tracked_download(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Json<QueueActionResponse> {
+    let td_repo = TrackedDownloadRepository::new(state.db.clone());
+    match td_repo.delete(id).await {
+        Ok(()) => {
+            tracing::info!("Deleted tracked download record: {}", id);
+            Json(QueueActionResponse { success: true })
+        }
+        Err(e) => {
+            tracing::warn!("Failed to delete tracked download {}: {}", id, e);
+            Json(QueueActionResponse { success: false })
+        }
+    }
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_queue).delete(remove_from_queue))
         .route("/status", get(get_queue_status))
         .route("/details", get(get_queue_details))
+        .route("/tracked", axum::routing::delete(clear_tracked_downloads))
+        .route("/tracked/{id}", axum::routing::delete(delete_tracked_download))
         .route("/{id}", get(get_queue_item).delete(remove_queue_item))
         .route("/{id}/grab", get(grab_release))
         .route("/{id}/import", axum::routing::post(import_queue_item))
