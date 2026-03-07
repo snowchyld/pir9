@@ -194,11 +194,26 @@ fn resolve_token(token: &str, ctx: &EpisodeNamingContext, multi_episode_style: i
         }
 
         "Episode Title" => {
-            let ep = ctx.episodes.first();
-            match ep {
-                Some(e) if !e.title.is_empty() => e.title.clone(),
-                Some(e) => format!("Episode {}", e.episode_number),
-                None => "Episode 0".to_string(),
+            if ctx.episodes.len() > 1 {
+                // Multi-episode: join all titles with " + "
+                ctx.episodes
+                    .iter()
+                    .map(|e| {
+                        if e.title.is_empty() {
+                            format!("Episode {}", e.episode_number)
+                        } else {
+                            e.title.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" + ")
+            } else {
+                let ep = ctx.episodes.first();
+                match ep {
+                    Some(e) if !e.title.is_empty() => e.title.clone(),
+                    Some(e) => format!("Episode {}", e.episode_number),
+                    None => "Episode 0".to_string(),
+                }
             }
         }
 
@@ -420,6 +435,12 @@ mod tests {
     }
 
     fn test_episode(season: i32, episode: i32) -> EpisodeDbModel {
+        let title = match episode {
+            1 => "Fastest Man Alive",
+            2 => "Things You Can't Outrun",
+            3 => "Going Rogue",
+            _ => "Fastest Man Alive",
+        };
         EpisodeDbModel {
             id: 100 + episode as i64,
             series_id: 1,
@@ -431,7 +452,7 @@ mod tests {
             scene_absolute_episode_number: None,
             scene_episode_number: None,
             scene_season_number: None,
-            title: "Fastest Man Alive".to_string(),
+            title: title.to_string(),
             overview: None,
             air_date: Some(NaiveDate::from_ymd_opt(2024, 1, 15).expect("valid date")),
             air_date_utc: None,
@@ -468,6 +489,7 @@ mod tests {
             anime_episode_format:
                 "{Series Title} - S{season:00}E{episode:00} - {absolute:000} - {Episode Title} [{Quality Full}]"
                     .to_string(),
+            series_folder_format: "{Series TitleYear}".to_string(),
             season_folder_format: "Season {season:00}".to_string(),
             specials_folder_format: "Specials".to_string(),
             multi_episode_style: 0,
@@ -554,10 +576,10 @@ mod tests {
         };
 
         let result = build_episode_filename(&config, &ctx);
-        // Extend: bare numbers after dash (S01E01-02-03)
+        // Extend: bare numbers after dash (S01E01-02-03), multi-episode title joined
         assert_eq!(
             result,
-            "The Flash - S01E01-02-03 - Fastest Man Alive [WEBDL-1080p]"
+            "The Flash - S01E01-02-03 - Fastest Man Alive + Things You Can't Outrun + Going Rogue [WEBDL-1080p]"
         );
     }
 
@@ -579,7 +601,7 @@ mod tests {
         // Duplicate: full SxxExx repeated with dot separator
         assert_eq!(
             result,
-            "The Flash - S01E01.S01E02.S01E03 - Fastest Man Alive [WEBDL-1080p]"
+            "The Flash - S01E01.S01E02.S01E03 - Fastest Man Alive + Things You Can't Outrun + Going Rogue [WEBDL-1080p]"
         );
     }
 
@@ -601,7 +623,7 @@ mod tests {
         // Repeat: E-prefixed numbers, no separator (S01E01E02E03)
         assert_eq!(
             result,
-            "The Flash - S01E01E02E03 - Fastest Man Alive [WEBDL-1080p]"
+            "The Flash - S01E01E02E03 - Fastest Man Alive + Things You Can't Outrun + Going Rogue [WEBDL-1080p]"
         );
     }
 
@@ -623,7 +645,7 @@ mod tests {
         // Scene: E-prefixed numbers with dash separator (S01E01-E02-E03)
         assert_eq!(
             result,
-            "The Flash - S01E01-E02-E03 - Fastest Man Alive [WEBDL-1080p]"
+            "The Flash - S01E01-E02-E03 - Fastest Man Alive + Things You Can't Outrun + Going Rogue [WEBDL-1080p]"
         );
     }
 
@@ -645,7 +667,7 @@ mod tests {
         // Range: bare numbers, first and last (S01E01-03)
         assert_eq!(
             result,
-            "The Flash - S01E01-03 - Fastest Man Alive [WEBDL-1080p]"
+            "The Flash - S01E01-03 - Fastest Man Alive + Things You Can't Outrun + Going Rogue [WEBDL-1080p]"
         );
     }
 
@@ -667,7 +689,7 @@ mod tests {
         // Prefixed Range: first bare, last with E prefix (S01E01-E03)
         assert_eq!(
             result,
-            "The Flash - S01E01-E03 - Fastest Man Alive [WEBDL-1080p]"
+            "The Flash - S01E01-E03 - Fastest Man Alive + Things You Can't Outrun + Going Rogue [WEBDL-1080p]"
         );
     }
 

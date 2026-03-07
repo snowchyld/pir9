@@ -1186,6 +1186,7 @@ mod tests {
             redis_url: "redis://localhost".to_string(),
             #[cfg(feature = "redis-events")]
             redis_conn: tokio::sync::Mutex::new(None),
+            scan_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
             scans_completed: std::sync::atomic::AtomicU64::new(0),
             files_found: std::sync::atomic::AtomicU64::new(0),
             start_time: std::time::Instant::now(),
