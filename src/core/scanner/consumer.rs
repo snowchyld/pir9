@@ -730,8 +730,20 @@ impl ScanResultConsumer {
             // Parse episode info from the filename, falling back to manual overrides
             let mut parsed_eps = crate::core::scanner::parse_episodes_from_filename(filename);
             if parsed_eps.is_empty() {
-                // Check manual overrides from import preview UI
-                if let Some(pairs) = file_overrides.get(filename) {
+                // Check manual overrides from import preview UI.
+                // Override keys come from the download client file list (relative paths
+                // like "folder/file.mkv") while filename is the basename only ("file.mkv").
+                // Try exact match first, then match by basename of the override key.
+                let override_match = file_overrides.get(filename).or_else(|| {
+                    file_overrides.iter().find_map(|(key, pairs)| {
+                        let key_basename = std::path::Path::new(key)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(key);
+                        if key_basename == filename { Some(pairs) } else { None }
+                    })
+                });
+                if let Some(pairs) = override_match {
                     parsed_eps = pairs.clone();
                     info!(
                         "[worker:{}] manual override for '{}' → {:?}",
