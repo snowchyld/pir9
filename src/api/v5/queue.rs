@@ -2073,6 +2073,9 @@ pub struct ImportPreviewFile {
     pub source_size: i64,
     pub season_number: Option<i32>,
     pub episode_number: Option<i32>,
+    /// All matched episode numbers (for multi-episode files like E07-E08)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub episode_numbers: Vec<i32>,
     pub episode_title: Option<String>,
     pub destination_path: Option<String>,
     pub matched: bool,
@@ -2306,6 +2309,7 @@ async fn get_import_preview(
                     source_size: f.size,
                     season_number: None,
                     episode_number: None,
+                    episode_numbers: Vec::new(),
                     episode_title: None,
                     destination_path: if is_video {
                         Some(movie.path.clone())
@@ -2393,6 +2397,7 @@ async fn get_import_preview(
                 source_size: f.size,
                 season_number: None,
                 episode_number: None,
+                episode_numbers: Vec::new(),
                 episode_title: None,
                 destination_path: None,
                 matched: false,
@@ -2440,6 +2445,7 @@ async fn get_import_preview(
                     source_size: f.size,
                     season_number: Some(season),
                     episode_number: Some(ep),
+                    episode_numbers: vec![ep],
                     episode_title: matched_ep.map(|e| e.title.clone()),
                     destination_path: dest,
                     matched: true,
@@ -2452,6 +2458,7 @@ async fn get_import_preview(
                     source_size: f.size,
                     season_number: None,
                     episode_number: None,
+                    episode_numbers: Vec::new(),
                     episode_title: None,
                     destination_path: None,
                     matched: false,
@@ -2499,11 +2506,13 @@ async fn get_import_preview(
             .first()
             .and_then(|e| e.episode_file_id)
             .and_then(|fid| file_size_map.get(&fid).copied());
+        let all_ep_nums: Vec<i32> = matched_episodes.iter().map(|e| e.episode_number).collect();
         preview_files.push(ImportPreviewFile {
             source_file: f.name.clone(),
             source_size: f.size,
             season_number: Some(season),
             episode_number: Some(first_ep),
+            episode_numbers: all_ep_nums,
             episode_title: matched_episodes.first().map(|e| e.title.clone()),
             destination_path: dest,
             matched: !matched_episodes.is_empty(),

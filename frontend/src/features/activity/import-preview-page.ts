@@ -15,6 +15,7 @@ interface ImportPreviewFile {
   sourceSize: number;
   seasonNumber: number | null;
   episodeNumber: number | null;
+  episodeNumbers?: number[];
   episodeTitle: string | null;
   destinationPath: string | null;
   matched: boolean;
@@ -91,6 +92,8 @@ export class ImportPreviewPage extends BaseComponent {
   private sortField = signal<SortField>('name');
   private sortDirection = signal<SortDirection>('asc');
   private filterMode = signal<FilterMode>('all');
+  /** Which file is currently in episode-edit mode (sourceFile key, or null) */
+  private editingFile = signal<string | null>(null);
   /** Manual episode overrides: sourceFile -> { seasonNumber, episodeNumbers[] } */
   private manualOverrides = new Map<string, { seasonNumber: number; episodeNumbers: number[] }>();
 
@@ -127,6 +130,7 @@ export class ImportPreviewPage extends BaseComponent {
     this.watch(this.sortField);
     this.watch(this.sortDirection);
     this.watch(this.filterMode);
+    this.watch(this.editingFile);
   }
 
   protected onMount(): void {
@@ -358,7 +362,15 @@ export class ImportPreviewPage extends BaseComponent {
     const effectivelyMatched = file.matched || isManuallyMatched;
 
     const seasonNum = ov?.seasonNumber ?? file.seasonNumber;
-    const firstEpNum = ov?.episodeNumbers[0] ?? file.episodeNumber;
+    // Effective episode numbers: override > backend multi > backend single
+    const effectiveEpNums: number[] = ov
+      ? ov.episodeNumbers
+      : file.episodeNumbers && file.episodeNumbers.length > 0
+        ? file.episodeNumbers
+        : file.episodeNumber != null
+          ? [file.episodeNumber]
+          : [];
+    const firstEpNum = effectiveEpNums[0] ?? file.episodeNumber;
     const overrideEps = ov
       ? (ov.episodeNumbers
           .map((epNum) =>
@@ -371,8 +383,8 @@ export class ImportPreviewPage extends BaseComponent {
     const firstOverrideEp = overrideEps[0] ?? null;
 
     let episodeLabel: string;
-    if (ov && ov.episodeNumbers.length > 1 && seasonNum != null) {
-      const sorted = [...ov.episodeNumbers].sort((a, b) => a - b);
+    if (effectiveEpNums.length > 1 && seasonNum != null) {
+      const sorted = [...effectiveEpNums].sort((a, b) => a - b);
       episodeLabel = `S${String(seasonNum).padStart(2, '0')}E${String(sorted[0]).padStart(2, '0')}-E${String(sorted[sorted.length - 1]).padStart(2, '0')}`;
     } else if (seasonNum != null && firstEpNum != null) {
       episodeLabel = `S${String(seasonNum).padStart(2, '0')}E${String(firstEpNum).padStart(2, '0')}`;
@@ -409,9 +421,9 @@ export class ImportPreviewPage extends BaseComponent {
       statusLabel = 'Ready';
     }
 
-    // Show manual matching dropdowns for unmatched video files with available episodes
-    const showManualMatch =
-      !file.matched && isVideoFile(filename) && data.episodes && data.episodes.length > 0;
+    const hasEpisodes = data.episodes && data.episodes.length > 0;
+    const canEdit = isVideoFile(filename) && hasEpisodes;
+    const isEditing = this.editingFile.value === file.sourceFile;
     const episodes = data.episodes ?? [];
     const seasons = [...new Set(episodes.map((e) => e.seasonNumber))].sort((a, b) => a - b);
 
@@ -420,10 +432,22 @@ export class ImportPreviewPage extends BaseComponent {
       ? `${this.formatSize(file.sourceSize)}<div class="existing-size">${this.formatSize(effectiveExistingSize)} existing</div>`
       : this.formatSize(file.sourceSize);
 
-    const episodeCellContent =
-      showManualMatch && !isManuallyMatched
-        ? this.renderManualMatchSelects(file.sourceFile, seasons, episodes)
-        : `<div>${escapeHtml(episodeLabel)}</div>${epTitle ? `<div class="ep-title">${escapeHtml(epTitle)}</div>` : ''}`;
+    const escapedSourceFile = escapeHtml(file.sourceFile).replace(/'/g, "\\'");
+    let episodeCellContent: string;
+    if (isEditing) {
+      episodeCellContent = this.renderManualMatchSelects(
+        file.sourceFile,
+        seasons,
+        episodes,
+        effectiveEpNums,
+        seasonNum,
+      );
+    } else if (canEdit) {
+      const epTitleHtml = epTitle ? `<div class="ep-title">${escapeHtml(epTitle)}</div>` : '';
+      episodeCellContent = `<div class="ep-clickable" onclick="this.closest('import-preview-page').startEditEpisode('${escapedSourceFile}')" title="Click to change">${escapeHtml(episodeLabel)}${epTitleHtml}</div>`;
+    } else {
+      episodeCellContent = `<div>${escapeHtml(episodeLabel)}</div>${epTitle ? `<div class="ep-title">${escapeHtml(epTitle)}</div>` : ''}`;
+    }
 
     const manualLabel =
       ov && ov.episodeNumbers.length > 1
@@ -456,23 +480,26 @@ export class ImportPreviewPage extends BaseComponent {
     sourceFile: string,
     seasons: number[],
     episodes: ImportPreviewEpisode[],
+    selectedEpNums: number[] = [],
+    selectedSeason: number | null = null,
   ): string {
     const escapedSourceFile = escapeHtml(sourceFile).replace(/'/g, "\\'");
+    const activeSeason = selectedSeason ?? seasons[0] ?? 0;
 
     const seasonOptions = seasons
       .map((s) => {
         const label = s === 0 ? 'Specials' : `Season ${s}`;
-        return `<option value="${s}">${escapeHtml(label)}</option>`;
+        const selected = s === activeSeason ? ' selected' : '';
+        return `<option value="${s}"${selected}>${escapeHtml(label)}</option>`;
       })
       .join('');
 
-    // Default to first season's episodes
-    const firstSeason = seasons[0] ?? 0;
-    const filteredEps = episodes.filter((e) => e.seasonNumber === firstSeason);
+    const filteredEps = episodes.filter((e) => e.seasonNumber === activeSeason);
     const episodeOptions = filteredEps
       .map((e) => {
         const label = `E${String(e.episodeNumber).padStart(2, '0')} - ${e.title}${e.hasFile ? ' (has file)' : ''}`;
-        return `<option value="${e.episodeNumber}">${escapeHtml(label)}</option>`;
+        const selected = selectedEpNums.includes(e.episodeNumber) ? ' selected' : '';
+        return `<option value="${e.episodeNumber}"${selected}>${escapeHtml(label)}</option>`;
       })
       .join('');
 
@@ -481,7 +508,6 @@ export class ImportPreviewPage extends BaseComponent {
     return `
       <div class="manual-match">
         <select class="match-select" onchange="this.closest('import-preview-page').handleSeasonChange('${escapedSourceFile}', this)">
-          <option value="">Season...</option>
           ${seasonOptions}
         </select>
         <select class="match-select episode-select" data-source="${escapeHtml(sourceFile)}"
@@ -490,7 +516,7 @@ export class ImportPreviewPage extends BaseComponent {
         </select>
         <div class="match-actions">
           <button class="match-confirm-btn" onclick="this.closest('import-preview-page').confirmEpisodeSelect('${escapedSourceFile}', this)">Assign</button>
-          <span class="multi-hint">Ctrl/Shift for multi</span>
+          <button class="match-cancel-btn" onclick="this.closest('import-preview-page').cancelEditEpisode()">Cancel</button>
         </div>
       </div>
     `;
@@ -522,6 +548,14 @@ export class ImportPreviewPage extends BaseComponent {
     episodeSelect.size = Math.min(filteredEps.length, 6);
   }
 
+  startEditEpisode(sourceFile: string): void {
+    this.editingFile.set(sourceFile);
+  }
+
+  cancelEditEpisode(): void {
+    this.editingFile.set(null);
+  }
+
   confirmEpisodeSelect(sourceFile: string, button: HTMLButtonElement): void {
     const row = button.closest('tr');
     if (!row) return;
@@ -548,6 +582,7 @@ export class ImportPreviewPage extends BaseComponent {
       seasonNumber: seasonNum,
       episodeNumbers: selectedEpisodes,
     });
+    this.editingFile.set(null);
     // Re-render to update the row status
     const current = this.preview.value;
     if (current) {
@@ -890,6 +925,33 @@ export class ImportPreviewPage extends BaseComponent {
 
       .match-confirm-btn:hover {
         filter: brightness(1.1);
+      }
+
+      .match-cancel-btn {
+        padding: 0.2rem 0.5rem;
+        font-size: 0.7rem;
+        font-weight: 500;
+        border: 1px solid var(--border-color);
+        border-radius: 0.25rem;
+        background: var(--bg-card);
+        color: var(--text-color-muted);
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      .match-cancel-btn:hover {
+        background: var(--bg-card-alt);
+      }
+
+      .ep-clickable {
+        cursor: pointer;
+        border-bottom: 1px dashed var(--text-color-muted);
+        display: inline-block;
+      }
+
+      .ep-clickable:hover {
+        color: var(--color-primary);
+        border-bottom-color: var(--color-primary);
       }
 
       .multi-hint {
