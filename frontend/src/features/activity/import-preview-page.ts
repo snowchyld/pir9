@@ -485,11 +485,13 @@ export class ImportPreviewPage extends BaseComponent {
           ${seasonOptions}
         </select>
         <select class="match-select episode-select" data-source="${escapeHtml(sourceFile)}"
-          multiple size="${visibleRows}"
-          onchange="this.closest('import-preview-page').handleEpisodeSelect('${escapedSourceFile}', this)">
+          multiple size="${visibleRows}">
           ${episodeOptions}
         </select>
-        <div class="multi-hint">Ctrl/Shift+click for multi</div>
+        <div class="match-actions">
+          <button class="match-confirm-btn" onclick="this.closest('import-preview-page').confirmEpisodeSelect('${escapedSourceFile}', this)">Assign</button>
+          <span class="multi-hint">Ctrl/Shift for multi</span>
+        </div>
       </div>
     `;
   }
@@ -520,9 +522,15 @@ export class ImportPreviewPage extends BaseComponent {
     episodeSelect.size = Math.min(filteredEps.length, 6);
   }
 
-  handleEpisodeSelect(sourceFile: string, select: HTMLSelectElement): void {
+  confirmEpisodeSelect(sourceFile: string, button: HTMLButtonElement): void {
+    const row = button.closest('tr');
+    if (!row) return;
+
+    const episodeSelect = row.querySelector('.episode-select') as HTMLSelectElement | null;
+    if (!episodeSelect) return;
+
     const selectedEpisodes: number[] = [];
-    for (const opt of select.selectedOptions) {
+    for (const opt of episodeSelect.selectedOptions) {
       const num = Number(opt.value);
       if (!Number.isNaN(num)) {
         selectedEpisodes.push(num);
@@ -530,8 +538,6 @@ export class ImportPreviewPage extends BaseComponent {
     }
     if (selectedEpisodes.length === 0) return;
 
-    const row = select.closest('tr');
-    if (!row) return;
     const seasonSelect = row.querySelector(
       '.match-select:not(.episode-select)',
     ) as HTMLSelectElement | null;
@@ -864,10 +870,33 @@ export class ImportPreviewPage extends BaseComponent {
         border-color: var(--color-primary);
       }
 
+      .match-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .match-confirm-btn {
+        padding: 0.2rem 0.5rem;
+        font-size: 0.7rem;
+        font-weight: 500;
+        border: 1px solid var(--color-primary);
+        border-radius: 0.25rem;
+        background: var(--color-primary);
+        color: var(--color-white, #fff);
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      .match-confirm-btn:hover {
+        filter: brightness(1.1);
+      }
+
       .multi-hint {
         font-size: 0.625rem;
         color: var(--text-color-muted);
         opacity: 0.7;
+        white-space: nowrap;
       }
 
       .manual-badge {

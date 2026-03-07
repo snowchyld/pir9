@@ -83,7 +83,7 @@ pub fn is_video_file(path: &Path) -> bool {
 pub fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
     let mut episodes = Vec::new();
 
-    // Try S01E01E02E03 format (multi-episode)
+    // Try S01E01E02E03, S01E01-E02-E03, S01 E07-E08, S01E01-02 formats (multi-episode)
     // First, find the season number
     if let Some(season_match) = Regex::new(r"[Ss](\d{1,2})")
         .ok()
@@ -93,19 +93,41 @@ pub fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
             .get(1)
             .and_then(|m| m.as_str().parse::<i32>().ok())
         {
-            // Find all episode numbers after the season marker
-            // Match pattern like S01E01E02E03 or S01E01-E02-E03
-            if let Ok(re) = Regex::new(r"[Ss]\d{1,2}([Ee]\d{1,2})+") {
-                if let Some(full_match) = re.find(filename) {
-                    let episode_part = full_match.as_str();
-                    // Extract all episode numbers from the match
-                    if let Ok(ep_re) = Regex::new(r"[Ee](\d{1,2})") {
-                        for cap in ep_re.captures_iter(episode_part) {
+            // Find the episode block after the season marker
+            // Match "S02 E07-E08", "S01E01E02E03", "S01E01-E02", "S01E01-02"
+            // Use a broad match to capture the full episode block, then extract E## within it
+            if let Ok(re) = Regex::new(r"[Ss]\d{1,2}[\s._-]*([Ee]\d{1,3}(?:[\s._-]*[Ee]?\d{1,3})*)") {
+                if let Some(caps) = re.captures(filename) {
+                    let episode_block = caps.get(0).unwrap().as_str();
+                    // Extract all E## numbers from the matched block
+                    if let Ok(ep_re) = Regex::new(r"[Ee](\d{1,3})") {
+                        for cap in ep_re.captures_iter(episode_block) {
                             if let Some(ep_num) =
                                 cap.get(1).and_then(|m| m.as_str().parse::<i32>().ok())
                             {
                                 episodes.push((season, ep_num));
                             }
+                        }
+                    }
+                    // Handle bare number after dash: S01E07-08 (no E prefix on second number)
+                    if let Ok(bare_re) = Regex::new(r"[Ee](\d{1,3})-(\d{1,3})(?:[^Ee\d]|$)") {
+                        if let Some(bare_caps) = bare_re.captures(episode_block) {
+                            if let Some(end_num) = bare_caps.get(2).and_then(|m| m.as_str().parse::<i32>().ok()) {
+                                if !episodes.iter().any(|&(_, e)| e == end_num) {
+                                    episodes.push((season, end_num));
+                                }
+                            }
+                        }
+                    }
+                    // Fill range gaps: E07 and E10 → also add E08, E09
+                    if episodes.len() == 2 {
+                        let first = episodes[0].1;
+                        let last = episodes[1].1;
+                        if last > first + 1 && last - first <= 26 {
+                            for ep in (first + 1)..last {
+                                episodes.push((season, ep));
+                            }
+                            episodes.sort_by_key(|&(_, e)| e);
                         }
                     }
                 }
@@ -567,6 +589,15 @@ mod tests {
                 "Show - S02E10E11E12 - Marathon.mkv",
                 vec![(2, 10), (2, 11), (2, 12)],
             ),
+            // Space between season and episode
+            (
+                "Krypto the Superdog - S02 E07-E08 - Andrea Finds Out and Magic Mutts (1080p - AMZN Web-DL).mp4",
+                vec![(2, 7), (2, 8)],
+            ),
+            // Dash-separated without E prefix on second number
+            ("Show.S01E07-08.720p.mkv", vec![(1, 7), (1, 8)]),
+            // Dash-separated range with E prefix
+            ("Show.S03E01-E03.mkv", vec![(3, 1), (3, 2), (3, 3)]),
         ];
 
         for (filename, expected) in cases {
