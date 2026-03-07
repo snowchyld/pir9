@@ -1194,13 +1194,13 @@ async fn import_queue_item(
     use crate::core::datastore::repositories::TrackedDownloadRepository;
     use crate::core::download::import::ImportService;
 
-    // Parse optional overrides from request body
-    let overrides: std::collections::HashMap<String, EpisodeOverride> = if body.is_empty() {
-        std::collections::HashMap::new()
+    // Parse optional overrides and explicit series ID from request body
+    let (overrides, explicit_series_id): (std::collections::HashMap<String, EpisodeOverride>, Option<i64>) = if body.is_empty() {
+        (std::collections::HashMap::new(), None)
     } else {
         match serde_json::from_slice::<ImportQueueBody>(&body) {
-            Ok(b) => b.overrides.unwrap_or_default(),
-            Err(_) => std::collections::HashMap::new(),
+            Ok(b) => (b.overrides.unwrap_or_default(), b.series_id),
+            Err(_) => (std::collections::HashMap::new(), None),
         }
     };
 
@@ -1524,6 +1524,20 @@ async fn import_queue_item(
                     ..Default::default()
                 });
                 series = Some(matched);
+            }
+        }
+    }
+
+    // Fallback: use explicit series_id from the import preview UI when title matching failed
+    if series.is_none() {
+        if let Some(sid) = explicit_series_id {
+            let series_repo = SeriesRepository::new(state.db.clone());
+            if let Ok(Some(s)) = series_repo.get_by_id(sid).await {
+                tracing::info!(
+                    "Import: using explicit series_id={} '{}' (title '{}' didn't match)",
+                    sid, s.title, title
+                );
+                series = Some(s);
             }
         }
     }
@@ -2099,6 +2113,9 @@ pub struct ImportPreviewEpisode {
 #[serde(rename_all = "camelCase")]
 pub struct ImportQueueBody {
     pub overrides: Option<std::collections::HashMap<String, EpisodeOverride>>,
+    /// Explicit series ID from the import preview UI — used as fallback when
+    /// download title doesn't match any series (e.g., "Serenity" for Firefly S00E01)
+    pub series_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]

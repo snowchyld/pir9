@@ -101,9 +101,13 @@ export class ImportPreviewPage extends BaseComponent {
     mutationFn: (params: {
       id: number;
       overrides: Record<string, { seasonNumber: number; episodeNumbers: number[] }>;
+      seriesId?: number;
     }) => {
+      const hasOverrides = Object.keys(params.overrides).length > 0;
       const body =
-        Object.keys(params.overrides).length > 0 ? { overrides: params.overrides } : undefined;
+        hasOverrides || params.seriesId
+          ? { overrides: hasOverrides ? params.overrides : undefined, seriesId: params.seriesId }
+          : undefined;
       return http.post<{ success: boolean }>(`/queue/${params.id}/import`, body);
     },
     onSuccess: (result: { success: boolean }) => {
@@ -610,7 +614,11 @@ export class ImportPreviewPage extends BaseComponent {
     for (const [key, value] of this.manualOverrides) {
       overrides[key] = value;
     }
-    this.importMutation.mutate({ id: data.id, overrides });
+    this.importMutation.mutate({
+      id: data.id,
+      overrides,
+      seriesId: data.series?.id,
+    });
   }
 
   toggleSort(field: SortField): void {
