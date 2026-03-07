@@ -19,7 +19,7 @@ type QueueSortKey =
   | 'protocol'
   | 'progress'
   | 'timeleft';
-type ContentTab = 'all' | 'shows' | 'movies' | 'anime';
+type ContentTab = 'all' | 'shows' | 'movies' | 'anime' | 'completed';
 
 // Module-level state survives component destruction/recreation (SPA navigation)
 let savedSortKey: QueueSortKey = 'timeleft';
@@ -51,6 +51,17 @@ export class QueuePage extends BaseComponent {
     },
   });
 
+  private removeTrackedMutation = createMutation({
+    mutationFn: (id: number) => http.delete<void>(`/queue/tracked/${id}`),
+    onSuccess: () => {
+      invalidateQueries(['/queue']);
+      showSuccess('Removed completed item');
+    },
+    onError: () => {
+      showError('Failed to remove completed item');
+    },
+  });
+
   private clearImportedMutation = createMutation({
     mutationFn: () => http.delete<void>('/queue/tracked', { params: { status: 4 } }),
     onSuccess: () => {
@@ -78,7 +89,7 @@ export class QueuePage extends BaseComponent {
   protected template(): string {
     const response = this.queueQuery.data.value as QueueResponse | undefined;
     const allItems = response?.records ?? [];
-    const hiddenImported = response?.hiddenImportedCount ?? 0;
+    const completedItems = response?.completedRecords ?? [];
     const isLoading = this.queueQuery.isLoading.value;
     const isError = this.queueQuery.isError.value;
 
@@ -86,9 +97,10 @@ export class QueuePage extends BaseComponent {
     const showsCount = allItems.filter((i) => this.isShow(i)).length;
     const moviesCount = allItems.filter((i) => this.isMovie(i)).length;
     const animeCount = allItems.filter((i) => i.contentType === 'anime').length;
+    const completedCount = completedItems.length;
 
     // Filter by active tab
-    const items = this.filterByTab(allItems);
+    const items = this.activeTab === 'completed' ? completedItems : this.filterByTab(allItems);
 
     return html`
       <div class="queue-page">
@@ -99,6 +111,17 @@ export class QueuePage extends BaseComponent {
           </div>
 
           <div class="toolbar-right">
+            ${
+              this.activeTab === 'completed' && completedCount > 0
+                ? `<button
+                    class="clear-imported-btn"
+                    onclick="this.closest('queue-page').handleClearImported()"
+                    title="Clear all import tracking"
+                  >
+                    Clear All
+                  </button>`
+                : ''
+            }
             <button
               class="refresh-btn"
               onclick="this.closest('queue-page').handleRefresh()"
@@ -119,23 +142,8 @@ export class QueuePage extends BaseComponent {
           ${safeHtml(this.renderTab('shows', 'Shows', showsCount))}
           ${safeHtml(this.renderTab('movies', 'Movies', moviesCount))}
           ${safeHtml(this.renderTab('anime', 'Anime', animeCount))}
+          ${safeHtml(this.renderTab('completed', 'Completed', completedCount))}
         </div>
-
-        ${
-          hiddenImported > 0
-            ? `<div class="hidden-imports-banner">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10"></circle>
-                  <line x1="12" y1="8" x2="12" y2="12"></line>
-                  <line x1="12" y1="16" x2="12.01" y2="16"></line>
-                </svg>
-                <span>${hiddenImported} previously imported download${hiddenImported === 1 ? '' : 's'} hidden from queue</span>
-                <button class="clear-imported-btn" onclick="this.closest('queue-page').handleClearImported()">
-                  Clear Import Tracking
-                </button>
-              </div>`
-            : ''
-        }
 
         <div class="queue-content">
           ${isLoading ? this.renderLoading() : ''}
@@ -199,32 +207,11 @@ export class QueuePage extends BaseComponent {
           background-color: var(--btn-default-bg-hover);
         }
 
-        /* Hidden imports banner */
-        .hidden-imports-banner {
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-          padding: 0.75rem 1rem;
-          background-color: var(--bg-card);
-          border: 1px solid var(--color-warning, #f39c12);
-          border-radius: 0.375rem;
-          font-size: 0.875rem;
-          color: var(--text-color);
-        }
-
-        .hidden-imports-banner svg {
-          flex-shrink: 0;
-          color: var(--color-warning, #f39c12);
-        }
-
-        .hidden-imports-banner span {
-          flex: 1;
-        }
-
+        /* Clear all button (Completed tab toolbar) */
         .clear-imported-btn {
           flex-shrink: 0;
           padding: 0.375rem 0.75rem;
-          background-color: var(--color-warning, #f39c12);
+          background-color: var(--color-danger, #e74c3c);
           color: var(--color-white, #fff);
           border: none;
           border-radius: 0.25rem;
@@ -560,8 +547,8 @@ export class QueuePage extends BaseComponent {
             ${safeHtml(th(this.activeTab === 'movies' ? 'File' : 'Episode', 'episode'))}
             ${safeHtml(th('Quality', 'quality'))}
             ${safeHtml(th('Protocol', 'protocol'))}
-            ${safeHtml(th('Progress', 'progress'))}
-            ${safeHtml(th('Time Left', 'timeleft'))}
+            ${safeHtml(th(this.activeTab === 'completed' ? 'Size' : 'Progress', 'progress'))}
+            ${safeHtml(th(this.activeTab === 'completed' ? 'Date' : 'Time Left', 'timeleft'))}
             <th></th>
           </tr>
         </thead>
@@ -605,13 +592,14 @@ export class QueuePage extends BaseComponent {
         ? `S${String(item.episode.seasonNumber).padStart(2, '0')}E${String(item.episode.episodeNumber).padStart(2, '0')}${item.episode.title ? ` - ${item.episode.title}` : ''}`
         : '-';
     const importable = this.isImportable(item);
+    const isCompleted = this.activeTab === 'completed';
 
     return html`
       <tr>
         <td>
           <div class="status-cell">
             ${safeHtml(statusIcon)}
-            <span>${importable ? 'ready to import' : escapeHtml(item.status)}</span>
+            <span>${isCompleted ? 'imported' : importable ? 'ready to import' : escapeHtml(item.status)}</span>
           </div>
         </td>
         <td class="title-cell">
@@ -629,52 +617,69 @@ export class QueuePage extends BaseComponent {
           <span class="protocol-badge ${item.protocol}">${item.protocol}</span>
         </td>
         <td class="progress-cell">
-          <div class="progress-bar">
-            <div class="progress-fill ${item.status === 'stalled' ? 'stalled' : ''}" style="width: ${progress}%"></div>
-          </div>
-          <div class="progress-text">
-            ${this.formatSize(item.size - item.sizeleft)} / ${this.formatSize(item.size)}
-          </div>
-          ${safeHtml(this.renderPeerInfo(item))}
+          ${
+            isCompleted
+              ? `<div class="progress-text">${this.formatSize(item.size)}</div>`
+              : `<div class="progress-bar">
+                  <div class="progress-fill ${item.status === 'stalled' ? 'stalled' : ''}" style="width: ${progress}%"></div>
+                </div>
+                <div class="progress-text">
+                  ${this.formatSize(item.size - item.sizeleft)} / ${this.formatSize(item.size)}
+                </div>
+                ${safeHtml(this.renderPeerInfo(item))}`
+          }
         </td>
-        <td>${item.timeleft ?? '-'}</td>
+        <td>${isCompleted ? (item.added ? this.formatDate(item.added) : '-') : (item.timeleft ?? '-')}</td>
         <td>
           <div class="action-buttons">
-            <button
-              class="action-btn"
-              onclick="this.closest('queue-page').handleEditMatch(${item.id})"
-              title="Fix series/episode match"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-              </svg>
-            </button>
             ${
-              importable
+              isCompleted
                 ? `<button
-                    class="action-btn import"
-                    onclick="this.closest('queue-page').handleImport(${item.id})"
-                    title="Import to library"
+                    class="action-btn danger"
+                    onclick="this.closest('queue-page').handleRemoveCompleted(${item.id})"
+                    title="Remove from completed (torrent will reappear for reimport)"
                   >
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                      <polyline points="7 10 12 15 17 10"></polyline>
-                      <line x1="12" y1="15" x2="12" y2="3"></line>
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
                     </svg>
                   </button>`
-                : ''
+                : `<button
+                    class="action-btn"
+                    onclick="this.closest('queue-page').handleEditMatch(${item.id})"
+                    title="Fix series/episode match"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                    </svg>
+                  </button>
+                  ${
+                    importable
+                      ? `<button
+                          class="action-btn import"
+                          onclick="this.closest('queue-page').handleImport(${item.id})"
+                          title="Import to library"
+                        >
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                          </svg>
+                        </button>`
+                      : ''
+                  }
+                  <button
+                    class="action-btn danger"
+                    onclick="this.closest('queue-page').handleRemove(${item.id})"
+                    title="Remove from queue"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="3 6 5 6 21 6"></polyline>
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
+                  </button>`
             }
-            <button
-              class="action-btn danger"
-              onclick="this.closest('queue-page').handleRemove(${item.id})"
-              title="Remove from queue"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="3 6 5 6 21 6"></polyline>
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-              </svg>
-            </button>
           </div>
         </td>
       </tr>
@@ -776,6 +781,18 @@ export class QueuePage extends BaseComponent {
     return text.length > max ? `${text.slice(0, max)}\u2026` : text;
   }
 
+  private formatDate(dateStr: string): string {
+    const date = new Date(dateStr);
+    if (Number.isNaN(date.getTime())) return '-';
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffDays = Math.floor(diffMs / 86400000);
+    if (diffDays === 0) return 'Today';
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString();
+  }
+
   private formatSize(bytes: number): string {
     if (bytes === 0) return '0 B';
     const k = 1024;
@@ -803,7 +820,13 @@ export class QueuePage extends BaseComponent {
 
   handleRemove(id: number): void {
     if (confirm('Remove this item from the queue?')) {
-      this.removeItemMutation.mutate({ id, removeFromClient: true });
+      this.removeItemMutation.mutate({ id, removeFromClient: false });
+    }
+  }
+
+  handleRemoveCompleted(id: number): void {
+    if (confirm('Remove this completed item? The torrent will reappear for reimport.')) {
+      this.removeTrackedMutation.mutate(id);
     }
   }
 
