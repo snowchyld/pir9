@@ -246,6 +246,8 @@ release-restart: dev-frontend release
 	docker compose up -d
 	@echo ""
 	@echo "Local containers restarted. Check logs with: make logs"
+	./reg/nas.sh
+	./reg/nastoo.sh
 
 # Build with specific tag override
 release-tag:

@@ -6,12 +6,11 @@
 #[cfg(feature = "redis-events")]
 use anyhow::{Context, Result};
 #[cfg(feature = "redis-events")]
-use futures_util::StreamExt;
-#[cfg(feature = "redis-events")]
 use redis::aio::ConnectionManager;
 #[cfg(feature = "redis-events")]
 use redis::AsyncCommands;
 #[cfg(feature = "redis-events")]
+use tokio::sync::mpsc;
 use tokio::sync::broadcast;
 #[cfg(feature = "redis-events")]
 use tracing::{debug, error, info, trace, warn};
@@ -112,35 +111,45 @@ impl RedisEventBus {
     /// This should be spawned as a background task. It subscribes to the Redis
     /// channel and forwards received messages to the local broadcast channel.
     pub async fn start_subscriber(self: std::sync::Arc<Self>) -> Result<()> {
-        let client = redis::Client::open(self.redis_url.as_str())
+        // RESP3 is required for push-based pub/sub on multiplexed connections
+        let resp3_url = if self.redis_url.contains('?') {
+            format!("{}&protocol=resp3", self.redis_url)
+        } else {
+            format!("{}?protocol=resp3", self.redis_url)
+        };
+        let client = redis::Client::open(resp3_url.as_str())
             .context("Failed to create Redis client for subscriber")?;
 
-        // Get async connection and convert to pubsub
-        // Note: get_async_connection is deprecated in favor of get_multiplexed_async_connection,
-        // but pubsub requires a dedicated connection that supports into_pubsub().
-        #[allow(deprecated)]
-        let conn = client
-            .get_async_connection()
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let config = redis::AsyncConnectionConfig::new().set_push_sender(tx);
+
+        // redis 1.0: pubsub uses push notifications on multiplexed connections.
+        // Subscribe sends SUBSCRIBE command; messages arrive via the push sender channel.
+        let mut conn = client
+            .get_multiplexed_async_connection_with_config(&config)
             .await
             .context("Failed to create Redis connection")?;
-        let mut pubsub_conn = conn.into_pubsub();
 
-        pubsub_conn
-            .subscribe(REDIS_CHANNEL)
+        conn.subscribe(REDIS_CHANNEL)
             .await
             .context("Failed to subscribe to Redis channel")?;
 
         info!("Redis subscriber started on channel {}", REDIS_CHANNEL);
 
-        let mut msg_stream = pubsub_conn.on_message();
-
-        while let Some(msg) = msg_stream.next().await {
-            let payload: String = match msg.get_payload() {
-                Ok(p) => p,
-                Err(e) => {
-                    error!("Failed to get Redis message payload: {}", e);
-                    continue;
-                }
+        while let Some(push_info) = rx.recv().await {
+            if push_info.kind != redis::PushKind::Message {
+                continue;
+            }
+            // PushInfo.data for Message: [channel, payload]
+            let payload: String = match push_info.data.get(1) {
+                Some(val) => match redis::FromRedisValue::from_redis_value(val.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        error!("Failed to decode Redis message payload: {}", e);
+                        continue;
+                    }
+                },
+                None => continue,
             };
 
             // Deserialize the envelope
@@ -154,7 +163,6 @@ impl RedisEventBus {
 
             // Skip messages from this instance (prevent echo)
             if envelope.instance_id == self.instance_id {
-//                debug!("Skipping message from self");
                 continue;
             }
 

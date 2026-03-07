@@ -438,12 +438,11 @@ impl AppConfig {
         }
     }
 }
-
 fn generate_secret_key() -> String {
     use base64::{engine::general_purpose, Engine as _};
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..64).map(|_| rng.gen()).collect();
+    use rand::RngExt;
+    let mut rng = rand::rng();
+    let bytes: Vec<u8> = (0..64).map(|_| rng.random()).collect();
     general_purpose::STANDARD.encode(&bytes)
 }
 

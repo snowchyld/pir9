@@ -912,7 +912,7 @@ fn tmdb_get(url: &str) -> Option<reqwest::RequestBuilder> {
         Some(TMDB_HTTP_CLIENT.get(url).bearer_auth(key))
     } else {
         // v3 API Key → query parameter
-        Some(TMDB_HTTP_CLIENT.get(url).query(&[("api_key", key)]))
+        Some(TMDB_HTTP_CLIENT.get(format!("{}?api_key={}", url, key)))
     }
 }
 
