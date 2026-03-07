@@ -91,6 +91,12 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     path: '/settings/imdb',
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M7 8v8"></path><path d="M10 8l2 4 2-4v8"></path><path d="M17 8c1 0 2 .5 2 2s-1 2-2 2 2 .5 2 2-1 2-2 2"></path></svg>',
   },
+  {
+    id: 'history',
+    label: 'Import History',
+    path: '/settings/history',
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
+  },
 ];
 
 @customElement('settings-page')

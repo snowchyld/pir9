@@ -82,6 +82,7 @@ import './features/settings/tags-settings';
 import './features/settings/general-settings';
 import './features/settings/ui-settings';
 import './features/settings/imdb-settings';
+import './features/settings/history-settings';
 
 // System
 import './features/system/system-status-page';

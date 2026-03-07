@@ -88,6 +88,11 @@ export const routes: Route[] = [
   { path: '/settings/general', component: 'general-settings', title: 'General' },
   { path: '/settings/ui', component: 'ui-settings', title: 'UI' },
   { path: '/settings/imdb', component: 'imdb-settings', title: 'IMDB' },
+  {
+    path: '/settings/history',
+    component: 'history-settings',
+    title: 'Import History',
+  },
 
   // System
   { path: '/system/status', component: 'system-status-page', title: 'Status' },

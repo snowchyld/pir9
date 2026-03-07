@@ -1,10 +1,10 @@
 //! History API endpoints (v5)
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
-    routing::get,
+    routing::{delete, get},
     Router,
 };
 use chrono::DateTime;
@@ -161,6 +161,51 @@ pub async fn get_history_series(
     Ok(Json(records))
 }
 
+pub async fn delete_history_item(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> StatusCode {
+    let repo = HistoryRepository::new(state.db.clone());
+    match repo.delete(id).await {
+        Ok(()) => StatusCode::OK,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkDeleteRequest {
+    pub ids: Vec<i64>,
+}
+
+pub async fn delete_history_bulk(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<BulkDeleteRequest>,
+) -> StatusCode {
+    let repo = HistoryRepository::new(state.db.clone());
+    match repo.delete_bulk(&body.ids).await {
+        Ok(_) => StatusCode::OK,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearByEventTypeQuery {
+    pub event_type: i32,
+}
+
+pub async fn clear_history_by_event_type(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ClearByEventTypeQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let repo = HistoryRepository::new(state.db.clone());
+    match repo.clear_by_event_type(query.event_type).await {
+        Ok(count) => Ok(Json(serde_json::json!({ "deleted": count }))),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
 fn event_type_to_string(event_type: i32) -> String {
     match event_type {
         1 => "grabbed".to_string(),
@@ -233,7 +278,9 @@ fn db_to_resource(model: &HistoryDbModel) -> HistoryResource {
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/", get(get_history))
+        .route("/", get(get_history).delete(clear_history_by_event_type))
         .route("/since", get(get_history_since))
         .route("/series", get(get_history_series))
+        .route("/{id}", delete(delete_history_item))
+        .route("/bulk", delete(delete_history_bulk))
 }

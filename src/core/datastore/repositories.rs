@@ -399,6 +399,37 @@ impl HistoryRepository {
         .await?;
         Ok(row.0)
     }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM history WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn delete_bulk(&self, ids: &[i64]) -> Result<u64> {
+        let pool = self.db.pool();
+        let mut total = 0u64;
+        for id in ids {
+            let result = sqlx::query("DELETE FROM history WHERE id = $1")
+                .bind(id)
+                .execute(pool)
+                .await?;
+            total += result.rows_affected();
+        }
+        Ok(total)
+    }
+
+    pub async fn clear_by_event_type(&self, event_type: i32) -> Result<u64> {
+        let pool = self.db.pool();
+        let result = sqlx::query("DELETE FROM history WHERE event_type = $1")
+            .bind(event_type)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
 }
 
 /// Repository for root folders
