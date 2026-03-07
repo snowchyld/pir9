@@ -78,19 +78,26 @@ function isVideoFile(filename: string): boolean {
   return VIDEO_EXTENSIONS.has(ext);
 }
 
+type SortField = 'name' | 'size' | 'episode' | 'status';
+type SortDirection = 'asc' | 'desc';
+type FilterMode = 'all' | 'video' | 'unmatched';
+
 @customElement('import-preview-page')
 export class ImportPreviewPage extends BaseComponent {
   private preview = signal<ImportPreviewResponse | null>(null);
   private loading = signal(true);
   private error = signal<string | null>(null);
   private importing = signal(false);
-  /** Manual episode overrides: sourceFile -> { seasonNumber, episodeNumber } */
-  private manualOverrides = new Map<string, { seasonNumber: number; episodeNumber: number }>();
+  private sortField = signal<SortField>('name');
+  private sortDirection = signal<SortDirection>('asc');
+  private filterMode = signal<FilterMode>('all');
+  /** Manual episode overrides: sourceFile -> { seasonNumber, episodeNumbers[] } */
+  private manualOverrides = new Map<string, { seasonNumber: number; episodeNumbers: number[] }>();
 
   private importMutation = createMutation({
     mutationFn: (params: {
       id: number;
-      overrides: Record<string, { seasonNumber: number; episodeNumber: number }>;
+      overrides: Record<string, { seasonNumber: number; episodeNumbers: number[] }>;
     }) => {
       const body =
         Object.keys(params.overrides).length > 0 ? { overrides: params.overrides } : undefined;
@@ -117,6 +124,9 @@ export class ImportPreviewPage extends BaseComponent {
     this.watch(this.loading);
     this.watch(this.error);
     this.watch(this.importing);
+    this.watch(this.sortField);
+    this.watch(this.sortDirection);
+    this.watch(this.filterMode);
   }
 
   protected onMount(): void {
@@ -245,6 +255,17 @@ export class ImportPreviewPage extends BaseComponent {
 
         ${hasExisting ? `<div class="warning-banner"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> Some episodes already have files${upgradeCount > 0 ? ` — ${upgradeCount} will be upgraded` : ''}${sameFileCount > 0 ? ` — ${sameFileCount} identical (same size), will be skipped` : ''}</div>` : ''}
 
+        <div class="filter-bar">
+          <div class="filter-buttons">
+            <button class="filter-btn ${this.filterMode.value === 'all' ? 'active' : ''}"
+              onclick="this.closest('import-preview-page').setFilter('all')">All</button>
+            <button class="filter-btn ${this.filterMode.value === 'video' ? 'active' : ''}"
+              onclick="this.closest('import-preview-page').setFilter('video')">Video Only</button>
+            <button class="filter-btn ${this.filterMode.value === 'unmatched' ? 'active' : ''}"
+              onclick="this.closest('import-preview-page').setFilter('unmatched')">Unmatched</button>
+          </div>
+        </div>
+
         <table class="file-table">
           <colgroup>
             <col style="width: 30%">
@@ -255,15 +276,25 @@ export class ImportPreviewPage extends BaseComponent {
           </colgroup>
           <thead>
             <tr>
-              <th>Source File</th>
-              <th>Size</th>
-              <th>Episode</th>
+              <th class="sortable" onclick="this.closest('import-preview-page').toggleSort('name')">
+                Source File ${this.renderSortIcon('name')}
+              </th>
+              <th class="sortable" onclick="this.closest('import-preview-page').toggleSort('size')">
+                Size ${this.renderSortIcon('size')}
+              </th>
+              <th class="sortable" onclick="this.closest('import-preview-page').toggleSort('episode')">
+                Episode ${this.renderSortIcon('episode')}
+              </th>
               <th>Destination</th>
-              <th>Status</th>
+              <th class="sortable" onclick="this.closest('import-preview-page').toggleSort('status')">
+                Status ${this.renderSortIcon('status')}
+              </th>
             </tr>
           </thead>
           <tbody>
-            ${data.files.map((f) => this.renderFileRow(f, data)).join('')}
+            ${this.getSortedFilteredFiles(data)
+              .map((f) => this.renderFileRow(f, data))
+              .join('')}
           </tbody>
         </table>
 
@@ -301,11 +332,10 @@ export class ImportPreviewPage extends BaseComponent {
 
   /** Get the existing file size — uses episode fileSize for manual overrides, backend value otherwise */
   private getEffectiveExistingSize(file: ImportPreviewFile): number | null {
-    const override = this.manualOverrides.get(file.sourceFile);
-    if (override) {
+    const ov = this.manualOverrides.get(file.sourceFile);
+    if (ov && ov.episodeNumbers.length > 0) {
       const ep = this.preview.value?.episodes?.find(
-        (e) =>
-          e.seasonNumber === override.seasonNumber && e.episodeNumber === override.episodeNumber,
+        (e) => e.seasonNumber === ov.seasonNumber && e.episodeNumber === ov.episodeNumbers[0],
       );
       return ep?.fileSize ?? null;
     }
@@ -314,39 +344,50 @@ export class ImportPreviewPage extends BaseComponent {
 
   private getOverrideHasFile(sourceFile: string): boolean {
     const ov = this.manualOverrides.get(sourceFile);
-    if (!ov) return false;
+    if (!ov || ov.episodeNumbers.length === 0) return false;
     const ep = this.preview.value?.episodes?.find(
-      (e) => e.seasonNumber === ov.seasonNumber && e.episodeNumber === ov.episodeNumber,
+      (e) => e.seasonNumber === ov.seasonNumber && e.episodeNumber === ov.episodeNumbers[0],
     );
     return ep?.hasFile ?? false;
   }
 
   private renderFileRow(file: ImportPreviewFile, data: ImportPreviewResponse): string {
     const filename = file.sourceFile.split('/').pop() ?? file.sourceFile;
-    const override = this.manualOverrides.get(file.sourceFile);
-    const isManuallyMatched = !!override;
+    const ov = this.manualOverrides.get(file.sourceFile);
+    const isManuallyMatched = !!ov && ov.episodeNumbers.length > 0;
     const effectivelyMatched = file.matched || isManuallyMatched;
 
-    const seasonNum = override?.seasonNumber ?? file.seasonNumber;
-    const episodeNum = override?.episodeNumber ?? file.episodeNumber;
-    const overrideEp = override
-      ? data.episodes?.find(
-          (e) =>
-            e.seasonNumber === override.seasonNumber && e.episodeNumber === override.episodeNumber,
-        )
-      : null;
+    const seasonNum = ov?.seasonNumber ?? file.seasonNumber;
+    const firstEpNum = ov?.episodeNumbers[0] ?? file.episodeNumber;
+    const overrideEps = ov
+      ? (ov.episodeNumbers
+          .map((epNum) =>
+            data.episodes?.find(
+              (e) => e.seasonNumber === ov.seasonNumber && e.episodeNumber === epNum,
+            ),
+          )
+          .filter(Boolean) as ImportPreviewEpisode[])
+      : [];
+    const firstOverrideEp = overrideEps[0] ?? null;
 
-    const episodeLabel =
-      seasonNum != null && episodeNum != null
-        ? `S${String(seasonNum).padStart(2, '0')}E${String(episodeNum).padStart(2, '0')}`
-        : '-';
-    const epTitle = overrideEp?.title ?? file.episodeTitle;
+    let episodeLabel: string;
+    if (ov && ov.episodeNumbers.length > 1 && seasonNum != null) {
+      const sorted = [...ov.episodeNumbers].sort((a, b) => a - b);
+      episodeLabel = `S${String(seasonNum).padStart(2, '0')}E${String(sorted[0]).padStart(2, '0')}-E${String(sorted[sorted.length - 1]).padStart(2, '0')}`;
+    } else if (seasonNum != null && firstEpNum != null) {
+      episodeLabel = `S${String(seasonNum).padStart(2, '0')}E${String(firstEpNum).padStart(2, '0')}`;
+    } else {
+      episodeLabel = '-';
+    }
+    const epTitle = firstOverrideEp?.title ?? file.episodeTitle;
     const destFilename = file.destinationPath?.split('/').pop() ?? '';
-    const hasExistingFile = isManuallyMatched ? (overrideEp?.hasFile ?? false) : file.existingFile;
+    const hasExistingFile = isManuallyMatched
+      ? (firstOverrideEp?.hasFile ?? false)
+      : file.existingFile;
 
     // For manually matched episodes, use the episode's file size; otherwise use the backend value
     const effectiveExistingSize = isManuallyMatched
-      ? (overrideEp?.fileSize ?? null)
+      ? (firstOverrideEp?.fileSize ?? null)
       : (file.existingFileSize ?? null);
 
     // Detect same-size files: if source size matches existing file size, it's likely identical
@@ -384,8 +425,12 @@ export class ImportPreviewPage extends BaseComponent {
         ? this.renderManualMatchSelects(file.sourceFile, seasons, episodes)
         : `<div>${escapeHtml(episodeLabel)}</div>${epTitle ? `<div class="ep-title">${escapeHtml(epTitle)}</div>` : ''}`;
 
+    const manualLabel =
+      ov && ov.episodeNumbers.length > 1
+        ? `Manual (${ov.episodeNumbers.length} episodes)`
+        : 'Manual';
     const destContent = isManuallyMatched
-      ? '<span class="manual-badge">Manual</span>'
+      ? `<span class="manual-badge">${manualLabel}</span>`
       : escapeHtml(destFilename);
 
     return html`
@@ -431,16 +476,20 @@ export class ImportPreviewPage extends BaseComponent {
       })
       .join('');
 
+    const visibleRows = Math.min(filteredEps.length, 6);
+
     return `
       <div class="manual-match">
         <select class="match-select" onchange="this.closest('import-preview-page').handleSeasonChange('${escapedSourceFile}', this)">
           <option value="">Season...</option>
           ${seasonOptions}
         </select>
-        <select class="match-select episode-select" data-source="${escapeHtml(sourceFile)}" onchange="this.closest('import-preview-page').handleEpisodeSelect('${escapedSourceFile}', this)">
-          <option value="">Episode...</option>
+        <select class="match-select episode-select" data-source="${escapeHtml(sourceFile)}"
+          multiple size="${visibleRows}"
+          onchange="this.closest('import-preview-page').handleEpisodeSelect('${escapedSourceFile}', this)">
           ${episodeOptions}
         </select>
+        <div class="multi-hint">Ctrl/Shift+click for multi</div>
       </div>
     `;
   }
@@ -459,25 +508,27 @@ export class ImportPreviewPage extends BaseComponent {
     if (!episodeSelect) return;
 
     const filteredEps = data.episodes.filter((e) => e.seasonNumber === seasonNum);
-    // Clear and repopulate using DOM methods (safe, no innerHTML)
     while (episodeSelect.options.length > 0) {
       episodeSelect.remove(0);
     }
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = 'Episode...';
-    episodeSelect.add(placeholder);
     for (const e of filteredEps) {
       const opt = document.createElement('option');
       opt.value = String(e.episodeNumber);
       opt.textContent = `E${String(e.episodeNumber).padStart(2, '0')} - ${e.title}${e.hasFile ? ' (has file)' : ''}`;
       episodeSelect.add(opt);
     }
+    episodeSelect.size = Math.min(filteredEps.length, 6);
   }
 
   handleEpisodeSelect(sourceFile: string, select: HTMLSelectElement): void {
-    const episodeNum = Number(select.value);
-    if (Number.isNaN(episodeNum) || !select.value) return;
+    const selectedEpisodes: number[] = [];
+    for (const opt of select.selectedOptions) {
+      const num = Number(opt.value);
+      if (!Number.isNaN(num)) {
+        selectedEpisodes.push(num);
+      }
+    }
+    if (selectedEpisodes.length === 0) return;
 
     const row = select.closest('tr');
     if (!row) return;
@@ -487,7 +538,10 @@ export class ImportPreviewPage extends BaseComponent {
     const seasonNum = Number(seasonSelect?.value);
     if (Number.isNaN(seasonNum)) return;
 
-    this.manualOverrides.set(sourceFile, { seasonNumber: seasonNum, episodeNumber: episodeNum });
+    this.manualOverrides.set(sourceFile, {
+      seasonNumber: seasonNum,
+      episodeNumbers: selectedEpisodes,
+    });
     // Re-render to update the row status
     const current = this.preview.value;
     if (current) {
@@ -511,11 +565,84 @@ export class ImportPreviewPage extends BaseComponent {
     const data = this.preview.value;
     if (!data) return;
     this.importing.set(true);
-    const overrides: Record<string, { seasonNumber: number; episodeNumber: number }> = {};
+    const overrides: Record<string, { seasonNumber: number; episodeNumbers: number[] }> = {};
     for (const [key, value] of this.manualOverrides) {
       overrides[key] = value;
     }
     this.importMutation.mutate({ id: data.id, overrides });
+  }
+
+  toggleSort(field: SortField): void {
+    if (this.sortField.value === field) {
+      this.sortDirection.set(this.sortDirection.value === 'asc' ? 'desc' : 'asc');
+    } else {
+      this.sortField.set(field);
+      this.sortDirection.set('asc');
+    }
+  }
+
+  setFilter(mode: FilterMode): void {
+    this.filterMode.set(mode);
+  }
+
+  private renderSortIcon(field: SortField): string {
+    if (this.sortField.value !== field) return '<span class="sort-icon"></span>';
+    const arrow = this.sortDirection.value === 'asc' ? '\u25B2' : '\u25BC';
+    return `<span class="sort-icon active">${arrow}</span>`;
+  }
+
+  private getFileStatus(file: ImportPreviewFile): string {
+    const ov = this.manualOverrides.get(file.sourceFile);
+    const effectivelyMatched = file.matched || (!!ov && ov.episodeNumbers.length > 0);
+    if (!effectivelyMatched) return 'skip';
+    const hasExisting = file.existingFile || this.getOverrideHasFile(file.sourceFile);
+    if (hasExisting) return 'upgrade';
+    return 'ready';
+  }
+
+  private getSortedFilteredFiles(data: ImportPreviewResponse): ImportPreviewFile[] {
+    let files = [...data.files];
+
+    // Filter
+    const mode = this.filterMode.value;
+    if (mode === 'video') {
+      files = files.filter((f) => {
+        const name = f.sourceFile.split('/').pop() ?? f.sourceFile;
+        return isVideoFile(name);
+      });
+    } else if (mode === 'unmatched') {
+      files = files.filter((f) => {
+        return !f.matched && !this.manualOverrides.has(f.sourceFile);
+      });
+    }
+
+    // Sort
+    const field = this.sortField.value;
+    const dir = this.sortDirection.value === 'asc' ? 1 : -1;
+    files.sort((a, b) => {
+      switch (field) {
+        case 'name': {
+          const nameA = (a.sourceFile.split('/').pop() ?? '').toLowerCase();
+          const nameB = (b.sourceFile.split('/').pop() ?? '').toLowerCase();
+          return dir * nameA.localeCompare(nameB);
+        }
+        case 'size':
+          return dir * (a.sourceSize - b.sourceSize);
+        case 'episode': {
+          const seA = (a.seasonNumber ?? 999) * 10000 + (a.episodeNumber ?? 999);
+          const seB = (b.seasonNumber ?? 999) * 10000 + (b.episodeNumber ?? 999);
+          return dir * (seA - seB);
+        }
+        case 'status': {
+          const order: Record<string, number> = { ready: 0, upgrade: 1, skip: 2 };
+          return dir * ((order[this.getFileStatus(a)] ?? 3) - (order[this.getFileStatus(b)] ?? 3));
+        }
+        default:
+          return 0;
+      }
+    });
+
+    return files;
   }
 
   private styles(): string {
@@ -653,6 +780,59 @@ export class ImportPreviewPage extends BaseComponent {
         margin-top: 0.125rem;
       }
 
+      /* Filter bar */
+      .filter-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+      }
+
+      .filter-buttons {
+        display: flex;
+        gap: 0.25rem;
+      }
+
+      .filter-btn {
+        padding: 0.25rem 0.75rem;
+        font-size: 0.75rem;
+        border: 1px solid var(--border-color);
+        border-radius: 0.25rem;
+        background: var(--bg-card);
+        color: var(--text-color-muted);
+        cursor: pointer;
+      }
+
+      .filter-btn:hover {
+        background: var(--bg-card-alt);
+      }
+
+      .filter-btn.active {
+        background: var(--color-primary);
+        color: var(--color-white, #fff);
+        border-color: var(--color-primary);
+      }
+
+      /* Sortable headers */
+      .sortable {
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .sortable:hover {
+        color: var(--text-color);
+      }
+
+      .sort-icon {
+        font-size: 0.625rem;
+        margin-left: 0.25rem;
+        opacity: 0.3;
+      }
+
+      .sort-icon.active {
+        opacity: 1;
+        color: var(--color-primary);
+      }
+
       /* Manual matching */
       .manual-match {
         display: flex;
@@ -671,9 +851,23 @@ export class ImportPreviewPage extends BaseComponent {
         max-width: 200px;
       }
 
+      .match-select[multiple] {
+        padding: 0;
+      }
+
+      .match-select[multiple] option {
+        padding: 0.2rem 0.375rem;
+      }
+
       .match-select:focus {
         outline: none;
         border-color: var(--color-primary);
+      }
+
+      .multi-hint {
+        font-size: 0.625rem;
+        color: var(--text-color-muted);
+        opacity: 0.7;
       }
 
       .manual-badge {

@@ -63,8 +63,8 @@ struct PendingDownloadImport {
     series_id: Option<i64>,
     /// Mapping: dest_path → import details for DB insert
     file_mappings: HashMap<PathBuf, ImportMapping>,
-    /// Manual episode overrides from import preview UI: source_file → (season, episode)
-    overrides: HashMap<String, (i32, i32)>,
+    /// Manual episode overrides from import preview UI: source_file → [(season, episode)]
+    overrides: HashMap<String, Vec<(i32, i32)>>,
 }
 
 /// Per-file data needed to insert episode_file records after the worker moves the file
@@ -114,8 +114,8 @@ pub struct DownloadImportInfo {
     pub parsed_info: Option<crate::core::parser::ParsedEpisodeInfo>,
     pub series: Option<SeriesDbModel>,
     pub episodes: Vec<EpisodeDbModel>,
-    /// Manual episode overrides from import preview UI: source_file → (season, episode)
-    pub overrides: std::collections::HashMap<String, (i32, i32)>,
+    /// Manual episode overrides from import preview UI: source_file → [(season, episode)]
+    pub overrides: std::collections::HashMap<String, Vec<(i32, i32)>>,
 }
 
 /// Progress info from a worker's scan enrichment pipeline
@@ -706,7 +706,7 @@ impl ScanResultConsumer {
 
         // Get download info from the registered import
         let mut download_title = String::new();
-        let file_overrides: HashMap<String, (i32, i32)>;
+        let file_overrides: HashMap<String, Vec<(i32, i32)>>;
         let known_series_id: Option<i64>;
         if let Some(key) = download_keys.first() {
             let jobs = self.pending_jobs.read().await;
@@ -731,11 +731,11 @@ impl ScanResultConsumer {
             let mut parsed_eps = crate::core::scanner::parse_episodes_from_filename(filename);
             if parsed_eps.is_empty() {
                 // Check manual overrides from import preview UI
-                if let Some(&(season, episode)) = file_overrides.get(filename) {
-                    parsed_eps = vec![(season, episode)];
+                if let Some(pairs) = file_overrides.get(filename) {
+                    parsed_eps = pairs.clone();
                     info!(
-                        "[worker:{}] manual override for '{}' → S{:02}E{:02}",
-                        worker_id, filename, season, episode
+                        "[worker:{}] manual override for '{}' → {:?}",
+                        worker_id, filename, pairs
                     );
                 } else {
                     debug!("[worker:{}] skipping unmatched file '{}'", worker_id, filename);

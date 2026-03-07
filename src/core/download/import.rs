@@ -201,8 +201,8 @@ pub struct PendingImport {
     pub series: Option<SeriesDbModel>,
     /// Matched episodes
     pub episodes: Vec<EpisodeDbModel>,
-    /// Manual episode overrides from import preview UI: source_file → (season, episode)
-    pub overrides: std::collections::HashMap<String, (i32, i32)>,
+    /// Manual episode overrides from import preview UI: source_file → [(season, episode)]
+    pub overrides: std::collections::HashMap<String, Vec<(i32, i32)>>,
 }
 
 /// Result of importing a single file
@@ -502,7 +502,7 @@ impl ImportService {
         parsed_info: &ParsedEpisodeInfo,
         download_id: &str,
         download_title: &str,
-        file_overrides: &HashMap<String, (i32, i32)>,
+        file_overrides: &HashMap<String, Vec<(i32, i32)>>,
         download_path: &Path,
     ) -> Result<ImportResult> {
         // Build episode lookup: (season, episode_number) -> EpisodeDbModel
@@ -577,15 +577,15 @@ impl ImportService {
                         .strip_prefix(download_path)
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_else(|_| filename.to_string());
-                    if let Some(&(season, episode)) = file_overrides
+                    if let Some(pairs) = file_overrides
                         .get(&relative)
                         .or_else(|| file_overrides.get(filename))
                     {
                         tracing::info!(
-                            "Season pack import: manual override '{}' → S{:02}E{:02}",
-                            filename, season, episode
+                            "Season pack import: manual override '{}' → {:?}",
+                            filename, pairs
                         );
-                        vec![(season, episode)]
+                        pairs.clone()
                     } else {
                         tracing::debug!(
                             "Season pack import: skipping unmatched file '{}'",

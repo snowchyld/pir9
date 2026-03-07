@@ -1534,12 +1534,14 @@ async fn import_queue_item(
             let episode_repo = EpisodeRepository::new(state.db.clone());
             if let Ok(all_eps) = episode_repo.get_by_series_id(matched_series.id).await {
                 for ov in overrides.values() {
-                    if let Some(ep) = all_eps.iter().find(|e| {
-                        e.season_number == ov.season_number
-                            && e.episode_number == ov.episode_number
-                    }) {
-                        if !episodes.iter().any(|e| e.id == ep.id) {
-                            episodes.push(ep.clone());
+                    for ep_num in ov.episodes() {
+                        if let Some(ep) = all_eps.iter().find(|e| {
+                            e.season_number == ov.season_number
+                                && e.episode_number == ep_num
+                        }) {
+                            if !episodes.iter().any(|e| e.id == ep.id) {
+                                episodes.push(ep.clone());
+                            }
                         }
                     }
                 }
@@ -1562,6 +1564,15 @@ async fn import_queue_item(
         );
     }
 
+    // Convert overrides to Vec<(season, episode)> per file
+    let override_map: std::collections::HashMap<String, Vec<(i32, i32)>> = overrides
+        .iter()
+        .map(|(k, v)| {
+            let pairs: Vec<(i32, i32)> = v.episodes().into_iter().map(|ep| (v.season_number, ep)).collect();
+            (k.clone(), pairs)
+        })
+        .collect();
+
     let pending = crate::core::download::import::PendingImport {
         download_id: download_id.clone(),
         download_client_id,
@@ -1571,10 +1582,7 @@ async fn import_queue_item(
         parsed_info: parsed,
         series,
         episodes,
-        overrides: overrides
-            .iter()
-            .map(|(k, v)| (k.clone(), (v.season_number, v.episode_number)))
-            .collect(),
+        overrides: override_map.clone(),
     };
 
     // Dispatch to Redis worker when available — worker has fast local disk access
@@ -1593,10 +1601,7 @@ async fn import_queue_item(
                     parsed_info: pending.parsed_info.clone(),
                     series: pending.series.clone(),
                     episodes: pending.episodes.clone(),
-                    overrides: overrides
-                        .iter()
-                        .map(|(k, v)| (k.clone(), (v.season_number, v.episode_number)))
-                        .collect(),
+                    overrides: override_map.clone(),
                 };
 
                 consumer
@@ -2097,7 +2102,23 @@ pub struct ImportQueueBody {
 #[serde(rename_all = "camelCase")]
 pub struct EpisodeOverride {
     pub season_number: i32,
-    pub episode_number: i32,
+    /// Single episode (legacy, fallback when episode_numbers is absent)
+    pub episode_number: Option<i32>,
+    /// Multiple episodes for multi-episode files
+    pub episode_numbers: Option<Vec<i32>>,
+}
+
+impl EpisodeOverride {
+    /// Get all episode numbers, preferring episode_numbers over episode_number
+    pub fn episodes(&self) -> Vec<i32> {
+        if let Some(ref nums) = self.episode_numbers {
+            nums.clone()
+        } else if let Some(num) = self.episode_number {
+            vec![num]
+        } else {
+            vec![]
+        }
+    }
 }
 
 /// GET /api/v5/queue/{id}/import-preview
