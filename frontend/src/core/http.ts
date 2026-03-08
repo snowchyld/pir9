@@ -415,6 +415,14 @@ export interface QueueItem {
   series?: QueueItemSeries;
   movie?: QueueItemMovie;
   outputPath?: string;
+  importProgress?: {
+    stage: string;
+    currentFile?: string;
+    filesTotal: number;
+    filesProcessed: number;
+    percent: number;
+    detail?: string;
+  };
 }
 
 export interface QueueResponse {

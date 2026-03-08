@@ -347,20 +347,20 @@ impl WorkerRunner {
                                 file_count, path_str
                             );
 
-                            publish_progress(&event_bus, &job_id, &this.worker_id, "scanning", None, file_count, 0, 0, None).await;
+                            publish_progress(&event_bus, &job_id, &this.worker_id, "scanning", None, file_count, 0, 0.0, None).await;
 
                             let dl_total_steps = file_count * 2;
                             let mut dl_completed_steps: usize = 0;
 
                             for (idx, file) in files.iter_mut().enumerate() {
                                 // Probe stage
-                                let probe_pct = if dl_total_steps > 0 { (dl_completed_steps * 100 / dl_total_steps).min(100) as u8 } else { 0 };
+                                let probe_pct = if dl_total_steps > 0 { (dl_completed_steps as f32 * 100.0 / dl_total_steps as f32).min(100.0) } else { 0.0 };
                                 publish_progress(&event_bus, &job_id, &this.worker_id, "probing", Some(&file.filename), file_count, idx, probe_pct, None).await;
 
                                 let probe_detail = probe_scanned_file(file, (idx + 1, file_count)).await;
                                 dl_completed_steps += 1;
 
-                                let after_probe_pct = if dl_total_steps > 0 { (dl_completed_steps * 100 / dl_total_steps).min(100) as u8 } else { 50 };
+                                let after_probe_pct = if dl_total_steps > 0 { (dl_completed_steps as f32 * 100.0 / dl_total_steps as f32).min(100.0) } else { 50.0 };
                                 publish_progress(&event_bus, &job_id, &this.worker_id, "probing", Some(&file.filename), file_count, idx, after_probe_pct, probe_detail).await;
 
                                 // Hash stage
@@ -368,7 +368,7 @@ impl WorkerRunner {
                                 hash_scanned_file(file, (idx + 1, file_count)).await;
                                 dl_completed_steps += 1;
 
-                                let after_hash_pct = if dl_total_steps > 0 { (dl_completed_steps * 100 / dl_total_steps).min(100) as u8 } else { 100 };
+                                let after_hash_pct = if dl_total_steps > 0 { (dl_completed_steps as f32 * 100.0 / dl_total_steps as f32).min(100.0) } else { 100.0 };
                                 publish_progress(&event_bus, &job_id, &this.worker_id, "hashing", Some(&file.filename), file_count, idx + 1, after_hash_pct, None).await;
 
                                 // Publish per-file result immediately — server can start
@@ -460,11 +460,15 @@ impl WorkerRunner {
                 let mut results = Vec::new();
                 let started = std::time::Instant::now();
 
+                // Publish initial copying progress
+                publish_progress(event_bus, job_id, &self.worker_id, "copying", None, total, 0, 0.0, None).await;
+
                 for (idx, spec) in files.iter().enumerate() {
                     let media_type = infer_media_type(&spec.dest_path);
                     let filename = spec.source_path.file_name()
                         .unwrap_or_default()
-                        .to_string_lossy();
+                        .to_string_lossy()
+                        .to_string();
 
                     info!(
                         "[import][{}] ({}/{}) {} — {} -> {}",
@@ -476,8 +480,52 @@ impl WorkerRunner {
                         spec.dest_path.display()
                     );
 
+                    // Atomic progress tracker for copy — background task reads this
+                    // and publishes progress events at 0.1% intervals
+                    let copy_progress = Arc::new(std::sync::atomic::AtomicU32::new(0));
+                    let copy_progress_clone = Arc::clone(&copy_progress);
+                    let progress_job_id = job_id.to_string();
+                    let progress_worker_id = self.worker_id.clone();
+                    let progress_filename = filename.clone();
+                    let progress_bus = Arc::clone(event_bus);
+                    let progress_file_idx = idx;
+                    let progress_total = total;
+
+                    // Spawn background task to poll atomic and publish copy progress
+                    let progress_handle = tokio::spawn(async move {
+                        let mut last_reported: f32 = -1.0;
+                        loop {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                            let raw = copy_progress_clone.load(std::sync::atomic::Ordering::Relaxed);
+                            let file_pct = f32::from_bits(raw);
+                            // Overall percent: each file is equal weight
+                            let overall_pct = (progress_file_idx as f32 + file_pct / 100.0)
+                                * 100.0
+                                / progress_total as f32;
+                            // Publish if changed by >= 0.1%
+                            if (overall_pct - last_reported).abs() >= 0.1 {
+                                last_reported = overall_pct;
+                                publish_progress(
+                                    &progress_bus,
+                                    &progress_job_id,
+                                    &progress_worker_id,
+                                    "copying",
+                                    Some(&progress_filename),
+                                    progress_total,
+                                    progress_file_idx,
+                                    overall_pct.min(100.0),
+                                    None,
+                                )
+                                .await;
+                            }
+                            if file_pct >= 100.0 {
+                                break;
+                            }
+                        }
+                    });
+
                     let file_start = std::time::Instant::now();
-                    let result = match move_file(&spec.source_path, &spec.dest_path) {
+                    let result = match move_file(&spec.source_path, &spec.dest_path, Some(&copy_progress)) {
                         Ok(mr) => {
                             let elapsed = file_start.elapsed();
                             info!(
@@ -499,6 +547,8 @@ impl WorkerRunner {
                             }
                         }
                         Err(e) => {
+                            // Mark progress complete so the polling task stops
+                            copy_progress.store(100.0_f32.to_bits(), std::sync::atomic::Ordering::Relaxed);
                             error!(
                                 "[error][{}] ({}/{}) {} — failed: {}",
                                 media_type,
@@ -516,6 +566,8 @@ impl WorkerRunner {
                             }
                         }
                     };
+                    // Wait for the progress reporter to finish
+                    let _ = progress_handle.await;
                     results.push(result);
                 }
 
@@ -712,7 +764,7 @@ impl WorkerRunner {
                     info!("[scan][{}] Found {} video file(s) in {}", media_type, file_count, path_str);
 
                     // Publish initial scanning progress
-                    publish_progress(event_bus, job_id, &self.worker_id, "scanning", None, file_count, 0, 0, None).await;
+                    publish_progress(event_bus, job_id, &self.worker_id, "scanning", None, file_count, 0, 0.0, None).await;
 
                     // Each file = 2 steps (probe + hash); skipped files count as 2 steps instantly
                     let total_steps = file_count * 2;
@@ -733,20 +785,20 @@ impl WorkerRunner {
                                 );
                                 skipped_count += 1;
                                 completed_steps += 2;
-                                let pct = if total_steps > 0 { (completed_steps * 100 / total_steps).min(100) as u8 } else { 100 };
+                                let pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 100.0 };
                                 publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), file_count, idx + 1, pct, Some("unchanged".to_string())).await;
                                 continue;
                             }
                         }
 
                         // Probe stage
-                        let probe_pct = if total_steps > 0 { (completed_steps * 100 / total_steps).min(100) as u8 } else { 0 };
+                        let probe_pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 0.0 };
                         publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), file_count, idx, probe_pct, None).await;
 
                         let probe_detail = probe_scanned_file(file, (idx + 1, file_count)).await;
                         completed_steps += 1;
 
-                        let after_probe_pct = if total_steps > 0 { (completed_steps * 100 / total_steps).min(100) as u8 } else { 50 };
+                        let after_probe_pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 50.0 };
                         publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), file_count, idx, after_probe_pct, probe_detail).await;
 
                         // Hash stage
@@ -755,7 +807,7 @@ impl WorkerRunner {
                         hash_scanned_file(file, (idx + 1, file_count)).await;
                         completed_steps += 1;
 
-                        let after_hash_pct = if total_steps > 0 { (completed_steps * 100 / total_steps).min(100) as u8 } else { 100 };
+                        let after_hash_pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 100.0 };
                         publish_progress(event_bus, job_id, &self.worker_id, "hashing", Some(&file.filename), file_count, idx + 1, after_hash_pct, None).await;
                     }
 
@@ -807,7 +859,7 @@ impl WorkerRunner {
                                     "[skip][movie] {} — unchanged ({}) in {:.1}s",
                                     file.filename, format_size(file.size as u64), elapsed.as_secs_f64()
                                 );
-                                publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), 1, 1, 100, Some("unchanged".to_string())).await;
+                                publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), 1, 1, 100.0, Some("unchanged".to_string())).await;
                                 total_files_found += 1;
                                 results.push(Message::ScanResult {
                                     job_id: job_id.to_string(),
@@ -821,14 +873,14 @@ impl WorkerRunner {
                         }
 
                         // Probe stage
-                        publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), 1, 0, 0, None).await;
+                        publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), 1, 0, 0.0, None).await;
                         let probe_detail = probe_scanned_file(&mut file, (1, 1)).await;
-                        publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), 1, 0, 50, probe_detail).await;
+                        publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), 1, 0, 50.0, probe_detail).await;
 
                         // Hash stage
-                        publish_progress(event_bus, job_id, &self.worker_id, "hashing", Some(&file.filename), 1, 0, 50, None).await;
+                        publish_progress(event_bus, job_id, &self.worker_id, "hashing", Some(&file.filename), 1, 0, 50.0, None).await;
                         hash_scanned_file(&mut file, (1, 1)).await;
-                        publish_progress(event_bus, job_id, &self.worker_id, "hashing", Some(&file.filename), 1, 1, 100, None).await;
+                        publish_progress(event_bus, job_id, &self.worker_id, "hashing", Some(&file.filename), 1, 1, 100.0, None).await;
 
                         total_files_found += 1;
                         let elapsed = scan_start.elapsed();
@@ -942,21 +994,27 @@ struct MoveResult {
 ///
 /// Always copies — source files are never moved or deleted. The download
 /// client manages source cleanup via its own retention/seeding rules.
-fn move_file(source: &std::path::Path, dest: &std::path::Path) -> std::io::Result<MoveResult> {
+fn move_file(
+    source: &std::path::Path,
+    dest: &std::path::Path,
+    progress_pct: Option<&std::sync::atomic::AtomicU32>,
+) -> std::io::Result<MoveResult> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let source_size = std::fs::metadata(source)?.len();
-    copy_with_progress(source, dest, source_size)?;
+    copy_with_progress(source, dest, source_size, progress_pct)?;
     let size = std::fs::metadata(dest)?.len() as i64;
     Ok(MoveResult { size, method: "copy" })
 }
 
-/// Copy a file with periodic progress logging (every 10% or 500MB, whichever comes first)
+/// Copy a file with periodic progress logging (every 0.1%) and optional progress reporting
+/// via an atomic f32 (stored as u32 bits) that external code can read.
 fn copy_with_progress(
     source: &std::path::Path,
     dest: &std::path::Path,
     total_size: u64,
+    progress_pct: Option<&std::sync::atomic::AtomicU32>,
 ) -> std::io::Result<()> {
     use std::io::{Read, Write};
 
@@ -966,7 +1024,7 @@ fn copy_with_progress(
     let mut writer = std::io::BufWriter::with_capacity(1 << 20, dst_file);
 
     let mut copied: u64 = 0;
-    let mut last_logged_pct: u64 = 0;
+    let mut last_logged_pct: f32 = 0.0;
     let mut buf = vec![0u8; 1 << 20]; // 1MB chunks
     let src_name = source.file_name().unwrap_or_default().to_string_lossy();
 
@@ -979,12 +1037,18 @@ fn copy_with_progress(
         copied += n as u64;
 
         if total_size > 0 {
-            let pct = (copied * 100) / total_size;
+            let pct = copied as f32 * 100.0 / total_size as f32;
+            // Update atomic progress for external readers (every 0.1%)
+            if let Some(atomic) = progress_pct {
+                if pct >= last_logged_pct + 0.1 {
+                    atomic.store(pct.to_bits(), std::sync::atomic::Ordering::Relaxed);
+                }
+            }
             // Log every 10%
-            if pct >= last_logged_pct + 10 {
-                last_logged_pct = pct - (pct % 10);
+            if pct >= last_logged_pct + 10.0 {
+                last_logged_pct = (pct / 10.0).floor() * 10.0;
                 info!(
-                    "[copy] {} — {}% ({}/{})",
+                    "[copy] {} — {:.0}% ({}/{})",
                     src_name,
                     last_logged_pct,
                     format_size(copied),
@@ -992,6 +1056,11 @@ fn copy_with_progress(
                 );
             }
         }
+    }
+
+    // Mark 100% complete
+    if let Some(atomic) = progress_pct {
+        atomic.store(100.0_f32.to_bits(), std::sync::atomic::Ordering::Relaxed);
     }
 
     writer.flush()?;
@@ -1045,7 +1114,7 @@ async fn publish_progress(
     current_file: Option<&str>,
     files_total: usize,
     files_processed: usize,
-    percent: u8,
+    percent: f32,
     detail: Option<String>,
 ) {
     event_bus

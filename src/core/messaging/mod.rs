@@ -311,8 +311,8 @@ pub enum Message {
         files_total: usize,
         /// Number of files fully processed so far
         files_processed: usize,
-        /// Overall percent complete (0-100)
-        percent: u8,
+        /// Overall percent complete (0.0-100.0, supports 0.1% granularity)
+        percent: f32,
         /// Detail string after probe: e.g. "1080p x265 HDR10", or "unchanged" for skipped files
         detail: Option<String>,
         /// Entity IDs associated with this scan (filled by consumer, not by worker)

@@ -312,6 +312,7 @@ export class QueuePage extends BaseComponent {
         .status-icon.completed { color: var(--color-success, #2ecc71); }
         .status-icon.stalled { color: var(--color-warning); }
         .status-icon.error { color: var(--color-danger); }
+        .status-icon.importing { color: var(--color-success, #2ecc71); }
 
         /* Progress */
         .progress-cell {
@@ -334,6 +335,19 @@ export class QueuePage extends BaseComponent {
 
         .progress-fill.stalled {
           background-color: var(--color-warning);
+        }
+
+        .progress-fill.importing {
+          background-color: var(--color-success, #2ecc71);
+        }
+
+        .import-file-label {
+          font-size: 0.6875rem;
+          color: var(--text-color-muted);
+          margin-top: 0.125rem;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .progress-text {
@@ -572,7 +586,9 @@ export class QueuePage extends BaseComponent {
 
   private renderRow(item: QueueItem): string {
     const progress = item.size > 0 ? ((item.size - item.sizeleft) / item.size) * 100 : 0;
-    const statusIcon = this.getStatusIcon(item.status);
+    const statusIcon = item.importProgress
+      ? '<svg class="status-icon importing animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>'
+      : this.getStatusIcon(item.status);
     const isMovie = item.contentType === 'movie' || (item.movieId != null && item.movieId > 0);
     const displayTitle = isMovie
       ? (item.movie?.title ?? item.title)
@@ -599,7 +615,7 @@ export class QueuePage extends BaseComponent {
         <td>
           <div class="status-cell">
             ${safeHtml(statusIcon)}
-            <span>${isCompleted ? (item.trackedDownloadState === 'ignored' ? 'removed' : 'imported') : importable ? 'ready to import' : escapeHtml(item.status)}</span>
+            <span>${isCompleted ? (item.trackedDownloadState === 'ignored' ? 'removed' : 'imported') : item.importProgress ? escapeHtml(this.importStageLabel(item.importProgress.stage)) : importable ? 'ready to import' : escapeHtml(item.status)}</span>
           </div>
         </td>
         <td class="title-cell">
@@ -617,19 +633,21 @@ export class QueuePage extends BaseComponent {
           <span class="protocol-badge ${item.protocol}">${item.protocol}</span>
         </td>
         <td class="progress-cell">
-          ${
+          ${safeHtml(
             isCompleted
               ? `<div class="progress-text">${this.formatSize(item.size)}</div>`
-              : `<div class="progress-bar">
+              : item.importProgress
+                ? this.renderImportProgress(item)
+                : `<div class="progress-bar">
                   <div class="progress-fill ${item.status === 'stalled' ? 'stalled' : ''}" style="width: ${progress}%"></div>
                 </div>
                 <div class="progress-text">
                   ${this.formatSize(item.size - item.sizeleft)} / ${this.formatSize(item.size)}
                 </div>
-                ${this.renderPeerInfo(item)}`
-          }
+                ${this.renderPeerInfo(item)}`,
+          )}
         </td>
-        <td>${isCompleted ? (item.added ? this.formatDate(item.added) : '-') : (item.timeleft ?? '-')}</td>
+        <td>${isCompleted ? (item.added ? this.formatDate(item.added) : '-') : item.importProgress ? escapeHtml(this.importStageLabel(item.importProgress.stage)) : (item.timeleft ?? '-')}</td>
         <td>
           <div class="action-buttons">
             ${
@@ -766,8 +784,41 @@ export class QueuePage extends BaseComponent {
     return icons[status.toLowerCase()] ?? icons.queued;
   }
 
+  private renderImportProgress(item: QueueItem): string {
+    const p = item.importProgress;
+    if (!p) return '';
+    const pct = p.percent.toFixed(1);
+    const stageLabel = this.importStageLabel(p.stage);
+    const fileLabel = p.currentFile ? this.truncate(p.currentFile, 30) : '';
+    const fileInfo = p.filesTotal > 1 ? `${p.filesProcessed}/${p.filesTotal} files` : '';
+    const detail = p.detail ? ` · ${p.detail}` : '';
+    return `<div class="progress-bar">
+              <div class="progress-fill importing" style="width: ${pct}%"></div>
+            </div>
+            <div class="progress-text">
+              ${stageLabel} ${pct}%${fileInfo ? ` · ${fileInfo}` : ''}${detail}
+            </div>
+            ${fileLabel ? `<div class="import-file-label">${escapeHtml(fileLabel)}</div>` : ''}`;
+  }
+
+  private importStageLabel(stage: string): string {
+    const labels: Record<string, string> = {
+      scanning: 'Scanning',
+      probing: 'Analyzing',
+      hashing: 'Hashing',
+      copying: 'Copying',
+    };
+    return labels[stage] ?? stage;
+  }
+
   private renderPeerInfo(item: QueueItem): string {
-    if (item.seeds == null && item.leechers == null && item.seedCount == null && item.leechCount == null) return '';
+    if (
+      item.seeds == null &&
+      item.leechers == null &&
+      item.seedCount == null &&
+      item.leechCount == null
+    )
+      return '';
     // Prefer total swarm count over connected peers — connected peers are 0
     // for completed/seeding torrents since we're not downloading from anyone
     const seeds = Math.max(item.seeds ?? 0, item.seedCount ?? 0);

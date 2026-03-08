@@ -133,8 +133,8 @@ pub struct ScanProgressInfo {
     pub files_total: usize,
     /// Number of files fully processed so far
     pub files_processed: usize,
-    /// Overall percent complete (0-100)
-    pub percent: u8,
+    /// Overall percent complete (0.0-100.0, supports 0.1% granularity)
+    pub percent: f32,
     /// Detail string: "1080p x265 HDR10" or "unchanged"
     pub detail: Option<String>,
 }
@@ -204,6 +204,27 @@ impl ScanResultConsumer {
                 progress: job.progress.clone(),
             })
             .collect()
+    }
+
+    /// Get import progress for all active download imports, keyed by download_id.
+    /// Used by the queue API to show real-time import status on the frontend.
+    pub async fn get_import_progress_by_download_id(&self) -> HashMap<String, ScanProgressInfo> {
+        let jobs = self.pending_jobs.read().await;
+        let mut result = HashMap::new();
+
+        for (job_id, job) in &jobs.jobs {
+            if job.completed {
+                continue;
+            }
+            if let Some(ref progress) = job.progress {
+                // Check if this job has a download tracker → get its download_id
+                if let Some(tracker) = jobs.download_job_trackers.get(job_id) {
+                    result.insert(tracker.download_id.clone(), progress.clone());
+                }
+            }
+        }
+
+        result
     }
 
     /// Cancel a running scan job. Marks it as completed so incoming results are ignored.

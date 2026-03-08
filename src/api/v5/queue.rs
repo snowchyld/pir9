@@ -102,6 +102,26 @@ pub struct QueueResource {
     pub series: Option<QueueSeriesResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub movie: Option<QueueMovieResource>,
+    /// Live import progress when trackedDownloadState is "importing"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import_progress: Option<ImportProgressResource>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportProgressResource {
+    /// Current stage: "scanning", "probing", "hashing", "copying"
+    pub stage: String,
+    /// File currently being processed
+    pub current_file: Option<String>,
+    /// Total number of files to import
+    pub files_total: usize,
+    /// Number of files processed so far
+    pub files_processed: usize,
+    /// Overall percent complete (0.0-100.0)
+    pub percent: f32,
+    /// Detail string (e.g. "1080p x265 HDR10")
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -402,6 +422,7 @@ fn queue_item_to_resource(item: &crate::core::queue::QueueItem) -> QueueResource
         episode: None,
         series: None,
         movie: None,
+        import_progress: None,
     }
 }
 
@@ -889,6 +910,7 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                     episode: parsed_episode,
                     series: parsed_series,
                     movie: matched_movie_resource,
+                    import_progress: None,
                 });
 
                 id_counter += 1;
@@ -996,6 +1018,7 @@ async fn list_queue(
                 episode: None,
                 series: None,
                 movie: None,
+                import_progress: None,
             }
         })
         .collect();
@@ -1083,6 +1106,29 @@ async fn list_queue(
                         title: m.title,
                         title_slug: m.title_slug,
                     });
+                }
+            }
+        }
+    }
+
+    // Enrich importing items with live import progress from the scan result consumer
+    if let Some(consumer) = state.scan_result_consumer.get() {
+        let import_progress = consumer.get_import_progress_by_download_id().await;
+        if !import_progress.is_empty() {
+            for dl in &mut all_downloads {
+                if dl.tracked_download_state.as_deref() == Some("importing") {
+                    if let Some(ref download_id) = dl.download_id {
+                        if let Some(progress) = import_progress.get(download_id) {
+                            dl.import_progress = Some(ImportProgressResource {
+                                stage: progress.stage.clone(),
+                                current_file: progress.current_file.clone(),
+                                files_total: progress.files_total,
+                                files_processed: progress.files_processed,
+                                percent: progress.percent,
+                                detail: progress.detail.clone(),
+                            });
+                        }
+                    }
                 }
             }
         }
