@@ -767,9 +767,11 @@ export class QueuePage extends BaseComponent {
   }
 
   private renderPeerInfo(item: QueueItem): string {
-    if (item.seeds == null && item.leechers == null) return '';
-    const seeds = item.seeds ?? 0;
-    const leechers = item.leechers ?? 0;
+    if (item.seeds == null && item.leechers == null && item.seedCount == null && item.leechCount == null) return '';
+    // Prefer total swarm count over connected peers — connected peers are 0
+    // for completed/seeding torrents since we're not downloading from anyone
+    const seeds = Math.max(item.seeds ?? 0, item.seedCount ?? 0);
+    const leechers = Math.max(item.leechers ?? 0, item.leechCount ?? 0);
     const isStalled = item.status === 'stalled' || (seeds === 0 && leechers === 0);
     const cls = isStalled ? 'peer-info stalled' : 'peer-info';
     const seedLabel = seeds === 1 ? 'seed' : 'seeds';
