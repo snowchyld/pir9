@@ -1166,17 +1166,20 @@ async fn remove_queue_item(
         }
     }
 
-    // Fallback for untracked downloads
-    let downloads = fetch_all_downloads(&state, true).await;
-    if let Some(download) = downloads.iter().find(|d| d.id == id) {
-        if let (Some(client_name), Some(download_id)) =
-            (&download.download_client, &download.download_id)
-        {
-            let repo = DownloadClientRepository::new(state.db.clone());
-            if let Ok(clients) = repo.get_all().await {
-                for db_client in clients.iter().filter(|c| c.name == *client_name) {
-                    if let Ok(client) = create_client_from_model(db_client) {
-                        let _ = client.remove(download_id, query.remove_from_client).await;
+    // Fallback for untracked downloads — only touch the download client
+    // if explicitly requested (removeFromClient=true)
+    if query.remove_from_client {
+        let downloads = fetch_all_downloads(&state, true).await;
+        if let Some(download) = downloads.iter().find(|d| d.id == id) {
+            if let (Some(client_name), Some(download_id)) =
+                (&download.download_client, &download.download_id)
+            {
+                let repo = DownloadClientRepository::new(state.db.clone());
+                if let Ok(clients) = repo.get_all().await {
+                    for db_client in clients.iter().filter(|c| c.name == *client_name) {
+                        if let Ok(client) = create_client_from_model(db_client) {
+                            let _ = client.remove(download_id, true).await;
+                        }
                     }
                 }
             }
