@@ -626,7 +626,7 @@ export class QueuePage extends BaseComponent {
                 <div class="progress-text">
                   ${this.formatSize(item.size - item.sizeleft)} / ${this.formatSize(item.size)}
                 </div>
-                ${safeHtml(this.renderPeerInfo(item))}`
+                ${this.renderPeerInfo(item)}`
           }
         </td>
         <td>${isCompleted ? (item.added ? this.formatDate(item.added) : '-') : (item.timeleft ?? '-')}</td>

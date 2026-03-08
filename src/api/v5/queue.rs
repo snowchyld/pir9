@@ -1168,11 +1168,11 @@ async fn remove_queue_item(
         }
     }
 
-    // Fallback for untracked downloads — only touch the download client
-    // if explicitly requested (removeFromClient=true)
-    if query.remove_from_client {
-        let downloads = fetch_all_downloads(&state, true).await;
-        if let Some(download) = downloads.iter().find(|d| d.id == id) {
+    // Fallback for untracked downloads (id >= 10000)
+    let downloads = fetch_all_downloads(&state, true).await;
+    if let Some(download) = downloads.iter().find(|d| d.id == id) {
+        if query.remove_from_client {
+            // Remove from download client
             if let (Some(client_name), Some(download_id)) =
                 (&download.download_client, &download.download_id)
             {
@@ -1184,6 +1184,58 @@ async fn remove_queue_item(
                         }
                     }
                 }
+            }
+        } else {
+            // Create a tracked_downloads record with status=Ignored (7) so the
+            // item moves to the Completed tab instead of reappearing in the queue
+            let client_repo = DownloadClientRepository::new(state.db.clone());
+            let mut client_id: i64 = 0;
+            if let (Some(client_name), Ok(clients)) =
+                (&download.download_client, client_repo.get_all().await)
+            {
+                if let Some(c) = clients.iter().find(|c| c.name == *client_name) {
+                    client_id = c.id;
+                }
+            }
+
+            let td_repo = TrackedDownloadRepository::new(state.db.clone());
+            let model = crate::core::datastore::models::TrackedDownloadDbModel {
+                id: 0,
+                download_id: download.download_id.clone().unwrap_or_default(),
+                download_client_id: client_id,
+                series_id: download.series_id.unwrap_or(0),
+                episode_ids: if let Some(ep_id) = download.episode_id {
+                    serde_json::to_string(&vec![ep_id]).unwrap_or_else(|_| "[]".to_string())
+                } else {
+                    "[]".to_string()
+                },
+                title: download.title.clone(),
+                indexer: download.indexer.clone(),
+                size: download.size as i64,
+                protocol: if download.protocol == "usenet" { 1 } else { 2 },
+                quality: serde_json::to_string(&download.quality).unwrap_or_else(|_| "{}".to_string()),
+                languages: serde_json::to_string(&download.languages).unwrap_or_else(|_| "[]".to_string()),
+                status: 7, // Ignored
+                status_messages: "[]".to_string(),
+                error_message: None,
+                output_path: download.output_path.clone(),
+                is_upgrade: false,
+                added: chrono::Utc::now(),
+                movie_id: download.movie_id,
+            };
+
+            if let Err(e) = td_repo.insert(&model).await {
+                tracing::warn!(
+                    "Failed to create tracked record for untracked download {}: {}",
+                    id,
+                    e
+                );
+            } else {
+                tracing::info!(
+                    "Created tracked record (Ignored) for untracked download: {} ({})",
+                    download.title,
+                    id
+                );
             }
         }
     }
