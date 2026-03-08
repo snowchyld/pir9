@@ -301,15 +301,22 @@ impl TrackedDownloadService {
                         DownloadState::Warning => QueueStatus::Warning,
                     };
 
-                    let tracked_state = match live.status {
-                        DownloadState::Queued => TrackedDownloadState::Downloading,
-                        DownloadState::Downloading => TrackedDownloadState::Downloading,
-                        DownloadState::Stalled => TrackedDownloadState::Downloading,
-                        DownloadState::Paused => TrackedDownloadState::Downloading,
-                        DownloadState::Seeding => TrackedDownloadState::ImportPending,
-                        DownloadState::Completed => TrackedDownloadState::ImportPending,
-                        DownloadState::Failed => TrackedDownloadState::Failed,
-                        DownloadState::Warning => TrackedDownloadState::ImportBlocked,
+                    // If the DB says "Importing" (user triggered import), preserve
+                    // that state — don't let the live client status override it.
+                    let db_state = TrackedDownloadState::from_i32(td.status);
+                    let tracked_state = if db_state == TrackedDownloadState::Importing {
+                        TrackedDownloadState::Importing
+                    } else {
+                        match live.status {
+                            DownloadState::Queued => TrackedDownloadState::Downloading,
+                            DownloadState::Downloading => TrackedDownloadState::Downloading,
+                            DownloadState::Stalled => TrackedDownloadState::Downloading,
+                            DownloadState::Paused => TrackedDownloadState::Downloading,
+                            DownloadState::Seeding => TrackedDownloadState::ImportPending,
+                            DownloadState::Completed => TrackedDownloadState::ImportPending,
+                            DownloadState::Failed => TrackedDownloadState::Failed,
+                            DownloadState::Warning => TrackedDownloadState::ImportBlocked,
+                        }
                     };
 
                     let timeleft = live.eta.map(|secs| {

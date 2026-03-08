@@ -1543,6 +1543,13 @@ async fn import_queue_item(
                     _ => title.clone(),
                 };
 
+                // Mark tracked download as Importing so the queue UI shows import progress
+                if id < 10000 {
+                    let _ = td_repo
+                        .update_status(id, TrackedDownloadState::Importing as i32, "[]", None)
+                        .await;
+                }
+
                 let (job_id, message) =
                     crate::core::scanner::create_movie_scan_request(
                         vec![movie_id],
@@ -1557,6 +1564,8 @@ async fn import_queue_item(
                             vec![movie_id],
                         )
                         .await;
+                    // Link job to download_id so queue API can show progress
+                    consumer.set_job_download_id(&job_id, &download_id).await;
                 }
                 hybrid_bus.publish(message).await;
                 tracing::info!(
@@ -1830,6 +1839,13 @@ async fn import_queue_item(
     if let Some(ref hybrid_bus) = state.hybrid_event_bus {
         if hybrid_bus.is_redis_enabled() {
             if let Some(consumer) = state.scan_result_consumer.get() {
+                // Mark tracked download as Importing so the queue UI shows import progress
+                if id < 10000 {
+                    let _ = td_repo
+                        .update_status(id, TrackedDownloadState::Importing as i32, "[]", None)
+                        .await;
+                }
+
                 let job_id = uuid::Uuid::new_v4().to_string();
 
                 let import_info = crate::core::scanner::DownloadImportInfo {
@@ -1854,6 +1870,8 @@ async fn import_queue_item(
                         vec![0],
                     )
                     .await;
+                // Link job to download_id so queue API can show progress
+                consumer.set_job_download_id(&job_id, &download_id).await;
 
                 let message = crate::core::messaging::Message::ScanRequest {
                     job_id: job_id.clone(),

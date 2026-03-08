@@ -48,6 +48,9 @@ struct PendingJob {
     started_at: chrono::DateTime<chrono::Utc>,
     /// Live progress from worker enrichment pipeline
     progress: Option<ScanProgressInfo>,
+    /// Download ID from the download client (set for queue imports so the
+    /// queue API can match progress to the right queue item)
+    download_id: Option<String>,
 }
 
 /// Metadata needed to complete a download import after the worker moves files.
@@ -217,8 +220,12 @@ impl ScanResultConsumer {
                 continue;
             }
             if let Some(ref progress) = job.progress {
-                // Check if this job has a download tracker → get its download_id
-                if let Some(tracker) = jobs.download_job_trackers.get(job_id) {
+                // First check if the job itself has a download_id (set via set_job_download_id)
+                if let Some(ref dl_id) = job.download_id {
+                    result.insert(dl_id.clone(), progress.clone());
+                }
+                // Also check if this job has a download tracker (series download imports)
+                else if let Some(tracker) = jobs.download_job_trackers.get(job_id) {
                     result.insert(tracker.download_id.clone(), progress.clone());
                 }
             }
@@ -252,9 +259,19 @@ impl ScanResultConsumer {
                 worker_id: None,
                 started_at: Utc::now(),
                 progress: None,
+                download_id: None,
             },
         );
         debug!("Registered scan job: {} (type={:?})", job_id, scan_type);
+    }
+
+    /// Associate a download_id with a pending job so the queue API can
+    /// map import progress to the correct queue item.
+    pub async fn set_job_download_id(&self, job_id: &str, download_id: &str) {
+        let mut jobs = self.pending_jobs.write().await;
+        if let Some(job) = jobs.jobs.get_mut(job_id) {
+            job.download_id = Some(download_id.to_string());
+        }
     }
 
     /// Get the scan type for a pending job
