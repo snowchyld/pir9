@@ -2368,6 +2368,19 @@ impl TrackedDownloadRepository {
         Ok(rows)
     }
 
+    /// Get all completed tracked downloads (Imported=4, Ignored=7).
+    pub async fn get_completed(
+        &self,
+    ) -> Result<Vec<super::models::TrackedDownloadDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::TrackedDownloadDbModel>(
+            "SELECT * FROM tracked_downloads WHERE status IN (4, 7) ORDER BY added DESC",
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Count tracked downloads with a given status.
     pub async fn count_by_status(&self, status: i32) -> Result<i64> {
         let pool = self.db.pool();

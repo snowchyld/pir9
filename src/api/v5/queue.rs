@@ -914,9 +914,9 @@ async fn list_queue(
     let include_series = params.include_series.unwrap_or(true);
     let mut all_downloads = fetch_all_downloads(&state, include_unknown).await;
 
-    // Fetch completed tracked downloads (status >= 4: Imported, FailedPending, Failed, Ignored)
+    // Fetch completed tracked downloads (Imported=4 + Ignored=7)
     let td_repo = TrackedDownloadRepository::new(state.db.clone());
-    let imported_records = td_repo.get_by_status(4).await.unwrap_or_default();
+    let imported_records = td_repo.get_completed().await.unwrap_or_default();
     let hidden_imported_count = imported_records.len() as i64;
 
     // Build completed records from imported tracked downloads
@@ -975,7 +975,9 @@ async fn list_queue(
                 added: Some(td.added.to_rfc3339()),
                 status: "completed".to_string(),
                 tracked_download_status: Some("ok".to_string()),
-                tracked_download_state: Some("imported".to_string()),
+                tracked_download_state: Some(
+                    if td.status == 7 { "ignored" } else { "imported" }.to_string(),
+                ),
                 status_messages: vec![],
                 error_message: None,
                 download_id: Some(td.download_id.clone()),
@@ -2719,8 +2721,10 @@ async fn clear_tracked_downloads(
     let deleted = if let Some(status) = query.status {
         td_repo.delete_all_by_status(status).await.unwrap_or(0)
     } else {
-        // Without a status filter, only clear imported (status=4) as a safe default
-        td_repo.delete_all_by_status(4).await.unwrap_or(0)
+        // Without a status filter, clear both Imported (4) and Ignored (7)
+        let a = td_repo.delete_all_by_status(4).await.unwrap_or(0);
+        let b = td_repo.delete_all_by_status(7).await.unwrap_or(0);
+        a + b
     };
 
     tracing::info!("Cleared {} tracked download records (status filter: {:?})", deleted, query.status);

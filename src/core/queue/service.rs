@@ -871,9 +871,20 @@ impl TrackedDownloadService {
             info!("Would add to blocklist: {}", tracked.title);
         }
 
-        // Delete from tracked downloads
-        repo.delete(id).await?;
-        info!("Removed tracked download: {} ({})", tracked.title, id);
+        if remove_from_client {
+            // Full removal: delete the tracking record entirely
+            repo.delete(id).await?;
+            info!("Removed tracked download: {} ({})", tracked.title, id);
+        } else {
+            // Soft removal: mark as Ignored so it appears on the Completed tab
+            // instead of vanishing. User can clear it from there.
+            repo.update_status(id, TrackedDownloadState::Ignored as i32, "[]", None)
+                .await?;
+            info!(
+                "Marked tracked download as ignored: {} ({})",
+                tracked.title, id
+            );
+        }
 
         Ok(())
     }

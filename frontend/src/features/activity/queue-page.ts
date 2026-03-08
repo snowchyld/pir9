@@ -599,7 +599,7 @@ export class QueuePage extends BaseComponent {
         <td>
           <div class="status-cell">
             ${safeHtml(statusIcon)}
-            <span>${isCompleted ? 'imported' : importable ? 'ready to import' : escapeHtml(item.status)}</span>
+            <span>${isCompleted ? (item.trackedDownloadState === 'ignored' ? 'removed' : 'imported') : importable ? 'ready to import' : escapeHtml(item.status)}</span>
           </div>
         </td>
         <td class="title-cell">
