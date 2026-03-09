@@ -78,13 +78,11 @@ pub struct WorkerRunner {
     /// Redis connection for job claiming (distributed lock)
     #[cfg(feature = "redis-events")]
     redis_conn: tokio::sync::Mutex<Option<redis::aio::ConnectionManager>>,
-    /// Limits the worker to one scan/discovery job at a time. When busy, incoming scan
-    /// requests are skipped (not claimed) so the other worker can pick them up.
-    /// ImportFilesRequest and file-level ops (probe/hash) are NOT gated by this.
-    scan_semaphore: Arc<tokio::sync::Semaphore>,
-    /// Limits concurrent file-level operations (probe/hash). Multiple file ops can run
-    /// in parallel, but bounded to avoid overloading disk I/O.
-    file_ops_semaphore: Arc<tokio::sync::Semaphore>,
+    /// Single permit — worker accepts only ONE job at a time (discovery, probe, hash,
+    /// import, or delete). If busy, incoming requests are skipped so another worker
+    /// can claim them via Redis SETNX. Acquired BEFORE try_claim_job to avoid claiming
+    /// jobs we can't immediately process.
+    job_semaphore: Arc<tokio::sync::Semaphore>,
     /// Statistics: number of scans completed
     scans_completed: std::sync::atomic::AtomicU64,
     /// Statistics: total files found
@@ -111,8 +109,7 @@ impl WorkerRunner {
             redis_url: redis_url.to_string(),
             #[cfg(feature = "redis-events")]
             redis_conn: tokio::sync::Mutex::new(None),
-            scan_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
-            file_ops_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+            job_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
             scans_completed: std::sync::atomic::AtomicU64::new(0),
             files_found: std::sync::atomic::AtomicU64::new(0),
             start_time: std::time::Instant::now(),
@@ -311,11 +308,11 @@ impl WorkerRunner {
                     return;
                 }
 
-                // Only accept one scan at a time — if busy, skip so the other worker can claim it
-                let permit = match self.scan_semaphore.clone().try_acquire_owned() {
+                // Only accept if idle — if busy, skip so another worker can claim it
+                let permit = match self.job_semaphore.clone().try_acquire_owned() {
                     Ok(permit) => permit,
                     Err(_) => {
-                        info!("Worker busy with another scan, skipping job {}", job_id);
+                        debug!("Worker busy, skipping scan job {}", job_id);
                         return;
                     }
                 };
@@ -434,6 +431,14 @@ impl WorkerRunner {
                 if !self.handles_path(file_path) {
                     return;
                 }
+                // Acquire permit BEFORE claiming — if busy, let another worker handle it
+                let permit = match self.job_semaphore.clone().try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        debug!("Worker busy, skipping probe job {}", job_id);
+                        return;
+                    }
+                };
                 if !self.try_claim_job(job_id).await {
                     return;
                 }
@@ -446,9 +451,8 @@ impl WorkerRunner {
                 let entity_id = *entity_id;
                 let _scan_type = *scan_type;
 
-                let sem = self.file_ops_semaphore.clone();
                 tokio::spawn(async move {
-                    let _permit = sem.acquire().await;
+                    let _permit = permit;
                     let filename = std::path::Path::new(&file_path)
                         .file_name()
                         .unwrap_or_default()
@@ -498,6 +502,13 @@ impl WorkerRunner {
                 if !self.handles_path(file_path) {
                     return;
                 }
+                let permit = match self.job_semaphore.clone().try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        debug!("Worker busy, skipping hash job {}", job_id);
+                        return;
+                    }
+                };
                 if !self.try_claim_job(job_id).await {
                     return;
                 }
@@ -509,9 +520,8 @@ impl WorkerRunner {
                 let file_path = file_path.clone();
                 let entity_id = *entity_id;
 
-                let sem = self.file_ops_semaphore.clone();
                 tokio::spawn(async move {
-                    let _permit = sem.acquire().await;
+                    let _permit = permit;
                     let filename = std::path::Path::new(&file_path)
                         .file_name()
                         .unwrap_or_default()
@@ -550,7 +560,13 @@ impl WorkerRunner {
                     return;
                 }
 
-                // Claim the import job so only one worker moves the files
+                let _permit = match self.job_semaphore.clone().try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        debug!("Worker busy, skipping import job {}", job_id);
+                        return;
+                    }
+                };
                 if !self.try_claim_job(job_id).await {
                     return;
                 }
@@ -751,7 +767,13 @@ impl WorkerRunner {
                     return;
                 }
 
-                // Claim the delete job so only one worker executes it
+                let _permit = match self.job_semaphore.clone().try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        debug!("Worker busy, skipping delete job {}", job_id);
+                        return;
+                    }
+                };
                 if !self.try_claim_job(job_id).await {
                     return;
                 }
@@ -1155,7 +1177,7 @@ mod tests {
             redis_url: "redis://localhost".to_string(),
             #[cfg(feature = "redis-events")]
             redis_conn: tokio::sync::Mutex::new(None),
-            scan_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+            job_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
             scans_completed: std::sync::atomic::AtomicU64::new(0),
             files_found: std::sync::atomic::AtomicU64::new(0),
             start_time: std::time::Instant::now(),
