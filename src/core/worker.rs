@@ -58,6 +58,10 @@ fn message_type_name(message: &Message) -> &'static str {
         Message::MovieFileDeleted { .. } => "MovieFileDeleted",
         Message::ImportFilesRequest { .. } => "ImportFilesRequest",
         Message::ImportFilesResult { .. } => "ImportFilesResult",
+        Message::ProbeFileRequest { .. } => "ProbeFileRequest",
+        Message::ProbeFileResult { .. } => "ProbeFileResult",
+        Message::HashFileRequest { .. } => "HashFileRequest",
+        Message::HashFileResult { .. } => "HashFileResult",
         Message::DeletePathsRequest { .. } => "DeletePathsRequest",
         Message::DeletePathsResult { .. } => "DeletePathsResult",
     }
@@ -74,10 +78,13 @@ pub struct WorkerRunner {
     /// Redis connection for job claiming (distributed lock)
     #[cfg(feature = "redis-events")]
     redis_conn: tokio::sync::Mutex<Option<redis::aio::ConnectionManager>>,
-    /// Limits the worker to one scan job at a time. When busy, incoming scan
+    /// Limits the worker to one scan/discovery job at a time. When busy, incoming scan
     /// requests are skipped (not claimed) so the other worker can pick them up.
-    /// ImportFilesRequest is NOT gated — it's part of the active scan workflow.
+    /// ImportFilesRequest and file-level ops (probe/hash) are NOT gated by this.
     scan_semaphore: Arc<tokio::sync::Semaphore>,
+    /// Limits concurrent file-level operations (probe/hash). Multiple file ops can run
+    /// in parallel, but bounded to avoid overloading disk I/O.
+    file_ops_semaphore: Arc<tokio::sync::Semaphore>,
     /// Statistics: number of scans completed
     scans_completed: std::sync::atomic::AtomicU64,
     /// Statistics: total files found
@@ -105,6 +112,7 @@ impl WorkerRunner {
             #[cfg(feature = "redis-events")]
             redis_conn: tokio::sync::Mutex::new(None),
             scan_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+            file_ops_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
             scans_completed: std::sync::atomic::AtomicU64::new(0),
             files_found: std::sync::atomic::AtomicU64::new(0),
             start_time: std::time::Instant::now(),
@@ -317,151 +325,83 @@ impl WorkerRunner {
                     return;
                 }
 
-                // Per-file streaming: spawn enrichment as background task so the
-                    // main event loop stays free to process ImportFilesRequests concurrently.
-                    // This means file1 can be moved to library while file50 is still being probed.
-                    // All scan types now use streaming — each file's probe+hash result is
-                    // published immediately, enabling the server to process results as they arrive.
-                    let this = Arc::clone(self);
-                    let event_bus = Arc::clone(event_bus);
-                    let job_id = job_id.clone();
-                    let scan_type = *scan_type;
-                    let known_files = known_files.clone();
+                // Discovery phase: scan directories to find files (fast — no probe/hash).
+                // Returns unenriched file lists so the server can dispatch individual
+                // probe and hash jobs to workers for maximum parallelism.
+                let this = Arc::clone(self);
+                let event_bus = Arc::clone(event_bus);
+                let job_id = job_id.clone();
+                let scan_type = *scan_type;
 
-                    tokio::spawn(async move {
-                        // Hold the permit for the duration of the scan — dropped when this
-                        // block exits, allowing the worker to accept the next job.
-                        let _permit = permit;
-                        let mut total_files: u64 = 0;
-                        let scan_start = std::time::Instant::now();
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    let mut total_files: u64 = 0;
+                    let scan_start = std::time::Instant::now();
 
-                        for (entity_id, path_str) in &relevant {
-                            let path = PathBuf::from(path_str);
-                            if !path.exists() {
-                                warn!("[scan][stream] Path does not exist: {}", path_str);
-                                // Send error result for this entity — consumer will mark it received
-                                event_bus.publish(Message::ScanResult {
-                                    job_id: job_id.clone(),
-                                    series_id: *entity_id,
-                                    worker_id: this.worker_id.clone(),
-                                    files_found: vec![],
-                                    errors: vec![format!("Path does not exist: {}", path_str)],
-                                }).await;
-                                continue;
-                            }
-
-                            let media_type = infer_media_type(&path);
-
-                            // Scan directory based on scan type
-                            let mut files: Vec<ScannedFile> = match scan_type {
-                                ScanType::RescanSeries => {
-                                    info!("[scan][{}] Scanning {} (id={})", media_type, path_str, entity_id);
-                                    scanner::scan_series_directory(&path)
-                                }
-                                ScanType::RescanMovie => {
-                                    info!("[scan][movie] Scanning {} (id={})", path_str, entity_id);
-                                    scanner::scan_movie_directory(&path)
-                                        .into_iter()
-                                        .collect()
-                                }
-                                ScanType::DownloadedEpisodesScan | ScanType::DownloadedMovieScan => {
-                                    info!("[scan][download] Scanning {}", path_str);
-                                    scanner::scan_download_directory(&path)
-                                }
-                                _ => vec![],
-                            };
-
-                            let file_count = files.len();
-                            info!("[scan][stream] Found {} video file(s) in {}", file_count, path_str);
-                            publish_progress(&event_bus, &job_id, &this.worker_id, "scanning", None, file_count, 0, 0.0, None).await;
-
-                            let total_steps = file_count * 2;
-                            let mut completed_steps: usize = 0;
-
-                            for (idx, file) in files.iter_mut().enumerate() {
-                                // Check known_files for skip-enrichment (rescan types only)
-                                let path_key = file.path.to_string_lossy().to_string();
-                                if let Some(known) = known_files.get(&path_key) {
-                                    if known.size == file.size && known.file_hash.is_some() {
-                                        file.media_info = known.media_info.clone();
-                                        file.quality = known.quality.clone();
-                                        file.file_hash = known.file_hash.clone();
-                                        info!(
-                                            "[skip] ({}/{}) {} — unchanged ({})",
-                                            idx + 1, file_count, file.filename, format_size(file.size as u64)
-                                        );
-                                        completed_steps += 2;
-                                        let pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 100.0 };
-                                        publish_progress(&event_bus, &job_id, &this.worker_id, "probing", Some(&file.filename), file_count, idx + 1, pct, Some("unchanged".to_string())).await;
-
-                                        // Publish per-file result immediately
-                                        event_bus.publish(Message::ScanResult {
-                                            job_id: job_id.clone(),
-                                            series_id: *entity_id,
-                                            worker_id: this.worker_id.clone(),
-                                            files_found: vec![file.clone()],
-                                            errors: vec![],
-                                        }).await;
-                                        continue;
-                                    }
-                                }
-
-                                // Probe stage
-                                let probe_pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 0.0 };
-                                publish_progress(&event_bus, &job_id, &this.worker_id, "probing", Some(&file.filename), file_count, idx, probe_pct, None).await;
-
-                                let probe_detail = probe_scanned_file(file, (idx + 1, file_count)).await;
-                                completed_steps += 1;
-
-                                let after_probe_pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 50.0 };
-                                publish_progress(&event_bus, &job_id, &this.worker_id, "probing", Some(&file.filename), file_count, idx, after_probe_pct, probe_detail).await;
-
-                                // Hash stage
-                                publish_progress(&event_bus, &job_id, &this.worker_id, "hashing", Some(&file.filename), file_count, idx, after_probe_pct, None).await;
-                                hash_scanned_file(file, (idx + 1, file_count)).await;
-                                completed_steps += 1;
-
-                                let after_hash_pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 100.0 };
-                                publish_progress(&event_bus, &job_id, &this.worker_id, "hashing", Some(&file.filename), file_count, idx + 1, after_hash_pct, None).await;
-
-                                // Publish per-file result immediately — server can start
-                                // matching and dispatching file moves right away
-                                event_bus.publish(Message::ScanResult {
-                                    job_id: job_id.clone(),
-                                    series_id: *entity_id,
-                                    worker_id: this.worker_id.clone(),
-                                    files_found: vec![file.clone()],
-                                    errors: vec![],
-                                }).await;
-                            }
-
-                            total_files += file_count as u64;
-                            let elapsed = scan_start.elapsed();
-                            info!(
-                                "[scan][stream] {} — {} file(s) in {:.1}s (id={})",
-                                media_type, file_count, elapsed.as_secs_f64(), entity_id
-                            );
-
-                            // Per-entity completion signal — empty files tells the consumer
-                            // this entity is done so it can mark_job_result_received
+                    for (entity_id, path_str) in &relevant {
+                        let path = PathBuf::from(path_str);
+                        if !path.exists() {
+                            warn!("[discover] Path does not exist: {}", path_str);
                             event_bus.publish(Message::ScanResult {
                                 job_id: job_id.clone(),
                                 series_id: *entity_id,
                                 worker_id: this.worker_id.clone(),
                                 files_found: vec![],
-                                errors: vec![],
+                                errors: vec![format!("Path does not exist: {}", path_str)],
                             }).await;
+                            continue;
                         }
 
-                        let elapsed = scan_start.elapsed();
+                        let media_type = infer_media_type(&path);
+
+                        // Fast directory scan — just list video files, no FFmpeg or hashing
+                        let files: Vec<ScannedFile> = match scan_type {
+                            ScanType::RescanSeries => {
+                                info!("[discover][{}] Listing {} (id={})", media_type, path_str, entity_id);
+                                scanner::scan_series_directory(&path)
+                            }
+                            ScanType::RescanMovie => {
+                                info!("[discover][movie] Listing {} (id={})", path_str, entity_id);
+                                scanner::scan_movie_directory(&path)
+                                    .into_iter()
+                                    .collect()
+                            }
+                            ScanType::DownloadedEpisodesScan | ScanType::DownloadedMovieScan => {
+                                info!("[discover][download] Listing {}", path_str);
+                                scanner::scan_download_directory(&path)
+                            }
+                            _ => vec![],
+                        };
+
+                        let file_count = files.len();
+                        total_files += file_count as u64;
                         info!(
-                            "[scan][stream] Job complete — {} file(s) in {:.1}s",
-                            total_files,
-                            elapsed.as_secs_f64()
+                            "[discover] {} — {} file(s) (id={})",
+                            media_type, file_count, entity_id
                         );
 
-                        this.record_scan(total_files);
-                    });
+                        // Send all discovered files for this entity (unenriched —
+                        // media_info, quality, file_hash are all None).
+                        // The server will check known_files and dispatch individual
+                        // probe/hash jobs for files that need enrichment.
+                        event_bus.publish(Message::ScanResult {
+                            job_id: job_id.clone(),
+                            series_id: *entity_id,
+                            worker_id: this.worker_id.clone(),
+                            files_found: files,
+                            errors: vec![],
+                        }).await;
+                    }
+
+                    let elapsed = scan_start.elapsed();
+                    info!(
+                        "[discover] Job complete — {} file(s) in {:.1}s",
+                        total_files,
+                        elapsed.as_secs_f64()
+                    );
+
+                    this.record_scan(total_files);
+                });
             }
             // Ignore our own heartbeats and status messages
             Message::WorkerHeartbeat { worker_id, .. } if worker_id == &self.worker_id => {
@@ -482,6 +422,121 @@ impl WorkerRunner {
             }
             Message::WorkerOffline { worker_id } => {
                 info!("Worker went offline: {}", worker_id);
+            }
+            // Per-file probe request — FFmpeg metadata extraction
+            Message::ProbeFileRequest {
+                job_id,
+                parent_job_id,
+                file_path,
+                entity_id,
+                scan_type,
+            } => {
+                if !self.handles_path(file_path) {
+                    return;
+                }
+                if !self.try_claim_job(job_id).await {
+                    return;
+                }
+
+                let this = Arc::clone(self);
+                let event_bus = Arc::clone(event_bus);
+                let job_id = job_id.clone();
+                let parent_job_id = parent_job_id.clone();
+                let file_path = file_path.clone();
+                let entity_id = *entity_id;
+                let _scan_type = *scan_type;
+
+                let sem = self.file_ops_semaphore.clone();
+                tokio::spawn(async move {
+                    let _permit = sem.acquire().await;
+                    let filename = std::path::Path::new(&file_path)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+
+                    info!("[probe] {} (entity={})", filename, entity_id);
+                    let path = std::path::Path::new(&file_path);
+
+                    let (media_info, quality) = if path.exists() {
+                        let media_info_result = crate::core::mediafiles::MediaAnalyzer::analyze(path).await;
+                        let media_info = media_info_result
+                            .as_ref()
+                            .ok()
+                            .and_then(|info| serde_json::to_string(info).ok());
+                        let quality = match &media_info_result {
+                            Ok(info) => {
+                                let q = crate::core::mediafiles::derive_quality_from_media(info, &filename);
+                                serde_json::to_string(&q).ok()
+                            }
+                            Err(_) => None,
+                        };
+                        (media_info, quality)
+                    } else {
+                        warn!("[probe] File not found: {}", file_path);
+                        (None, None)
+                    };
+
+                    event_bus.publish(Message::ProbeFileResult {
+                        job_id,
+                        parent_job_id,
+                        file_path,
+                        entity_id,
+                        worker_id: this.worker_id.clone(),
+                        media_info,
+                        quality,
+                    }).await;
+                });
+            }
+            // Per-file hash request — BLAKE3 content hash
+            Message::HashFileRequest {
+                job_id,
+                parent_job_id,
+                file_path,
+                entity_id,
+            } => {
+                if !self.handles_path(file_path) {
+                    return;
+                }
+                if !self.try_claim_job(job_id).await {
+                    return;
+                }
+
+                let this = Arc::clone(self);
+                let event_bus = Arc::clone(event_bus);
+                let job_id = job_id.clone();
+                let parent_job_id = parent_job_id.clone();
+                let file_path = file_path.clone();
+                let entity_id = *entity_id;
+
+                let sem = self.file_ops_semaphore.clone();
+                tokio::spawn(async move {
+                    let _permit = sem.acquire().await;
+                    let filename = std::path::Path::new(&file_path)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+
+                    info!("[hash] {} (entity={})", filename, entity_id);
+                    let path = std::path::Path::new(&file_path);
+
+                    let file_hash = if path.exists() {
+                        crate::core::mediafiles::compute_file_hash(path).await.ok()
+                    } else {
+                        warn!("[hash] File not found: {}", file_path);
+                        None
+                    };
+
+                    event_bus.publish(Message::HashFileResult {
+                        job_id,
+                        parent_job_id,
+                        file_path,
+                        entity_id,
+                        worker_id: this.worker_id.clone(),
+                        file_hash,
+                    }).await;
+                });
             }
             // File move requests from server (download import Phase 3)
             Message::ImportFilesRequest { job_id, files } => {

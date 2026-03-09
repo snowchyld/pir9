@@ -186,7 +186,11 @@ impl NotificationService {
             | Message::ImportFilesRequest { .. }
             | Message::ImportFilesResult { .. }
             | Message::DeletePathsRequest { .. }
-            | Message::DeletePathsResult { .. } => None,
+            | Message::DeletePathsResult { .. }
+            | Message::ProbeFileRequest { .. }
+            | Message::ProbeFileResult { .. }
+            | Message::HashFileRequest { .. }
+            | Message::HashFileResult { .. } => None,
         }
     }
 

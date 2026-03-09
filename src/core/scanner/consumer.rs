@@ -39,6 +39,11 @@ pub struct PendingScanJobs {
     /// via streaming. Used to distinguish "worker found 0 files" (needs fallback)
     /// from "streaming completion signal after files were already sent".
     streamed_entities: HashSet<(String, i64)>,
+    /// Per-file enrichment jobs: maps probe/hash job_id → file enrichment state.
+    /// When both probe and hash results arrive, the file is ready for processing.
+    file_jobs: HashMap<String, PendingFileJob>,
+    /// Maps probe_job_id → file_key and hash_job_id → file_key for lookup
+    enrichment_job_to_file: HashMap<String, String>,
 }
 
 #[derive(Debug)]
@@ -128,6 +133,29 @@ struct DownloadJobTracker {
     episodes_linked: usize,
     /// Set when the worker sends an empty ScanResult (no more files coming)
     scan_finished: bool,
+}
+
+/// Tracks a single file waiting for probe + hash enrichment results.
+/// Created when the server receives an unenriched file from discovery and
+/// dispatches individual ProbeFileRequest + HashFileRequest to workers.
+#[derive(Debug, Clone)]
+struct PendingFileJob {
+    /// Parent scan job ID (for completion tracking)
+    parent_job_id: String,
+    /// Entity ID (series_id or movie_id)
+    entity_id: i64,
+    /// Scan type (for routing to the right processor)
+    scan_type: ScanType,
+    /// The discovered file (unenriched)
+    file: ScannedFile,
+    /// Probe job ID dispatched for this file
+    probe_job_id: String,
+    /// Hash job ID dispatched for this file
+    hash_job_id: String,
+    /// Probe result (None = not yet received)
+    probe_result: Option<(Option<String>, Option<String>)>,
+    /// Hash result (None = not yet received)
+    hash_result: Option<Option<String>>,
 }
 
 /// Info about a download to import, passed from command.rs to the consumer
@@ -528,6 +556,33 @@ impl ScanResultConsumer {
                             self.handle_import_files_result(&job_id, &worker_id, results)
                                 .await;
                         }
+                        Message::ProbeFileResult {
+                            job_id,
+                            parent_job_id: _,
+                            file_path,
+                            entity_id,
+                            worker_id,
+                            media_info,
+                            quality,
+                        } => {
+                            self.handle_probe_file_result(
+                                &job_id, &file_path, entity_id, &worker_id,
+                                media_info, quality,
+                            ).await;
+                        }
+                        Message::HashFileResult {
+                            job_id,
+                            parent_job_id: _,
+                            file_path,
+                            entity_id,
+                            worker_id,
+                            file_hash,
+                        } => {
+                            self.handle_hash_file_result(
+                                &job_id, &file_path, entity_id, &worker_id,
+                                file_hash,
+                            ).await;
+                        }
                         _ => {
                             // Ignore other message types
                         }
@@ -546,12 +601,15 @@ impl ScanResultConsumer {
         Ok(())
     }
 
-    /// Handle a series scan result from a worker (streaming-aware).
+    /// Handle a series scan result from discovery phase.
     ///
-    /// Workers stream one file per ScanResult, then send an empty completion signal.
-    /// - Non-empty files: process immediately, don't mark job received yet
-    /// - Empty files (completion): mark job received; try local fallback only if
-    ///   no files were previously streamed for this entity
+    /// The worker returns a list of unenriched files (no media_info, quality, or hash).
+    /// For each file:
+    /// - Check known DB records: if path+size match and hash exists, process immediately
+    /// - Otherwise: dispatch individual ProbeFileRequest + HashFileRequest jobs
+    ///
+    /// Empty files_found = worker found 0 files for this entity. Try local fallback
+    /// and mark the entity result as received.
     async fn handle_scan_result(
         &self,
         job_id: &str,
@@ -560,7 +618,6 @@ impl ScanResultConsumer {
         files_found: Vec<ScannedFile>,
         errors: Vec<String>,
     ) {
-        // Log any errors from the worker
         for error in &errors {
             warn!(
                 "Worker {} reported error for job {}: {}",
@@ -568,37 +625,12 @@ impl ScanResultConsumer {
             );
         }
 
-        if !files_found.is_empty() {
-            // Per-file streaming result — process immediately, track that we got files
-            debug!(
-                "Streaming scan result: job={}, series={}, files={}",
-                job_id, series_id, files_found.len()
+        if files_found.is_empty() {
+            // No files found — try local fallback, then mark received
+            info!(
+                "Discovery: 0 files for series {} (job={})",
+                series_id, job_id
             );
-            {
-                let mut jobs = self.pending_jobs.write().await;
-                jobs.streamed_entities.insert((job_id.to_string(), series_id));
-            }
-            if let Err(e) = self.process_scanned_files(series_id, files_found).await {
-                error!(
-                    "Failed to process scanned files for series {}: {}",
-                    series_id, e
-                );
-            }
-            return;
-        }
-
-        // Empty result = per-entity completion signal
-        info!(
-            "Scan complete for series {} (job={})",
-            series_id, job_id
-        );
-
-        // Only try local fallback if the worker streamed zero files for this entity
-        let had_files = {
-            let jobs = self.pending_jobs.read().await;
-            jobs.streamed_entities.contains(&(job_id.to_string(), series_id))
-        };
-        if !had_files {
             let fallback = self.try_local_fallback_scan(series_id).await;
             if let Err(e) = self.process_scanned_files(series_id, fallback).await {
                 error!(
@@ -606,16 +638,67 @@ impl ScanResultConsumer {
                     series_id, e
                 );
             }
+            self.mark_job_result_received(job_id).await;
+            return;
         }
 
-        // Mark this entity's result as received
-        self.mark_job_result_received(job_id).await;
+        info!(
+            "Discovery: {} files for series {} (job={}), dispatching enrichment",
+            files_found.len(), series_id, job_id
+        );
+
+        // Load known file data from DB for skip-enrichment
+        let known_files = self.load_known_series_files(series_id).await;
+
+        let mut enriched_files = Vec::new();
+        let mut files_needing_enrichment = Vec::new();
+
+        for file in files_found {
+            let path_key = file.path.to_string_lossy().to_string();
+            if let Some(known) = known_files.get(&path_key) {
+                if known.size == file.size && known.file_hash.is_some() {
+                    // File unchanged — use existing enrichment data
+                    let mut enriched = file;
+                    enriched.media_info = known.media_info.clone();
+                    enriched.quality = known.quality.clone();
+                    enriched.file_hash = known.file_hash.clone();
+                    enriched_files.push(enriched);
+                    continue;
+                }
+            }
+            files_needing_enrichment.push(file);
+        }
+
+        // Process already-enriched files immediately
+        if !enriched_files.is_empty() {
+            let count = enriched_files.len();
+            debug!("Processing {} unchanged files for series {}", count, series_id);
+            if let Err(e) = self.process_scanned_files(series_id, enriched_files).await {
+                error!(
+                    "Failed to process enriched files for series {}: {}",
+                    series_id, e
+                );
+            }
+        }
+
+        if files_needing_enrichment.is_empty() {
+            // All files were known — done with this entity
+            self.mark_job_result_received(job_id).await;
+            return;
+        }
+
+        // Dispatch individual probe + hash jobs for files needing enrichment
+        self.dispatch_enrichment_jobs(
+            job_id,
+            series_id,
+            ScanType::RescanSeries,
+            files_needing_enrichment,
+        ).await;
     }
 
-    /// Handle a movie scan result from a worker (streaming-aware).
+    /// Handle a movie scan result from discovery phase.
     ///
-    /// Movies typically have 1 file, but the streaming protocol is the same:
-    /// non-empty = per-file result, empty = completion signal.
+    /// Same pattern as series: check known files, dispatch enrichment for new ones.
     async fn handle_movie_scan_result(
         &self,
         job_id: &str,
@@ -631,37 +714,12 @@ impl ScanResultConsumer {
             );
         }
 
-        if let Some(file) = files_found.into_iter().next() {
-            // Per-file streaming result — process immediately
-            debug!(
-                "Streaming movie scan result: job={}, movie={}, file={}",
-                job_id, movie_id, file.filename
+        if files_found.is_empty() {
+            // No file found — clear has_file if movie thought it had one
+            info!(
+                "Discovery: 0 files for movie {} (job={})",
+                movie_id, job_id
             );
-            {
-                let mut jobs = self.pending_jobs.write().await;
-                jobs.streamed_entities.insert((job_id.to_string(), movie_id));
-            }
-            if let Err(e) = self.process_movie_scan_result(movie_id, file).await {
-                error!(
-                    "Failed to process movie scan result for movie {}: {}",
-                    movie_id, e
-                );
-            }
-            return;
-        }
-
-        // Empty result = per-entity completion signal
-        info!(
-            "Movie scan complete for movie {} (job={})",
-            movie_id, job_id
-        );
-
-        // If no files were streamed, clear file reference (movie has no file on disk)
-        let had_files = {
-            let jobs = self.pending_jobs.read().await;
-            jobs.streamed_entities.contains(&(job_id.to_string(), movie_id))
-        };
-        if !had_files {
             let movie_repo = MovieRepository::new(self.db.clone());
             if let Ok(Some(movie)) = movie_repo.get_by_id(movie_id).await {
                 if movie.has_file {
@@ -674,9 +732,58 @@ impl ScanResultConsumer {
                     .await;
                 }
             }
+            self.mark_job_result_received(job_id).await;
+            return;
         }
 
-        self.mark_job_result_received(job_id).await;
+        info!(
+            "Discovery: {} files for movie {} (job={}), dispatching enrichment",
+            files_found.len(), movie_id, job_id
+        );
+
+        // Load known file data from DB for skip-enrichment
+        let known_files = self.load_known_movie_files(movie_id).await;
+
+        let mut enriched_files = Vec::new();
+        let mut files_needing_enrichment = Vec::new();
+
+        for file in files_found {
+            let path_key = file.path.to_string_lossy().to_string();
+            if let Some(known) = known_files.get(&path_key) {
+                if known.size == file.size && known.file_hash.is_some() {
+                    let mut enriched = file;
+                    enriched.media_info = known.media_info.clone();
+                    enriched.quality = known.quality.clone();
+                    enriched.file_hash = known.file_hash.clone();
+                    enriched_files.push(enriched);
+                    continue;
+                }
+            }
+            files_needing_enrichment.push(file);
+        }
+
+        // Process already-enriched files immediately
+        for file in enriched_files {
+            if let Err(e) = self.process_movie_scan_result(movie_id, file).await {
+                error!(
+                    "Failed to process enriched movie file for movie {}: {}",
+                    movie_id, e
+                );
+            }
+        }
+
+        if files_needing_enrichment.is_empty() {
+            self.mark_job_result_received(job_id).await;
+            return;
+        }
+
+        // Dispatch individual probe + hash jobs
+        self.dispatch_enrichment_jobs(
+            job_id,
+            movie_id,
+            ScanType::RescanMovie,
+            files_needing_enrichment,
+        ).await;
     }
 
     /// Process a single movie file from a worker scan result
@@ -1717,6 +1824,313 @@ impl ScanResultConsumer {
                 );
             }
         }
+    }
+
+    /// Dispatch individual probe + hash jobs for files that need enrichment.
+    /// Creates a PendingFileJob for each file and publishes ProbeFileRequest + HashFileRequest.
+    async fn dispatch_enrichment_jobs(
+        &self,
+        parent_job_id: &str,
+        entity_id: i64,
+        scan_type: ScanType,
+        files: Vec<ScannedFile>,
+    ) {
+        let event_bus = &self.event_bus;
+
+        let file_count = files.len();
+        info!(
+            "Dispatching {} probe + {} hash jobs for entity {} (parent={})",
+            file_count, file_count, entity_id, parent_job_id
+        );
+
+        let mut jobs = self.pending_jobs.write().await;
+
+        for file in files {
+            let file_key = format!("{}:{}", parent_job_id, file.path.to_string_lossy());
+            let probe_job_id = uuid::Uuid::new_v4().to_string();
+            let hash_job_id = uuid::Uuid::new_v4().to_string();
+            let file_path_str = file.path.to_string_lossy().to_string();
+
+            // Track the pending enrichment
+            jobs.file_jobs.insert(
+                file_key.clone(),
+                PendingFileJob {
+                    parent_job_id: parent_job_id.to_string(),
+                    entity_id,
+                    scan_type,
+                    file: file.clone(),
+                    probe_job_id: probe_job_id.clone(),
+                    hash_job_id: hash_job_id.clone(),
+                    probe_result: None,
+                    hash_result: None,
+                },
+            );
+
+            // Map job IDs to file key for result lookup
+            jobs.enrichment_job_to_file.insert(probe_job_id.clone(), file_key.clone());
+            jobs.enrichment_job_to_file.insert(hash_job_id.clone(), file_key.clone());
+
+            // Dispatch probe job
+            event_bus.publish(Message::ProbeFileRequest {
+                job_id: probe_job_id,
+                parent_job_id: parent_job_id.to_string(),
+                file_path: file_path_str.clone(),
+                entity_id,
+                scan_type,
+            }).await;
+
+            // Dispatch hash job (runs in parallel with probe on worker)
+            event_bus.publish(Message::HashFileRequest {
+                job_id: hash_job_id,
+                parent_job_id: parent_job_id.to_string(),
+                file_path: file_path_str,
+                entity_id,
+            }).await;
+        }
+    }
+
+    /// Handle a probe result for a single file
+    async fn handle_probe_file_result(
+        &self,
+        job_id: &str,
+        file_path: &str,
+        entity_id: i64,
+        worker_id: &str,
+        media_info: Option<String>,
+        quality: Option<String>,
+    ) {
+        debug!(
+            "[probe] Result: job={}, entity={}, worker={}, file={}",
+            job_id, entity_id, worker_id,
+            std::path::Path::new(file_path)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        );
+
+        let ready_file = {
+            let mut jobs = self.pending_jobs.write().await;
+            let file_key = match jobs.enrichment_job_to_file.get(job_id) {
+                Some(k) => k.clone(),
+                None => {
+                    warn!("Probe result for unknown job {}", job_id);
+                    return;
+                }
+            };
+
+            if let Some(pending) = jobs.file_jobs.get_mut(&file_key) {
+                pending.probe_result = Some((media_info, quality));
+
+                // Check if hash is also done
+                if pending.hash_result.is_some() {
+                    // Both done — remove and return for processing
+                    let completed = jobs.file_jobs.remove(&file_key).unwrap();
+                    jobs.enrichment_job_to_file.remove(&completed.probe_job_id);
+                    jobs.enrichment_job_to_file.remove(&completed.hash_job_id);
+                    Some(completed)
+                } else {
+                    None
+                }
+            } else {
+                warn!("Probe result for unknown file key {}", file_key);
+                None
+            }
+        };
+
+        if let Some(completed) = ready_file {
+            self.process_enriched_file(completed).await;
+        }
+    }
+
+    /// Handle a hash result for a single file
+    async fn handle_hash_file_result(
+        &self,
+        job_id: &str,
+        file_path: &str,
+        entity_id: i64,
+        worker_id: &str,
+        file_hash: Option<String>,
+    ) {
+        debug!(
+            "[hash] Result: job={}, entity={}, worker={}, file={}",
+            job_id, entity_id, worker_id,
+            std::path::Path::new(file_path)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        );
+
+        let ready_file = {
+            let mut jobs = self.pending_jobs.write().await;
+            let file_key = match jobs.enrichment_job_to_file.get(job_id) {
+                Some(k) => k.clone(),
+                None => {
+                    warn!("Hash result for unknown job {}", job_id);
+                    return;
+                }
+            };
+
+            if let Some(pending) = jobs.file_jobs.get_mut(&file_key) {
+                pending.hash_result = Some(file_hash);
+
+                if pending.probe_result.is_some() {
+                    let completed = jobs.file_jobs.remove(&file_key).unwrap();
+                    jobs.enrichment_job_to_file.remove(&completed.probe_job_id);
+                    jobs.enrichment_job_to_file.remove(&completed.hash_job_id);
+                    Some(completed)
+                } else {
+                    None
+                }
+            } else {
+                warn!("Hash result for unknown file key {}", file_key);
+                None
+            }
+        };
+
+        if let Some(completed) = ready_file {
+            self.process_enriched_file(completed).await;
+        }
+    }
+
+    /// Process a file that has both probe and hash results.
+    /// Builds the enriched ScannedFile and routes to the appropriate processor.
+    async fn process_enriched_file(&self, completed: PendingFileJob) {
+        let (media_info, quality) = completed.probe_result.unwrap_or((None, None));
+        let file_hash = completed.hash_result.unwrap_or(None);
+
+        let mut file = completed.file;
+        file.media_info = media_info;
+        file.quality = quality;
+        file.file_hash = file_hash;
+
+        let entity_id = completed.entity_id;
+        let parent_job_id = completed.parent_job_id;
+
+        info!(
+            "[enriched] {} (entity={}, hash={})",
+            file.filename,
+            entity_id,
+            file.file_hash.as_deref().unwrap_or("none")
+        );
+
+        match completed.scan_type {
+            ScanType::RescanSeries => {
+                if let Err(e) = self.process_scanned_files(entity_id, vec![file]).await {
+                    error!(
+                        "Failed to process enriched file for series {}: {}",
+                        entity_id, e
+                    );
+                }
+            }
+            ScanType::RescanMovie => {
+                if let Err(e) = self.process_movie_scan_result(entity_id, file).await {
+                    error!(
+                        "Failed to process enriched movie file for movie {}: {}",
+                        entity_id, e
+                    );
+                }
+            }
+            ScanType::DownloadedEpisodesScan => {
+                // For download imports, route through the download scan handler
+                if let Err(e) = self.process_scanned_files(entity_id, vec![file]).await {
+                    error!(
+                        "Failed to process enriched download file for series {}: {}",
+                        entity_id, e
+                    );
+                }
+            }
+            ScanType::DownloadedMovieScan => {
+                if let Err(e) = self.process_movie_scan_result(entity_id, file).await {
+                    error!(
+                        "Failed to process enriched download movie file for movie {}: {}",
+                        entity_id, e
+                    );
+                }
+            }
+            _ => {
+                warn!("Unexpected scan type {:?} for enriched file", completed.scan_type);
+            }
+        }
+
+        // Check if all enrichment jobs for this parent are done
+        self.check_enrichment_complete(&parent_job_id).await;
+    }
+
+    /// Check if all file enrichment jobs for a parent scan job are complete.
+    /// If so, mark the entity result as received.
+    async fn check_enrichment_complete(&self, parent_job_id: &str) {
+        let has_pending = {
+            let jobs = self.pending_jobs.read().await;
+            jobs.file_jobs.values().any(|fj| fj.parent_job_id == parent_job_id)
+        };
+
+        if !has_pending {
+            info!(
+                "All enrichment jobs complete for parent job {}",
+                parent_job_id
+            );
+            self.mark_job_result_received(parent_job_id).await;
+        }
+    }
+
+    /// Load known file data from DB for a series (for skip-enrichment)
+    async fn load_known_series_files(
+        &self,
+        series_id: i64,
+    ) -> HashMap<String, crate::core::messaging::KnownFileInfo> {
+        let pool = self.db.pool();
+        let rows: Vec<(String, i64, Option<String>, Option<String>, Option<String>)> =
+            sqlx::query_as(
+                "SELECT path, size, media_info, quality, file_hash FROM episode_files WHERE series_id = $1",
+            )
+            .bind(series_id)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+
+        rows.into_iter()
+            .map(|(path, size, media_info, quality, file_hash)| {
+                (
+                    path,
+                    crate::core::messaging::KnownFileInfo {
+                        size,
+                        media_info,
+                        quality,
+                        file_hash,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Load known file data from DB for a movie (for skip-enrichment)
+    async fn load_known_movie_files(
+        &self,
+        movie_id: i64,
+    ) -> HashMap<String, crate::core::messaging::KnownFileInfo> {
+        let pool = self.db.pool();
+        let rows: Vec<(String, i64, Option<String>, Option<String>, Option<String>)> =
+            sqlx::query_as(
+                "SELECT path, size, media_info, quality, file_hash FROM movie_files WHERE movie_id = $1",
+            )
+            .bind(movie_id)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+
+        rows.into_iter()
+            .map(|(path, size, media_info, quality, file_hash)| {
+                (
+                    path,
+                    crate::core::messaging::KnownFileInfo {
+                        size,
+                        media_info,
+                        quality,
+                        file_hash,
+                    },
+                )
+            })
+            .collect()
     }
 
     /// When the worker returns 0 files, check if the path is accessible locally

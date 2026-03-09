@@ -386,6 +386,64 @@ pub enum Message {
         /// Per-file results
         results: Vec<ImportFileResult>,
     },
+    // Granular per-file enrichment jobs (probe and hash independently)
+    /// Server asks a worker to FFmpeg-probe a single file
+    ProbeFileRequest {
+        /// Unique job ID for this probe operation
+        job_id: String,
+        /// Parent scan job ID (for tracking which scan this belongs to)
+        parent_job_id: String,
+        /// Full path to the file to probe
+        file_path: String,
+        /// Entity ID (series_id or movie_id) this file belongs to
+        entity_id: i64,
+        /// Scan type context (for consumer routing)
+        scan_type: ScanType,
+    },
+    /// Worker returns FFmpeg probe results for a single file
+    ProbeFileResult {
+        /// Job ID matching the request
+        job_id: String,
+        /// Parent scan job ID
+        parent_job_id: String,
+        /// File that was probed
+        file_path: String,
+        /// Entity ID
+        entity_id: i64,
+        /// Worker that performed the probe
+        worker_id: String,
+        /// FFmpeg media info JSON
+        media_info: Option<String>,
+        /// Quality JSON derived from resolution + filename analysis
+        quality: Option<String>,
+    },
+    /// Server asks a worker to BLAKE3-hash a single file
+    HashFileRequest {
+        /// Unique job ID for this hash operation
+        job_id: String,
+        /// Parent scan job ID
+        parent_job_id: String,
+        /// Full path to the file to hash
+        file_path: String,
+        /// Entity ID (series_id or movie_id)
+        entity_id: i64,
+    },
+    /// Worker returns BLAKE3 hash for a single file
+    HashFileResult {
+        /// Job ID matching the request
+        job_id: String,
+        /// Parent scan job ID
+        parent_job_id: String,
+        /// File that was hashed
+        file_path: String,
+        /// Entity ID
+        entity_id: i64,
+        /// Worker that performed the hash
+        worker_id: String,
+        /// BLAKE3 content hash (hex string)
+        file_hash: Option<String>,
+    },
+
     /// Server asks worker to delete paths from disk
     DeletePathsRequest {
         /// Unique job ID for tracking
