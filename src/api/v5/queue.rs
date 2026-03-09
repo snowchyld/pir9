@@ -122,6 +122,12 @@ pub struct ImportProgressResource {
     pub percent: f32,
     /// Detail string (e.g. "1080p x265 HDR10")
     pub detail: Option<String>,
+    /// Bytes copied so far (only during "copying" stage)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes_copied: Option<u64>,
+    /// Total bytes to copy (only during "copying" stage)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes_total: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1126,6 +1132,8 @@ async fn list_queue(
                                 files_processed: progress.files_processed,
                                 percent: progress.percent,
                                 detail: progress.detail.clone(),
+                                bytes_copied: progress.bytes_copied,
+                                bytes_total: progress.bytes_total,
                             });
                         }
                     }
@@ -1550,18 +1558,31 @@ async fn import_queue_item(
                         .await;
                 }
 
-                let (job_id, message) =
-                    crate::core::scanner::create_movie_scan_request(
-                        vec![movie_id],
-                        vec![output_path.clone()],
-                        std::collections::HashMap::new(),
-                    );
+                let job_id = uuid::Uuid::new_v4().to_string();
+                let message = crate::core::messaging::Message::ScanRequest {
+                    job_id: job_id.clone(),
+                    scan_type: crate::core::messaging::ScanType::DownloadedMovieScan,
+                    series_ids: vec![movie_id],
+                    paths: vec![output_path.clone()],
+                    known_files: std::collections::HashMap::new(),
+                };
+
                 if let Some(consumer) = state.scan_result_consumer.get() {
                     consumer
                         .register_job(
                             &job_id,
-                            crate::core::messaging::ScanType::RescanMovie,
+                            crate::core::messaging::ScanType::DownloadedMovieScan,
                             vec![movie_id],
+                        )
+                        .await;
+                    consumer
+                        .register_movie_download_import(
+                            &job_id,
+                            movie_id,
+                            movie_title.clone(),
+                            download_id.clone(),
+                            download_client_id,
+                            title.clone(),
                         )
                         .await;
                     // Link job to download_id so queue API can show progress

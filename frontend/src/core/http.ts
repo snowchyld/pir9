@@ -422,6 +422,8 @@ export interface QueueItem {
     filesProcessed: number;
     percent: number;
     detail?: string;
+    bytesCopied?: number;
+    bytesTotal?: number;
   };
 }
 

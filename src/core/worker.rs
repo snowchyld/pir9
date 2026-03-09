@@ -317,7 +317,9 @@ impl WorkerRunner {
                     return;
                 }
 
-                if *scan_type == ScanType::DownloadedEpisodesScan {
+                if *scan_type == ScanType::DownloadedEpisodesScan
+                    || *scan_type == ScanType::DownloadedMovieScan
+                {
                     // Per-file streaming: spawn enrichment as background task so the
                     // main event loop stays free to process ImportFilesRequests concurrently.
                     // This means file1 can be moved to library while file50 is still being probed.
@@ -480,10 +482,8 @@ impl WorkerRunner {
                         spec.dest_path.display()
                     );
 
-                    // Atomic progress tracker for copy — background task reads this
-                    // and publishes progress events at 0.1% intervals
-                    let copy_progress = Arc::new(std::sync::atomic::AtomicU32::new(0));
-                    let copy_progress_clone = Arc::clone(&copy_progress);
+                    // Create sync channel for byte-level copy progress
+                    let (progress_tx, progress_rx) = std::sync::mpsc::channel::<(u64, u64)>();
                     let progress_job_id = job_id.to_string();
                     let progress_worker_id = self.worker_id.clone();
                     let progress_filename = filename.clone();
@@ -491,42 +491,76 @@ impl WorkerRunner {
                     let progress_file_idx = idx;
                     let progress_total = total;
 
-                    // Spawn background task to poll atomic and publish copy progress
+                    // Spawn async task to drain the channel and publish progress to Redis.
+                    // This works because move_file runs in spawn_blocking (separate OS thread),
+                    // so this task is free to run on the tokio runtime.
                     let progress_handle = tokio::spawn(async move {
-                        let mut last_reported: f32 = -1.0;
+                        let mut last_reported_pct: f32 = -1.0;
+                        let mut disconnected = false;
                         loop {
+                            // Sleep briefly to batch channel reads (avoid flooding Redis)
                             tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-                            let raw = copy_progress_clone.load(std::sync::atomic::Ordering::Relaxed);
-                            let file_pct = f32::from_bits(raw);
-                            // Overall percent: each file is equal weight
-                            let overall_pct = (progress_file_idx as f32 + file_pct / 100.0)
-                                * 100.0
-                                / progress_total as f32;
-                            // Publish if changed by >= 0.1%
-                            if (overall_pct - last_reported).abs() >= 0.1 {
-                                last_reported = overall_pct;
-                                publish_progress(
-                                    &progress_bus,
-                                    &progress_job_id,
-                                    &progress_worker_id,
-                                    "copying",
-                                    Some(&progress_filename),
-                                    progress_total,
-                                    progress_file_idx,
-                                    overall_pct.min(100.0),
-                                    None,
-                                )
-                                .await;
+                            // Drain channel — take the latest value
+                            let mut latest: Option<(u64, u64)> = None;
+                            loop {
+                                match progress_rx.try_recv() {
+                                    Ok(val) => latest = Some(val),
+                                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                        disconnected = true;
+                                        break;
+                                    }
+                                }
                             }
-                            if file_pct >= 100.0 {
+                            if let Some((bytes_copied, bytes_total_size)) = latest {
+                                let file_pct = if bytes_total_size > 0 {
+                                    bytes_copied as f32 * 100.0 / bytes_total_size as f32
+                                } else {
+                                    0.0
+                                };
+                                // Overall percent: each file is equal weight
+                                let overall_pct = (progress_file_idx as f32 + file_pct / 100.0)
+                                    * 100.0
+                                    / progress_total as f32;
+                                // Publish if changed by >= 0.1%
+                                if (overall_pct - last_reported_pct).abs() >= 0.1 {
+                                    last_reported_pct = overall_pct;
+                                    publish_progress_bytes(
+                                        &progress_bus,
+                                        &progress_job_id,
+                                        &progress_worker_id,
+                                        "copying",
+                                        Some(&progress_filename),
+                                        progress_total,
+                                        progress_file_idx,
+                                        overall_pct.min(100.0),
+                                        None,
+                                        Some(bytes_copied),
+                                        Some(bytes_total_size),
+                                    )
+                                    .await;
+                                }
+                            }
+                            if disconnected {
                                 break;
                             }
                         }
                     });
 
+                    // Run sync copy on a blocking thread so tokio stays free
+                    let src = spec.source_path.clone();
+                    let dst = spec.dest_path.clone();
                     let file_start = std::time::Instant::now();
-                    let result = match move_file(&spec.source_path, &spec.dest_path, Some(&copy_progress)) {
-                        Ok(mr) => {
+                    let copy_result = tokio::task::spawn_blocking(move || {
+                        move_file(&src, &dst, Some(progress_tx))
+                    })
+                    .await;
+
+                    // Wait for progress reporter to finish
+                    let _ = progress_handle.await;
+
+                    let result = match copy_result {
+                        Ok(Ok(mr)) => {
                             let elapsed = file_start.elapsed();
                             info!(
                                 "[{}][{}] ({}/{}) {} — {} in {:.1}s",
@@ -546,11 +580,9 @@ impl WorkerRunner {
                                 error: None,
                             }
                         }
-                        Err(e) => {
-                            // Mark progress complete so the polling task stops
-                            copy_progress.store(100.0_f32.to_bits(), std::sync::atomic::Ordering::Relaxed);
+                        Ok(Err(e)) => {
                             error!(
-                                "[error][{}] ({}/{}) {} — failed: {}",
+                                "[error][{}] ({}/{}) {} — copy failed: {}",
                                 media_type,
                                 idx + 1,
                                 total,
@@ -565,9 +597,24 @@ impl WorkerRunner {
                                 error: Some(e.to_string()),
                             }
                         }
+                        Err(e) => {
+                            error!(
+                                "[error][{}] ({}/{}) {} — spawn_blocking panicked: {}",
+                                media_type,
+                                idx + 1,
+                                total,
+                                filename,
+                                e
+                            );
+                            crate::core::messaging::ImportFileResult {
+                                source_path: spec.source_path.clone(),
+                                dest_path: spec.dest_path.clone(),
+                                success: false,
+                                file_size: 0,
+                                error: Some(format!("internal error: {}", e)),
+                            }
+                        }
                     };
-                    // Wait for the progress reporter to finish
-                    let _ = progress_handle.await;
                     results.push(result);
                 }
 
@@ -940,7 +987,7 @@ impl WorkerRunner {
                     });
                 }
             }
-            ScanType::DownloadedEpisodesScan => {
+            ScanType::DownloadedEpisodesScan | ScanType::DownloadedMovieScan => {
                 for &(series_id, path_str) in series_paths {
                     let path = PathBuf::from(path_str);
 
@@ -994,27 +1041,31 @@ struct MoveResult {
 ///
 /// Always copies — source files are never moved or deleted. The download
 /// client manages source cleanup via its own retention/seeding rules.
+///
+/// Sends `(bytes_copied, total_size)` through the optional channel after each 1MB chunk.
 fn move_file(
     source: &std::path::Path,
     dest: &std::path::Path,
-    progress_pct: Option<&std::sync::atomic::AtomicU32>,
+    progress_tx: Option<std::sync::mpsc::Sender<(u64, u64)>>,
 ) -> std::io::Result<MoveResult> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let source_size = std::fs::metadata(source)?.len();
-    copy_with_progress(source, dest, source_size, progress_pct)?;
+    copy_with_progress(source, dest, source_size, progress_tx)?;
     let size = std::fs::metadata(dest)?.len() as i64;
     Ok(MoveResult { size, method: "copy" })
 }
 
-/// Copy a file with periodic progress logging (every 0.1%) and optional progress reporting
-/// via an atomic f32 (stored as u32 bits) that external code can read.
+/// Copy a file with periodic progress logging and byte-level progress reporting.
+///
+/// Sends `(bytes_copied, total_size)` through the channel after each 1MB chunk,
+/// letting the async receiver calculate percentage and publish to Redis.
 fn copy_with_progress(
     source: &std::path::Path,
     dest: &std::path::Path,
     total_size: u64,
-    progress_pct: Option<&std::sync::atomic::AtomicU32>,
+    progress_tx: Option<std::sync::mpsc::Sender<(u64, u64)>>,
 ) -> std::io::Result<()> {
     use std::io::{Read, Write};
 
@@ -1024,7 +1075,7 @@ fn copy_with_progress(
     let mut writer = std::io::BufWriter::with_capacity(1 << 20, dst_file);
 
     let mut copied: u64 = 0;
-    let mut last_logged_pct: f32 = 0.0;
+    let mut last_logged_pct: f32 = -1.0;
     let mut buf = vec![0u8; 1 << 20]; // 1MB chunks
     let src_name = source.file_name().unwrap_or_default().to_string_lossy();
 
@@ -1037,16 +1088,14 @@ fn copy_with_progress(
         copied += n as u64;
 
         if total_size > 0 {
-            let pct = copied as f32 * 100.0 / total_size as f32;
-            // Update atomic progress for external readers (every 0.1%)
-            if let Some(atomic) = progress_pct {
-                if pct >= last_logged_pct + 0.1 {
-                    atomic.store(pct.to_bits(), std::sync::atomic::Ordering::Relaxed);
-                }
+            let pct = copied as f64 * 100.0 / total_size as f64;
+            // Send bytes to channel on every chunk (non-blocking — drops if receiver is behind)
+            if let Some(ref tx) = progress_tx {
+                let _ = tx.send((copied, total_size));
             }
             // Log every 10%
-            if pct >= last_logged_pct + 10.0 {
-                last_logged_pct = (pct / 10.0).floor() * 10.0;
+            if pct as f32 >= last_logged_pct + 10.0 {
+                last_logged_pct = (pct as f32 / 10.0).floor() * 10.0;
                 info!(
                     "[copy] {} — {:.0}% ({}/{})",
                     src_name,
@@ -1056,11 +1105,6 @@ fn copy_with_progress(
                 );
             }
         }
-    }
-
-    // Mark 100% complete
-    if let Some(atomic) = progress_pct {
-        atomic.store(100.0_f32.to_bits(), std::sync::atomic::Ordering::Relaxed);
     }
 
     writer.flush()?;
@@ -1117,6 +1161,37 @@ async fn publish_progress(
     percent: f32,
     detail: Option<String>,
 ) {
+    publish_progress_bytes(
+        event_bus,
+        job_id,
+        worker_id,
+        stage,
+        current_file,
+        files_total,
+        files_processed,
+        percent,
+        detail,
+        None,
+        None,
+    )
+    .await;
+}
+
+/// Publish a scan progress update with optional byte-level copy progress
+#[cfg(feature = "redis-events")]
+async fn publish_progress_bytes(
+    event_bus: &crate::core::messaging::HybridEventBus,
+    job_id: &str,
+    worker_id: &str,
+    stage: &str,
+    current_file: Option<&str>,
+    files_total: usize,
+    files_processed: usize,
+    percent: f32,
+    detail: Option<String>,
+    bytes_copied: Option<u64>,
+    bytes_total: Option<u64>,
+) {
     event_bus
         .publish(Message::ScanProgress {
             job_id: job_id.to_string(),
@@ -1129,6 +1204,8 @@ async fn publish_progress(
             detail,
             entity_ids: vec![],
             scan_type: None,
+            bytes_copied,
+            bytes_total,
         })
         .await;
 }

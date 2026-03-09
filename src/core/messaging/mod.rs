@@ -25,6 +25,8 @@ pub enum ScanType {
     DownloadedEpisodesScan,
     /// Rescan movie directories for video files
     RescanMovie,
+    /// Import movie from download directory (probe + hash, then server dispatches move)
+    DownloadedMovieScan,
     /// Placeholder for podcast library scanning (not yet implemented)
     RescanPodcast,
     /// Placeholder for music library scanning (not yet implemented)
@@ -303,7 +305,7 @@ pub enum Message {
         job_id: String,
         /// Worker instance ID
         worker_id: String,
-        /// Current stage: "scanning", "probing", "hashing"
+        /// Current stage: "scanning", "probing", "hashing", "copying"
         stage: String,
         /// File currently being processed
         current_file: Option<String>,
@@ -321,6 +323,12 @@ pub enum Message {
         /// Scan type (filled by consumer, not by worker)
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scan_type: Option<ScanType>,
+        /// Bytes copied so far (only set during "copying" stage)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bytes_copied: Option<u64>,
+        /// Total bytes to copy (only set during "copying" stage)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bytes_total: Option<u64>,
     },
     /// Result sent from worker back to server
     ScanResult {

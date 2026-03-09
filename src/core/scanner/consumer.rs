@@ -29,6 +29,8 @@ pub struct PendingScanJobs {
     jobs: HashMap<String, PendingJob>,
     /// Maps job_id -> pending download import (Phase 2→3→4 tracking)
     download_imports: HashMap<String, PendingDownloadImport>,
+    /// Maps per-file import_job_id -> pending movie file import (Phase 2→3→4 for movies)
+    movie_file_imports: HashMap<String, PendingMovieFileImport>,
     /// Tracks overall progress of per-file download imports (keyed by scan job_id)
     download_job_trackers: HashMap<String, DownloadJobTracker>,
     /// Maps per-file import_job_id → original scan job_id for tracker lookup
@@ -90,6 +92,21 @@ struct ImportMapping {
     parsed_quality_json: String,
 }
 
+/// Per-file data needed to insert movie_file records after the worker moves the file.
+/// Stored in Phase 2 (scan result) and consumed in Phase 4 (import result).
+#[derive(Debug, Clone)]
+struct PendingMovieFileImport {
+    movie_id: i64,
+    movie_path: String,
+    movie_title: String,
+    media_info: Option<String>,
+    quality: String,
+    file_hash: Option<String>,
+    release_group: Option<String>,
+    scene_name: String,
+    source_path: PathBuf,
+}
+
 /// Tracks overall progress of a download import across multiple per-file rounds.
 /// Created when the scan is registered and consumed when all files are imported.
 #[derive(Debug)]
@@ -128,7 +145,7 @@ pub struct DownloadImportInfo {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanProgressInfo {
-    /// Current stage: "scanning", "probing", "hashing"
+    /// Current stage: "scanning", "probing", "hashing", "copying"
     pub stage: String,
     /// File currently being processed
     pub current_file: Option<String>,
@@ -140,6 +157,10 @@ pub struct ScanProgressInfo {
     pub percent: f32,
     /// Detail string: "1080p x265 HDR10" or "unchanged"
     pub detail: Option<String>,
+    /// Bytes copied so far (only during "copying" stage)
+    pub bytes_copied: Option<u64>,
+    /// Total bytes to copy (only during "copying" stage)
+    pub bytes_total: Option<u64>,
 }
 
 /// Info about a currently running scan job, exposed to the API layer
@@ -330,6 +351,38 @@ impl ScanResultConsumer {
         debug!("Registered download imports for scan job: {}", job_id);
     }
 
+    /// Register a movie download import for the worker pipeline.
+    /// Creates a download job tracker so the consumer knows to compute a destination
+    /// path, dispatch a file move, and create movie_file records when results arrive.
+    pub async fn register_movie_download_import(
+        &self,
+        job_id: &str,
+        movie_id: i64,
+        movie_title: String,
+        download_id: String,
+        download_client_id: i64,
+        download_title: String,
+    ) {
+        let mut jobs = self.pending_jobs.write().await;
+        jobs.download_job_trackers.insert(
+            job_id.to_string(),
+            DownloadJobTracker {
+                download_id,
+                download_client_id,
+                download_title: download_title.clone(),
+                files_dispatched: 0,
+                files_completed: 0,
+                files_imported: 0,
+                episodes_linked: 0,
+                scan_finished: false,
+            },
+        );
+        debug!(
+            "Registered movie download import for scan job: {} (movie_id={}, title='{}')",
+            job_id, movie_id, movie_title
+        );
+    }
+
     /// Start the consumer loop
     ///
     /// This subscribes to the event bus and processes incoming ScanResult and
@@ -376,6 +429,16 @@ impl ScanResultConsumer {
                                     )
                                     .await;
                                 }
+                                Some(ScanType::DownloadedMovieScan) => {
+                                    self.handle_movie_download_scan_result(
+                                        &job_id,
+                                        series_id, // movie_id reused in series_id field
+                                        &worker_id,
+                                        files_found,
+                                        errors,
+                                    )
+                                    .await;
+                                }
                                 Some(ScanType::RescanPodcast) => {
                                     info!("Received podcast scan result for job {} — not yet implemented", job_id);
                                     self.mark_job_result_received(&job_id).await;
@@ -405,6 +468,8 @@ impl ScanResultConsumer {
                             files_processed,
                             percent,
                             detail,
+                            bytes_copied,
+                            bytes_total,
                             ..
                         } => {
                             // Look up entity context from pending job
@@ -422,6 +487,8 @@ impl ScanResultConsumer {
                                             files_processed,
                                             percent,
                                             detail: detail.clone(),
+                                            bytes_copied,
+                                            bytes_total,
                                         });
                                     }
                                     (job.entity_ids.clone(), Some(job.scan_type))
@@ -444,6 +511,8 @@ impl ScanResultConsumer {
                                     detail,
                                     entity_ids,
                                     scan_type: job_scan_type,
+                                    bytes_copied,
+                                    bytes_total,
                                 }).await;
                             }
                         }
@@ -687,6 +756,126 @@ impl ScanResultConsumer {
         }
 
         Ok(())
+    }
+
+    /// Handle movie download scan result (Phase 2): compute destination, dispatch file move.
+    ///
+    /// Called per-file in streaming mode. The worker probed + hashed the file in the
+    /// download directory. We compute the destination in the movie's library folder and
+    /// send an ImportFilesRequest so the worker moves it. Phase 4 (handle_import_files_result)
+    /// creates the movie_file DB record once the move completes.
+    async fn handle_movie_download_scan_result(
+        &self,
+        job_id: &str,
+        movie_id: i64,
+        worker_id: &str,
+        files_found: Vec<ScannedFile>,
+        errors: Vec<String>,
+    ) {
+        for err in &errors {
+            warn!("Worker {} movie download scan error: {}", worker_id, err);
+        }
+
+        // Empty result = scan completion signal from worker
+        if files_found.is_empty() {
+            info!(
+                "[worker:{}] Movie download scan complete for job {}",
+                worker_id, job_id
+            );
+            {
+                let mut jobs = self.pending_jobs.write().await;
+                if let Some(tracker) = jobs.download_job_trackers.get_mut(job_id) {
+                    tracker.scan_finished = true;
+                }
+            }
+            self.try_download_cleanup(job_id).await;
+            self.mark_job_result_received(job_id).await;
+            return;
+        }
+
+        // Take the largest video file (movies are single-file)
+        let file = match files_found.into_iter().max_by_key(|f| f.size) {
+            Some(f) => f,
+            None => return,
+        };
+
+        // Look up the movie for its library path
+        let movie_repo = MovieRepository::new(self.db.clone());
+        let movie = match movie_repo.get_by_id(movie_id).await {
+            Ok(Some(m)) => m,
+            _ => {
+                error!(
+                    "Movie {} not found for download import job {}",
+                    movie_id, job_id
+                );
+                return;
+            }
+        };
+
+        // Compute destination: movie library path + original filename
+        let dest_path = PathBuf::from(&movie.path).join(&file.filename);
+
+        // Get download title from the job tracker
+        let download_title = {
+            let jobs = self.pending_jobs.read().await;
+            jobs.download_job_trackers
+                .get(job_id)
+                .map(|t| t.download_title.clone())
+                .unwrap_or_default()
+        };
+
+        let quality_str = file.quality.clone().unwrap_or_else(|| {
+            serde_json::to_string(&serde_json::json!({
+                "quality": {"id": 1, "name": "SDTV", "source": "unknown", "resolution": 0},
+                "revision": {"version": 1, "real": 0, "isRepack": false}
+            }))
+            .expect("static JSON")
+        });
+
+        let import_job_id = uuid::Uuid::new_v4().to_string();
+
+        // Store pending movie import for Phase 4
+        {
+            let mut jobs = self.pending_jobs.write().await;
+            jobs.movie_file_imports.insert(
+                import_job_id.clone(),
+                PendingMovieFileImport {
+                    movie_id,
+                    movie_path: movie.path.clone(),
+                    movie_title: movie.title.clone(),
+                    media_info: file.media_info.clone(),
+                    quality: quality_str,
+                    file_hash: file.file_hash.clone(),
+                    release_group: file.release_group.clone(),
+                    scene_name: download_title,
+                    source_path: file.path.clone(),
+                },
+            );
+            jobs.import_to_scan_job
+                .insert(import_job_id.clone(), job_id.to_string());
+            if let Some(tracker) = jobs.download_job_trackers.get_mut(job_id) {
+                tracker.files_dispatched += 1;
+            }
+        }
+
+        info!(
+            "[worker:{}] Movie '{}': dispatching move {} → {}",
+            worker_id,
+            movie.title,
+            file.path.display(),
+            dest_path.display(),
+        );
+
+        // Phase 3: dispatch file move to worker
+        self.event_bus
+            .publish(Message::ImportFilesRequest {
+                job_id: import_job_id,
+                files: vec![ImportFileSpec {
+                    source_path: file.path.clone(),
+                    dest_path,
+                }],
+            })
+            .await;
     }
 
     /// Handle download scan result (Phase 2): match file → episodes, compute path, dispatch move.
@@ -1071,7 +1260,18 @@ impl ScanResultConsumer {
             worker_id, job_id, succeeded, failed
         );
 
-        // Look up pending import state for this per-file import
+        // Check if this is a movie import first
+        let movie_pending = {
+            let mut jobs = self.pending_jobs.write().await;
+            jobs.movie_file_imports.remove(job_id)
+        };
+        if let Some(movie_import) = movie_pending {
+            self.handle_movie_import_result(job_id, worker_id, results, movie_import)
+                .await;
+            return;
+        }
+
+        // Look up pending import state for this per-file import (series)
         let pending = {
             let mut jobs = self.pending_jobs.write().await;
             jobs.download_imports.remove(job_id)
@@ -1233,6 +1433,144 @@ impl ScanResultConsumer {
         };
 
         // Check if all files are done and we can finalize
+        if let Some(sjid) = scan_job_id {
+            self.try_download_cleanup(&sjid).await;
+        }
+    }
+
+    /// Handle movie import result (Phase 4): create movie_file record after file move.
+    async fn handle_movie_import_result(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        results: Vec<crate::core::messaging::ImportFileResult>,
+        pending: PendingMovieFileImport,
+    ) {
+        let file_repo = MovieFileRepository::new(self.db.clone());
+        let history_repo = HistoryRepository::new(self.db.clone());
+
+        let mut total_imported = 0;
+
+        for result in &results {
+            if !result.success {
+                error!(
+                    "Worker failed to move movie file {} -> {}: {}",
+                    result.source_path.display(),
+                    result.dest_path.display(),
+                    result.error.as_deref().unwrap_or("unknown error")
+                );
+                continue;
+            }
+
+            let dest_path_str = result.dest_path.to_string_lossy().to_string();
+
+            let relative_path = result
+                .dest_path
+                .strip_prefix(&pending.movie_path)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| {
+                    result
+                        .dest_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                });
+
+            use crate::core::datastore::models::MovieFileDbModel;
+            let movie_file = MovieFileDbModel {
+                id: 0,
+                movie_id: pending.movie_id,
+                relative_path,
+                path: dest_path_str.clone(),
+                size: result.file_size,
+                date_added: Utc::now(),
+                scene_name: Some(pending.scene_name.clone()),
+                release_group: pending.release_group.clone(),
+                quality: pending.quality.clone(),
+                languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
+                media_info: pending.media_info.clone(),
+                original_file_path: Some(pending.source_path.to_string_lossy().to_string()),
+                edition: None,
+                file_hash: pending.file_hash.clone(),
+            };
+
+            match file_repo.insert(&movie_file).await {
+                Ok(file_id) => {
+                    total_imported += 1;
+
+                    // Update movie to point at the new file
+                    let pool = self.db.pool();
+                    let _ = sqlx::query(
+                        "UPDATE movies SET has_file = true, movie_file_id = $1 WHERE id = $2",
+                    )
+                    .bind(file_id)
+                    .bind(pending.movie_id)
+                    .execute(pool)
+                    .await;
+
+                    // Record history
+                    let download_id = {
+                        let jobs = self.pending_jobs.read().await;
+                        jobs.import_to_scan_job
+                            .get(job_id)
+                            .and_then(|scan_id| jobs.download_job_trackers.get(scan_id))
+                            .map(|t| t.download_id.clone())
+                            .unwrap_or_default()
+                    };
+
+                    let history = crate::core::datastore::models::HistoryDbModel {
+                        id: 0,
+                        series_id: None,
+                        episode_id: None,
+                        movie_id: Some(pending.movie_id),
+                        source_title: pending.scene_name.clone(),
+                        quality: pending.quality.clone(),
+                        languages: "[]".to_string(),
+                        custom_formats: "[]".to_string(),
+                        custom_format_score: 0,
+                        quality_cutoff_not_met: false,
+                        date: Utc::now(),
+                        download_id: Some(download_id),
+                        event_type: 3, // DownloadImported
+                        data: "{}".to_string(),
+                    };
+                    let _ = history_repo.insert(&history).await;
+
+                    info!(
+                        "[worker:{}] Imported movie '{}' → {} (file_id={})",
+                        worker_id, pending.movie_title, dest_path_str, file_id
+                    );
+
+                    // Notify frontend
+                    self.event_bus
+                        .publish(Message::MovieFileImported {
+                            movie_file_id: file_id,
+                            movie_id: pending.movie_id,
+                        })
+                        .await;
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to insert movie file record for {}: {}",
+                        dest_path_str, e
+                    );
+                }
+            }
+        }
+
+        // Update the download job tracker
+        let scan_job_id = {
+            let mut jobs = self.pending_jobs.write().await;
+            let scan_job_id = jobs.import_to_scan_job.remove(job_id).clone();
+            if let Some(ref sjid) = scan_job_id {
+                if let Some(tracker) = jobs.download_job_trackers.get_mut(sjid.as_str()) {
+                    tracker.files_completed += 1;
+                    tracker.files_imported += total_imported;
+                }
+            }
+            scan_job_id
+        };
+
         if let Some(sjid) = scan_job_id {
             self.try_download_cleanup(&sjid).await;
         }

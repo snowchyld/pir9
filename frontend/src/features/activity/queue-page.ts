@@ -787,16 +787,26 @@ export class QueuePage extends BaseComponent {
   private renderImportProgress(item: QueueItem): string {
     const p = item.importProgress;
     if (!p) return '';
-    const pct = p.percent.toFixed(1);
+    // For copy stage with byte data, calculate percentage client-side from bytes
+    const bytesCopied = p.bytesCopied ?? 0;
+    const bytesTotal = p.bytesTotal ?? 0;
+    const hasBytesData = p.stage === 'copying' && bytesTotal > 0;
+    const pct = hasBytesData
+      ? ((bytesCopied / bytesTotal) * 100).toFixed(1)
+      : p.percent.toFixed(1);
     const stageLabel = this.importStageLabel(p.stage);
     const fileLabel = p.currentFile ? this.truncate(p.currentFile, 30) : '';
     const fileInfo = p.filesTotal > 1 ? `${p.filesProcessed}/${p.filesTotal} files` : '';
     const detail = p.detail ? ` · ${p.detail}` : '';
+    // Show "X MB / Y GB" for copy stage
+    const bytesInfo = hasBytesData
+      ? ` · ${this.formatSize(bytesCopied)} / ${this.formatSize(bytesTotal)}`
+      : '';
     return `<div class="progress-bar">
               <div class="progress-fill importing" style="width: ${pct}%"></div>
             </div>
             <div class="progress-text">
-              ${stageLabel} ${pct}%${fileInfo ? ` · ${fileInfo}` : ''}${detail}
+              ${stageLabel} ${pct}%${bytesInfo}${fileInfo ? ` · ${fileInfo}` : ''}${detail}
             </div>
             ${fileLabel ? `<div class="import-file-label">${escapeHtml(fileLabel)}</div>` : ''}`;
   }

@@ -114,6 +114,9 @@ async fn get_running_tasks(
                 crate::core::messaging::ScanType::DownloadedEpisodesScan => {
                     "Scan Downloads".to_string()
                 }
+                crate::core::messaging::ScanType::DownloadedMovieScan => {
+                    "Import Movie".to_string()
+                }
                 crate::core::messaging::ScanType::RescanPodcast => "Scan Podcasts".to_string(),
                 crate::core::messaging::ScanType::RescanMusic => "Scan Music".to_string(),
             };
