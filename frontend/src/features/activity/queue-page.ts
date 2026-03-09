@@ -816,6 +816,7 @@ export class QueuePage extends BaseComponent {
       scanning: 'Scanning',
       probing: 'Analyzing',
       hashing: 'Hashing',
+      enriching: 'Enriching',
       copying: 'Copying',
     };
     return labels[stage] ?? stage;

@@ -62,6 +62,10 @@ struct PendingJob {
     /// Download ID from the download client (set for queue imports so the
     /// queue API can match progress to the right queue item)
     download_id: Option<String>,
+    /// Total per-file enrichment jobs dispatched (probe+hash pairs count as 1 file)
+    enrichment_total: usize,
+    /// Per-file enrichments completed (both probe and hash done)
+    enrichment_completed: usize,
 }
 
 /// Metadata needed to complete a download import after the worker moves files.
@@ -313,6 +317,8 @@ impl ScanResultConsumer {
                 started_at: Utc::now(),
                 progress: None,
                 download_id: None,
+                enrichment_total: 0,
+                enrichment_completed: 0,
             },
         );
         debug!("Registered scan job: {} (type={:?})", job_id, scan_type);
@@ -1845,6 +1851,11 @@ impl ScanResultConsumer {
 
         let mut jobs = self.pending_jobs.write().await;
 
+        // Track total enrichment files on the parent job for progress reporting
+        if let Some(parent) = jobs.jobs.get_mut(parent_job_id) {
+            parent.enrichment_total += file_count;
+        }
+
         for file in files {
             let file_key = format!("{}:{}", parent_job_id, file.path.to_string_lossy());
             let probe_job_id = uuid::Uuid::new_v4().to_string();
@@ -2004,16 +2015,18 @@ impl ScanResultConsumer {
         file.file_hash = file_hash;
 
         let entity_id = completed.entity_id;
-        let parent_job_id = completed.parent_job_id;
+        let parent_job_id = completed.parent_job_id.clone();
+        let scan_type = completed.scan_type;
+        let filename = file.filename.clone();
 
         info!(
             "[enriched] {} (entity={}, hash={})",
-            file.filename,
+            filename,
             entity_id,
             file.file_hash.as_deref().unwrap_or("none")
         );
 
-        match completed.scan_type {
+        match scan_type {
             ScanType::RescanSeries => {
                 if let Err(e) = self.process_scanned_files(entity_id, vec![file]).await {
                     error!(
@@ -2031,23 +2044,88 @@ impl ScanResultConsumer {
                 }
             }
             ScanType::DownloadedEpisodesScan | ScanType::DownloadedMovieScan => {
-                // Download imports go through their own pipeline (match → move → DB insert)
-                // and should NOT reach here. If they do, it means the routing in run()
-                // was changed to dispatch enrichment for download types — which requires
-                // a different handler that does file-move before DB insert.
                 warn!(
                     "Enriched file for download scan type {:?} reached process_enriched_file — \
                      this is unexpected. File {} will be skipped.",
-                    completed.scan_type, file.filename
+                    scan_type, filename
                 );
             }
             _ => {
-                warn!("Unexpected scan type {:?} for enriched file", completed.scan_type);
+                warn!("Unexpected scan type {:?} for enriched file", scan_type);
             }
         }
 
+        // Update enrichment progress on the parent job and forward to WebSocket
+        self.update_enrichment_progress(&parent_job_id, &filename, scan_type)
+            .await;
+
         // Check if all enrichment jobs for this parent are done
         self.check_enrichment_complete(&parent_job_id).await;
+    }
+
+    /// Update the parent job's progress after a file enrichment completes,
+    /// and forward synthesized progress to WebSocket for real-time UI updates.
+    async fn update_enrichment_progress(
+        &self,
+        parent_job_id: &str,
+        filename: &str,
+        scan_type: ScanType,
+    ) {
+        let progress_info = {
+            let mut jobs = self.pending_jobs.write().await;
+            if let Some(job) = jobs.jobs.get_mut(parent_job_id) {
+                job.enrichment_completed += 1;
+                let total = job.enrichment_total;
+                let done = job.enrichment_completed;
+                let percent = if total > 0 {
+                    (done as f32 / total as f32) * 100.0
+                } else {
+                    0.0
+                };
+
+                let progress = ScanProgressInfo {
+                    stage: "enriching".to_string(),
+                    current_file: Some(filename.to_string()),
+                    files_total: total,
+                    files_processed: done,
+                    percent,
+                    detail: None,
+                    bytes_copied: None,
+                    bytes_total: None,
+                };
+                job.progress = Some(progress.clone());
+
+                Some((
+                    job.worker_id.clone().unwrap_or_default(),
+                    job.entity_ids.clone(),
+                    progress,
+                ))
+            } else {
+                None
+            }
+        };
+
+        // Forward synthesized progress to WebSocket
+        if let Some((worker_id, entity_ids, progress)) = progress_info {
+            if let Some(ref ws_bus) = self.ws_event_bus {
+                ws_bus
+                    .publish(Message::ScanProgress {
+                        job_id: parent_job_id.to_string(),
+                        worker_id,
+                        stage: progress.stage.clone(),
+                        current_file: progress.current_file.clone(),
+                        files_total: progress.files_total,
+                        files_processed: progress.files_processed,
+                        percent: progress.percent,
+                        detail: progress.detail.clone(),
+                        entity_ids,
+                        scan_type: Some(scan_type),
+                        bytes_copied: None,
+                        bytes_total: None,
+                    })
+                    .await;
+            }
+        }
     }
 
     /// Check if all file enrichment jobs for a parent scan job are complete.

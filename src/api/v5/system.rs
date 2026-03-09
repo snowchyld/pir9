@@ -125,11 +125,13 @@ async fn get_running_tasks(
             let status = if has_worker { "started" } else { "queued" };
             let detail = if let Some(ref prog) = job.progress {
                 Some(format!(
-                    "{} {}/{} ({}%)",
+                    "{} {}/{} ({:.1}%)",
                     match prog.stage.as_str() {
                         "scanning" => "Discovering files...",
                         "probing" => "Probing",
                         "hashing" => "Hashing",
+                        "enriching" => "Enriching",
+                        "copying" => "Importing",
                         _ => &prog.stage,
                     },
                     prog.files_processed,

@@ -182,7 +182,7 @@ export class SystemStatusPage extends BaseComponent {
                           <div class="progress-fill" style="width: ${task.progress.percent}%"></div>
                         </div>
                         <span class="progress-text">${task.progress.filesProcessed}/${task.progress.filesTotal}</span>
-                        <span class="progress-pct">${task.progress.percent}%</span>
+                        <span class="progress-pct">${task.progress.percent.toFixed(1)}%</span>
                       </div>
                       <div class="running-detail">
                         <span class="running-stage">${escapeHtml(this.formatStage(task.progress.stage))}</span>
@@ -726,6 +726,10 @@ export class SystemStatusPage extends BaseComponent {
         return 'Probing';
       case 'hashing':
         return 'Hashing';
+      case 'enriching':
+        return 'Enriching';
+      case 'copying':
+        return 'Importing';
       default:
         return stage;
     }
