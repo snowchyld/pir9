@@ -1800,7 +1800,7 @@ async fn import_movies(
                         )
                         .await;
                 }
-                hybrid_bus.publish(message).await;
+                hybrid_bus.enqueue_job(message).await;
                 tracing::info!(
                     "Movie import: dispatched '{}' to worker (job_id={})",
                     title,

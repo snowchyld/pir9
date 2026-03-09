@@ -1604,7 +1604,7 @@ async fn execute_rescan_series_distributed(
         known_count
     );
 
-    hybrid_event_bus.publish(message).await;
+    hybrid_event_bus.enqueue_job(message).await;
 
     Ok(format!(
         "Distributed scan request sent for {} series (job_id: {}). Results will be processed by workers.",
@@ -1762,7 +1762,7 @@ async fn execute_process_downloads_distributed(
             known_files: std::collections::HashMap::new(),
         };
 
-        hybrid_bus.publish(message).await;
+        hybrid_bus.enqueue_job(message).await;
         dispatched += 1;
     }
 
@@ -2804,7 +2804,7 @@ async fn execute_rescan_movie(
                     .await;
             }
 
-            hybrid_bus.publish(message).await;
+            hybrid_bus.enqueue_job(message).await;
             return Ok(format!(
                 "Dispatched {} movies to worker for scanning (job_id: {})",
                 all_ids.len(),

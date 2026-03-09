@@ -373,7 +373,7 @@ impl JobTrackerService {
             known_files: std::collections::HashMap::new(),
         };
 
-        self.event_bus.publish(message).await;
+        self.event_bus.enqueue_job(message).await;
 
         // Mark as pending in tracker
         let mut tracker = self.tracker.write().await;

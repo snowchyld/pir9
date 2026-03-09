@@ -1009,9 +1009,9 @@ impl ScanResultConsumer {
             dest_path.display(),
         );
 
-        // Phase 3: dispatch file move to worker
+        // Phase 3: dispatch file move to worker (durable queue)
         self.event_bus
-            .publish(Message::ImportFilesRequest {
+            .enqueue_job(Message::ImportFilesRequest {
                 job_id: import_job_id,
                 files: vec![ImportFileSpec {
                     source_path: file.path.clone(),
@@ -1372,9 +1372,9 @@ impl ScanResultConsumer {
                 dest_path.display(),
             );
 
-            // Phase 3: Send per-file ImportFilesRequest to worker immediately
+            // Phase 3: Send per-file ImportFilesRequest to worker (durable queue)
             self.event_bus
-                .publish(Message::ImportFilesRequest {
+                .enqueue_job(Message::ImportFilesRequest {
                     job_id: import_job_id,
                     files: vec![ImportFileSpec {
                         source_path: file.path.clone(),
@@ -1870,8 +1870,8 @@ impl ScanResultConsumer {
             jobs.enrichment_job_to_file.insert(probe_job_id.clone(), file_key.clone());
             jobs.enrichment_job_to_file.insert(hash_job_id.clone(), file_key.clone());
 
-            // Dispatch probe job
-            event_bus.publish(Message::ProbeFileRequest {
+            // Enqueue probe job (durable Redis list — persists until a worker picks it up)
+            event_bus.enqueue_job(Message::ProbeFileRequest {
                 job_id: probe_job_id,
                 parent_job_id: parent_job_id.to_string(),
                 file_path: file_path_str.clone(),
@@ -1879,8 +1879,8 @@ impl ScanResultConsumer {
                 scan_type,
             }).await;
 
-            // Dispatch hash job (runs in parallel with probe on worker)
-            event_bus.publish(Message::HashFileRequest {
+            // Enqueue hash job (separate job — worker does one at a time)
+            event_bus.enqueue_job(Message::HashFileRequest {
                 job_id: hash_job_id,
                 parent_job_id: parent_job_id.to_string(),
                 file_path: file_path_str,

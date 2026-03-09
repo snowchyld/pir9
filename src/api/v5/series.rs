@@ -1897,7 +1897,7 @@ pub async fn auto_scan_series(
                     )
                     .await;
             }
-            hybrid_bus.publish(message).await;
+            hybrid_bus.enqueue_job(message).await;
             tracing::info!(
                 "Auto-scan: dispatched '{}' to worker (job_id={})",
                 series.title,

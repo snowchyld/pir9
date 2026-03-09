@@ -75,9 +75,12 @@ pub struct WorkerRunner {
     worker_paths: Vec<PathBuf>,
     /// Redis URL for event bus
     redis_url: String,
-    /// Redis connection for job claiming (distributed lock)
+    /// Redis connection for job claiming (distributed lock via SETNX)
     #[cfg(feature = "redis-events")]
     redis_conn: tokio::sync::Mutex<Option<redis::aio::ConnectionManager>>,
+    /// Dedicated Redis connection for job queue polling (BRPOP)
+    #[cfg(feature = "redis-events")]
+    queue_conn: tokio::sync::Mutex<Option<redis::aio::ConnectionManager>>,
     /// Single permit — worker accepts only ONE job at a time (discovery, probe, hash,
     /// import, or delete). If busy, incoming requests are skipped so another worker
     /// can claim them via Redis SETNX. Acquired BEFORE try_claim_job to avoid claiming
@@ -109,6 +112,8 @@ impl WorkerRunner {
             redis_url: redis_url.to_string(),
             #[cfg(feature = "redis-events")]
             redis_conn: tokio::sync::Mutex::new(None),
+            #[cfg(feature = "redis-events")]
+            queue_conn: tokio::sync::Mutex::new(None),
             job_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
             scans_completed: std::sync::atomic::AtomicU64::new(0),
             files_found: std::sync::atomic::AtomicU64::new(0),
@@ -175,6 +180,16 @@ impl WorkerRunner {
             *this.redis_conn.lock().await = Some(conn);
         }
 
+        // Create a dedicated Redis connection for job queue polling (BRPOP)
+        {
+            let client = redis::Client::open(this.redis_url.as_str())
+                .context("Failed to create Redis client for job queue")?;
+            let conn = redis::aio::ConnectionManager::new(client)
+                .await
+                .context("Failed to connect to Redis for job queue")?;
+            *this.queue_conn.lock().await = Some(conn);
+        }
+
         // Start the Redis subscriber in background to receive messages from other instances
         let event_bus_clone = event_bus.clone();
         tokio::spawn(async move {
@@ -225,6 +240,11 @@ impl WorkerRunner {
 
         tokio::pin!(shutdown);
 
+        // Poll interval for the job queue (RPOP). Short enough for fast pickup,
+        // long enough to not hammer Redis when idle.
+        let mut queue_poll = tokio::time::interval(tokio::time::Duration::from_millis(250));
+        queue_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         loop {
             tokio::select! {
                 _ = &mut shutdown => {
@@ -243,6 +263,15 @@ impl WorkerRunner {
                         uptime_seconds: uptime,
                     }).await;
                 }
+                // Poll durable job queue — only dequeue when idle (semaphore available)
+                _ = queue_poll.tick() => {
+                    if this.job_semaphore.available_permits() > 0 {
+                        if let Some(message) = this.dequeue_job().await {
+                            this.handle_message(message, &event_bus).await;
+                        }
+                    }
+                }
+                // Pub/sub for broadcast events (results, progress, heartbeats)
                 result = receiver.recv() => {
                     match result {
                         Ok(message) => {
@@ -250,7 +279,6 @@ impl WorkerRunner {
                         }
                         Err(e) => {
                             error!("Error receiving message: {}", e);
-                            // Reconnect logic could go here
                             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                         }
                     }
@@ -883,6 +911,40 @@ impl WorkerRunner {
         }
     }
 
+    /// Non-blocking dequeue from the Redis job list (RPOP).
+    /// Uses the dedicated queue_conn, not the pub/sub connection.
+    /// Returns None if queue is empty or on error.
+    #[cfg(feature = "redis-events")]
+    async fn dequeue_job(&self) -> Option<Message> {
+        let mut guard = self.queue_conn.lock().await;
+        let conn = match guard.as_mut() {
+            Some(c) => c,
+            None => {
+                warn!("No Redis queue connection for RPOP");
+                return None;
+            }
+        };
+
+        let result: redis::RedisResult<Option<String>> = redis::cmd("RPOP")
+            .arg("pir9:queue:jobs")
+            .query_async(conn)
+            .await;
+
+        match result {
+            Ok(Some(json)) => match serde_json::from_str::<Message>(&json) {
+                Ok(msg) => Some(msg),
+                Err(e) => {
+                    error!("Failed to deserialize job from queue: {}", e);
+                    None
+                }
+            },
+            Ok(None) => None, // Queue empty
+            Err(e) => {
+                warn!("RPOP error: {}", e);
+                None
+            }
+        }
+    }
 }
 
 /// Result of a file import operation
@@ -1177,6 +1239,8 @@ mod tests {
             redis_url: "redis://localhost".to_string(),
             #[cfg(feature = "redis-events")]
             redis_conn: tokio::sync::Mutex::new(None),
+            #[cfg(feature = "redis-events")]
+            queue_conn: tokio::sync::Mutex::new(None),
             job_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
             scans_completed: std::sync::atomic::AtomicU64::new(0),
             files_found: std::sync::atomic::AtomicU64::new(0),

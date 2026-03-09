@@ -671,7 +671,7 @@ async fn execute_downloaded_episodes_scan(
                     paths: vec![output_path_str],
                     known_files: std::collections::HashMap::new(),
                 };
-                hybrid_bus.publish(message).await;
+                hybrid_bus.enqueue_job(message).await;
             }
 
             return Ok(());

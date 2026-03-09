@@ -1588,7 +1588,7 @@ async fn import_queue_item(
                     // Link job to download_id so queue API can show progress
                     consumer.set_job_download_id(&job_id, &download_id).await;
                 }
-                hybrid_bus.publish(message).await;
+                hybrid_bus.enqueue_job(message).await;
                 tracing::info!(
                     "Queue movie import: dispatched '{}' to worker (job_id={})",
                     movie_title,
@@ -1901,7 +1901,7 @@ async fn import_queue_item(
                     paths: vec![output_path.clone()],
                     known_files: std::collections::HashMap::new(),
                 };
-                hybrid_bus.publish(message).await;
+                hybrid_bus.enqueue_job(message).await;
 
                 tracing::info!(
                     "Queue series import: dispatched '{}' to worker (job_id={})",

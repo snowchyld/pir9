@@ -22,6 +22,13 @@ use crate::core::messaging::Message;
 #[cfg(feature = "redis-events")]
 const REDIS_CHANNEL: &str = "pir9:events";
 
+/// Redis list key for durable job queue (LPUSH/BRPOP)
+/// Worker-bound requests (ScanRequest, ProbeFileRequest, HashFileRequest,
+/// ImportFilesRequest, DeletePathsRequest) are enqueued here so they persist
+/// until a worker picks them up — unlike pub/sub which is fire-and-forget.
+#[cfg(feature = "redis-events")]
+const REDIS_JOB_QUEUE: &str = "pir9:queue:jobs";
+
 /// Redis-backed event bus
 ///
 /// This event bus publishes messages to both a local broadcast channel
@@ -103,6 +110,59 @@ impl RedisEventBus {
             warn!("Failed to publish to Redis: {}", e);
         } else {
             trace!("Published message to Redis channel {}", REDIS_CHANNEL);
+        }
+    }
+
+    /// Enqueue a worker-bound job into the durable Redis list.
+    /// Unlike publish (fire-and-forget pub/sub), jobs persist in the list
+    /// until a worker BRPOP's them. No instance_id envelope needed since
+    /// only workers consume from the queue.
+    pub async fn enqueue_job(&self, message: Message) {
+        let json = match serde_json::to_string(&message) {
+            Ok(j) => j,
+            Err(e) => {
+                error!("Failed to serialize job for Redis queue: {}", e);
+                return;
+            }
+        };
+
+        let mut conn = self.redis_conn.clone();
+        if let Err(e) = redis::cmd("LPUSH")
+            .arg(REDIS_JOB_QUEUE)
+            .arg(&json)
+            .query_async::<i64>(&mut conn)
+            .await
+        {
+            error!("Failed to enqueue job to Redis: {}", e);
+        } else {
+            trace!("Enqueued job to {}", REDIS_JOB_QUEUE);
+        }
+    }
+
+    /// Dequeue a job from the Redis list (blocking with timeout).
+    /// Returns None if the timeout expires with no jobs available.
+    pub async fn dequeue_job(&self, timeout_secs: f64) -> Option<Message> {
+        let mut conn = self.redis_conn.clone();
+        // BRPOP returns (key, value) or nil on timeout
+        let result: redis::RedisResult<Option<(String, String)>> = redis::cmd("BRPOP")
+            .arg(REDIS_JOB_QUEUE)
+            .arg(timeout_secs)
+            .query_async(&mut conn)
+            .await;
+
+        match result {
+            Ok(Some((_key, json))) => match serde_json::from_str::<Message>(&json) {
+                Ok(msg) => Some(msg),
+                Err(e) => {
+                    error!("Failed to deserialize job from Redis queue: {}", e);
+                    None
+                }
+            },
+            Ok(None) => None, // Timeout, no jobs
+            Err(e) => {
+                debug!("BRPOP: {}", e); // Timeouts are expected, not errors
+                None
+            }
         }
     }
 
@@ -276,6 +336,31 @@ impl HybridEventBus {
             EventBusBackend::InProcess => false,
             #[cfg(feature = "redis-events")]
             EventBusBackend::Redis(_) => true,
+        }
+    }
+
+    /// Enqueue a worker-bound job into the durable Redis list.
+    /// Falls back to publish() for in-process mode.
+    pub async fn enqueue_job(&self, message: LocalMessage) {
+        match &self.backend {
+            EventBusBackend::InProcess => {
+                // No Redis — use local broadcast (same as publish)
+                let _ = self.local_sender.send(message);
+            }
+            #[cfg(feature = "redis-events")]
+            EventBusBackend::Redis(redis_bus) => {
+                redis_bus.enqueue_job(message).await;
+            }
+        }
+    }
+
+    /// Dequeue a job from the Redis list (blocking with timeout).
+    /// Returns None if timeout expires or if Redis is not configured.
+    #[cfg(feature = "redis-events")]
+    pub async fn dequeue_job(&self, timeout_secs: f64) -> Option<LocalMessage> {
+        match &self.backend {
+            EventBusBackend::InProcess => None,
+            EventBusBackend::Redis(redis_bus) => redis_bus.dequeue_job(timeout_secs).await,
         }
     }
 
