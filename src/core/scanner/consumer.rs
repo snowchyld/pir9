@@ -2030,22 +2030,16 @@ impl ScanResultConsumer {
                     );
                 }
             }
-            ScanType::DownloadedEpisodesScan => {
-                // For download imports, route through the download scan handler
-                if let Err(e) = self.process_scanned_files(entity_id, vec![file]).await {
-                    error!(
-                        "Failed to process enriched download file for series {}: {}",
-                        entity_id, e
-                    );
-                }
-            }
-            ScanType::DownloadedMovieScan => {
-                if let Err(e) = self.process_movie_scan_result(entity_id, file).await {
-                    error!(
-                        "Failed to process enriched download movie file for movie {}: {}",
-                        entity_id, e
-                    );
-                }
+            ScanType::DownloadedEpisodesScan | ScanType::DownloadedMovieScan => {
+                // Download imports go through their own pipeline (match → move → DB insert)
+                // and should NOT reach here. If they do, it means the routing in run()
+                // was changed to dispatch enrichment for download types — which requires
+                // a different handler that does file-move before DB insert.
+                warn!(
+                    "Enriched file for download scan type {:?} reached process_enriched_file — \
+                     this is unexpected. File {} will be skipped.",
+                    completed.scan_type, file.filename
+                );
             }
             _ => {
                 warn!("Unexpected scan type {:?} for enriched file", completed.scan_type);
