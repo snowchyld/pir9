@@ -572,7 +572,7 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                 };
 
                 let tracked_state = match dl.status {
-                    DownloadState::Queued => "importPending",
+                    DownloadState::Queued => "downloading",
                     DownloadState::Downloading => "downloading",
                     DownloadState::Stalled => "downloading",
                     DownloadState::Paused => "paused",
