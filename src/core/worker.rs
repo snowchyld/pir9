@@ -317,15 +317,16 @@ impl WorkerRunner {
                     return;
                 }
 
-                if *scan_type == ScanType::DownloadedEpisodesScan
-                    || *scan_type == ScanType::DownloadedMovieScan
-                {
-                    // Per-file streaming: spawn enrichment as background task so the
+                // Per-file streaming: spawn enrichment as background task so the
                     // main event loop stays free to process ImportFilesRequests concurrently.
                     // This means file1 can be moved to library while file50 is still being probed.
+                    // All scan types now use streaming — each file's probe+hash result is
+                    // published immediately, enabling the server to process results as they arrive.
                     let this = Arc::clone(self);
                     let event_bus = Arc::clone(event_bus);
                     let job_id = job_id.clone();
+                    let scan_type = *scan_type;
+                    let known_files = known_files.clone();
 
                     tokio::spawn(async move {
                         // Hold the permit for the duration of the scan — dropped when this
@@ -334,93 +335,133 @@ impl WorkerRunner {
                         let mut total_files: u64 = 0;
                         let scan_start = std::time::Instant::now();
 
-                        for (series_id, path_str) in &relevant {
+                        for (entity_id, path_str) in &relevant {
                             let path = PathBuf::from(path_str);
                             if !path.exists() {
-                                warn!("[scan][download] Path does not exist, skipping: {}", path_str);
+                                warn!("[scan][stream] Path does not exist: {}", path_str);
+                                // Send error result for this entity — consumer will mark it received
+                                event_bus.publish(Message::ScanResult {
+                                    job_id: job_id.clone(),
+                                    series_id: *entity_id,
+                                    worker_id: this.worker_id.clone(),
+                                    files_found: vec![],
+                                    errors: vec![format!("Path does not exist: {}", path_str)],
+                                }).await;
                                 continue;
                             }
 
-                            info!("[scan][download] Scanning {}", path_str);
-                            let mut files = scanner::scan_download_directory(&path);
-                            let file_count = files.len();
-                            info!(
-                                "[scan][download] Found {} video file(s) in {}",
-                                file_count, path_str
-                            );
+                            let media_type = infer_media_type(&path);
 
+                            // Scan directory based on scan type
+                            let mut files: Vec<ScannedFile> = match scan_type {
+                                ScanType::RescanSeries => {
+                                    info!("[scan][{}] Scanning {} (id={})", media_type, path_str, entity_id);
+                                    scanner::scan_series_directory(&path)
+                                }
+                                ScanType::RescanMovie => {
+                                    info!("[scan][movie] Scanning {} (id={})", path_str, entity_id);
+                                    scanner::scan_movie_directory(&path)
+                                        .into_iter()
+                                        .collect()
+                                }
+                                ScanType::DownloadedEpisodesScan | ScanType::DownloadedMovieScan => {
+                                    info!("[scan][download] Scanning {}", path_str);
+                                    scanner::scan_download_directory(&path)
+                                }
+                                _ => vec![],
+                            };
+
+                            let file_count = files.len();
+                            info!("[scan][stream] Found {} video file(s) in {}", file_count, path_str);
                             publish_progress(&event_bus, &job_id, &this.worker_id, "scanning", None, file_count, 0, 0.0, None).await;
 
-                            let dl_total_steps = file_count * 2;
-                            let mut dl_completed_steps: usize = 0;
+                            let total_steps = file_count * 2;
+                            let mut completed_steps: usize = 0;
 
                             for (idx, file) in files.iter_mut().enumerate() {
+                                // Check known_files for skip-enrichment (rescan types only)
+                                let path_key = file.path.to_string_lossy().to_string();
+                                if let Some(known) = known_files.get(&path_key) {
+                                    if known.size == file.size && known.file_hash.is_some() {
+                                        file.media_info = known.media_info.clone();
+                                        file.quality = known.quality.clone();
+                                        file.file_hash = known.file_hash.clone();
+                                        info!(
+                                            "[skip] ({}/{}) {} — unchanged ({})",
+                                            idx + 1, file_count, file.filename, format_size(file.size as u64)
+                                        );
+                                        completed_steps += 2;
+                                        let pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 100.0 };
+                                        publish_progress(&event_bus, &job_id, &this.worker_id, "probing", Some(&file.filename), file_count, idx + 1, pct, Some("unchanged".to_string())).await;
+
+                                        // Publish per-file result immediately
+                                        event_bus.publish(Message::ScanResult {
+                                            job_id: job_id.clone(),
+                                            series_id: *entity_id,
+                                            worker_id: this.worker_id.clone(),
+                                            files_found: vec![file.clone()],
+                                            errors: vec![],
+                                        }).await;
+                                        continue;
+                                    }
+                                }
+
                                 // Probe stage
-                                let probe_pct = if dl_total_steps > 0 { (dl_completed_steps as f32 * 100.0 / dl_total_steps as f32).min(100.0) } else { 0.0 };
+                                let probe_pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 0.0 };
                                 publish_progress(&event_bus, &job_id, &this.worker_id, "probing", Some(&file.filename), file_count, idx, probe_pct, None).await;
 
                                 let probe_detail = probe_scanned_file(file, (idx + 1, file_count)).await;
-                                dl_completed_steps += 1;
+                                completed_steps += 1;
 
-                                let after_probe_pct = if dl_total_steps > 0 { (dl_completed_steps as f32 * 100.0 / dl_total_steps as f32).min(100.0) } else { 50.0 };
+                                let after_probe_pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 50.0 };
                                 publish_progress(&event_bus, &job_id, &this.worker_id, "probing", Some(&file.filename), file_count, idx, after_probe_pct, probe_detail).await;
 
                                 // Hash stage
                                 publish_progress(&event_bus, &job_id, &this.worker_id, "hashing", Some(&file.filename), file_count, idx, after_probe_pct, None).await;
                                 hash_scanned_file(file, (idx + 1, file_count)).await;
-                                dl_completed_steps += 1;
+                                completed_steps += 1;
 
-                                let after_hash_pct = if dl_total_steps > 0 { (dl_completed_steps as f32 * 100.0 / dl_total_steps as f32).min(100.0) } else { 100.0 };
+                                let after_hash_pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 100.0 };
                                 publish_progress(&event_bus, &job_id, &this.worker_id, "hashing", Some(&file.filename), file_count, idx + 1, after_hash_pct, None).await;
 
                                 // Publish per-file result immediately — server can start
                                 // matching and dispatching file moves right away
-                                event_bus
-                                    .publish(Message::ScanResult {
-                                        job_id: job_id.clone(),
-                                        series_id: *series_id,
-                                        worker_id: this.worker_id.clone(),
-                                        files_found: vec![file.clone()],
-                                        errors: vec![],
-                                    })
-                                    .await;
+                                event_bus.publish(Message::ScanResult {
+                                    job_id: job_id.clone(),
+                                    series_id: *entity_id,
+                                    worker_id: this.worker_id.clone(),
+                                    files_found: vec![file.clone()],
+                                    errors: vec![],
+                                }).await;
                             }
 
                             total_files += file_count as u64;
+                            let elapsed = scan_start.elapsed();
+                            info!(
+                                "[scan][stream] {} — {} file(s) in {:.1}s (id={})",
+                                media_type, file_count, elapsed.as_secs_f64(), entity_id
+                            );
+
+                            // Per-entity completion signal — empty files tells the consumer
+                            // this entity is done so it can mark_job_result_received
+                            event_bus.publish(Message::ScanResult {
+                                job_id: job_id.clone(),
+                                series_id: *entity_id,
+                                worker_id: this.worker_id.clone(),
+                                files_found: vec![],
+                                errors: vec![],
+                            }).await;
                         }
 
                         let elapsed = scan_start.elapsed();
                         info!(
-                            "[scan][download] Streaming scan complete — {} file(s) in {:.1}s",
+                            "[scan][stream] Job complete — {} file(s) in {:.1}s",
                             total_files,
                             elapsed.as_secs_f64()
                         );
 
-                        // Signal scan completion with empty result so server knows
-                        // no more files are coming and can finalize cleanup
-                        event_bus
-                            .publish(Message::ScanResult {
-                                job_id: job_id.clone(),
-                                series_id: 0,
-                                worker_id: this.worker_id.clone(),
-                                files_found: vec![],
-                                errors: vec![],
-                            })
-                            .await;
-
                         this.record_scan(total_files);
                     });
-                } else {
-                    // Batch mode for non-download scans (RescanSeries, RescanMovie, etc.)
-                    // Hold permit until scan completes — dropped at end of block
-                    let _permit = permit;
-                    let relevant_refs: Vec<(i64, &String)> =
-                        relevant.iter().map(|(id, p)| (*id, p)).collect();
-                    let result = self.execute_scan(job_id, scan_type, &relevant_refs, known_files, event_bus).await;
-                    for scan_result in result {
-                        event_bus.publish(scan_result).await;
-                    }
-                }
             }
             // Ignore our own heartbeats and status messages
             Message::WorkerHeartbeat { worker_id, .. } if worker_id == &self.worker_id => {
@@ -765,270 +806,6 @@ impl WorkerRunner {
         }
     }
 
-    /// Execute a scan request and return results
-    ///
-    /// Each entry in `series_paths` is a `(series_id, path)` pair — the dispatcher
-    /// keeps these aligned so the worker can tag each result with the correct series.
-    /// For `RescanMovie`, series_id is actually movie_id (reused field).
-    ///
-    /// `known_files` contains DB metadata from the server. Files whose path+size match
-    /// a known entry skip FFmpeg probe + BLAKE3 hash — a massive speedup for unchanged libraries.
-    #[cfg(feature = "redis-events")]
-    async fn execute_scan(
-        &self,
-        job_id: &str,
-        scan_type: &ScanType,
-        series_paths: &[(i64, &String)],
-        known_files: &HashMap<String, KnownFileInfo>,
-        event_bus: &crate::core::messaging::HybridEventBus,
-    ) -> Vec<Message> {
-        let mut results = Vec::new();
-        let mut total_files_found: u64 = 0;
-
-        match scan_type {
-            ScanType::RescanSeries => {
-                let mut skipped_count: usize = 0;
-                for &(series_id, path_str) in series_paths {
-                    let path = PathBuf::from(path_str);
-                    let media_type = infer_media_type(&path);
-
-                    if !path.exists() {
-                        warn!("[scan][{}] Path does not exist: {}", media_type, path_str);
-                        results.push(Message::ScanResult {
-                            job_id: job_id.to_string(),
-                            series_id,
-                            worker_id: self.worker_id.clone(),
-                            files_found: vec![],
-                            errors: vec![format!("Path does not exist: {}", path_str)],
-                        });
-                        continue;
-                    }
-
-                    let scan_start = std::time::Instant::now();
-                    info!("[scan][{}] Scanning {} (id={})", media_type, path_str, series_id);
-                    let mut files = scanner::scan_series_directory(&path);
-                    let file_count = files.len();
-                    info!("[scan][{}] Found {} video file(s) in {}", media_type, file_count, path_str);
-
-                    // Publish initial scanning progress
-                    publish_progress(event_bus, job_id, &self.worker_id, "scanning", None, file_count, 0, 0.0, None).await;
-
-                    // Each file = 2 steps (probe + hash); skipped files count as 2 steps instantly
-                    let total_steps = file_count * 2;
-                    let mut completed_steps: usize = 0;
-
-                    // Enrich each file with FFmpeg probe + BLAKE3 hash (LOCAL disk = fast)
-                    // Skip files whose path+size match known DB records (unchanged files)
-                    for (idx, file) in files.iter_mut().enumerate() {
-                        let path_key = file.path.to_string_lossy().to_string();
-                        if let Some(known) = known_files.get(&path_key) {
-                            if known.size == file.size && known.file_hash.is_some() {
-                                file.media_info = known.media_info.clone();
-                                file.quality = known.quality.clone();
-                                file.file_hash = known.file_hash.clone();
-                                info!(
-                                    "[skip] ({}/{}) {} — unchanged ({})",
-                                    idx + 1, file_count, file.filename, format_size(file.size as u64)
-                                );
-                                skipped_count += 1;
-                                completed_steps += 2;
-                                let pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 100.0 };
-                                publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), file_count, idx + 1, pct, Some("unchanged".to_string())).await;
-                                continue;
-                            }
-                        }
-
-                        // Probe stage
-                        let probe_pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 0.0 };
-                        publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), file_count, idx, probe_pct, None).await;
-
-                        let probe_detail = probe_scanned_file(file, (idx + 1, file_count)).await;
-                        completed_steps += 1;
-
-                        let after_probe_pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 50.0 };
-                        publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), file_count, idx, after_probe_pct, probe_detail).await;
-
-                        // Hash stage
-                        publish_progress(event_bus, job_id, &self.worker_id, "hashing", Some(&file.filename), file_count, idx, after_probe_pct, None).await;
-
-                        hash_scanned_file(file, (idx + 1, file_count)).await;
-                        completed_steps += 1;
-
-                        let after_hash_pct = if total_steps > 0 { (completed_steps as f32 * 100.0 / total_steps as f32).min(100.0) } else { 100.0 };
-                        publish_progress(event_bus, job_id, &self.worker_id, "hashing", Some(&file.filename), file_count, idx + 1, after_hash_pct, None).await;
-                    }
-
-                    let elapsed = scan_start.elapsed();
-                    total_files_found += file_count as u64;
-                    info!(
-                        "[scan][{}] Complete — {} file(s) ({} skipped, {} enriched) in {:.1}s (id={})",
-                        media_type, file_count, skipped_count, file_count - skipped_count,
-                        elapsed.as_secs_f64(), series_id
-                    );
-
-                    results.push(Message::ScanResult {
-                        job_id: job_id.to_string(),
-                        series_id,
-                        worker_id: self.worker_id.clone(),
-                        files_found: files,
-                        errors: vec![],
-                    });
-                }
-            }
-            ScanType::RescanMovie => {
-                for &(movie_id, path_str) in series_paths {
-                    let path = PathBuf::from(path_str);
-
-                    if !path.exists() {
-                        warn!("[scan][movie] Path does not exist: {}", path_str);
-                        results.push(Message::ScanResult {
-                            job_id: job_id.to_string(),
-                            series_id: movie_id,
-                            worker_id: self.worker_id.clone(),
-                            files_found: vec![],
-                            errors: vec![format!("Path does not exist: {}", path_str)],
-                        });
-                        continue;
-                    }
-
-                    let scan_start = std::time::Instant::now();
-                    info!("[scan][movie] Scanning {} (id={})", path_str, movie_id);
-                    if let Some(mut file) = scanner::scan_movie_directory(&path) {
-                        // Check known_files for skip-enrichment
-                        let path_key = file.path.to_string_lossy().to_string();
-                        if let Some(known) = known_files.get(&path_key) {
-                            if known.size == file.size && known.file_hash.is_some() {
-                                file.media_info = known.media_info.clone();
-                                file.quality = known.quality.clone();
-                                file.file_hash = known.file_hash.clone();
-                                let elapsed = scan_start.elapsed();
-                                info!(
-                                    "[skip][movie] {} — unchanged ({}) in {:.1}s",
-                                    file.filename, format_size(file.size as u64), elapsed.as_secs_f64()
-                                );
-                                publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), 1, 1, 100.0, Some("unchanged".to_string())).await;
-                                total_files_found += 1;
-                                results.push(Message::ScanResult {
-                                    job_id: job_id.to_string(),
-                                    series_id: movie_id,
-                                    worker_id: self.worker_id.clone(),
-                                    files_found: vec![file],
-                                    errors: vec![],
-                                });
-                                continue;
-                            }
-                        }
-
-                        // Probe stage
-                        publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), 1, 0, 0.0, None).await;
-                        let probe_detail = probe_scanned_file(&mut file, (1, 1)).await;
-                        publish_progress(event_bus, job_id, &self.worker_id, "probing", Some(&file.filename), 1, 0, 50.0, probe_detail).await;
-
-                        // Hash stage
-                        publish_progress(event_bus, job_id, &self.worker_id, "hashing", Some(&file.filename), 1, 0, 50.0, None).await;
-                        hash_scanned_file(&mut file, (1, 1)).await;
-                        publish_progress(event_bus, job_id, &self.worker_id, "hashing", Some(&file.filename), 1, 1, 100.0, None).await;
-
-                        total_files_found += 1;
-                        let elapsed = scan_start.elapsed();
-                        info!(
-                            "[scan][movie] Complete — {} ({}, hash={}) in {:.1}s",
-                            file.filename,
-                            format_size(file.size as u64),
-                            file.file_hash.as_deref().unwrap_or("none"),
-                            elapsed.as_secs_f64()
-                        );
-                        results.push(Message::ScanResult {
-                            job_id: job_id.to_string(),
-                            series_id: movie_id,
-                            worker_id: self.worker_id.clone(),
-                            files_found: vec![file],
-                            errors: vec![],
-                        });
-                    } else {
-                        info!("[scan][movie] No video files found in {}", path_str);
-                        results.push(Message::ScanResult {
-                            job_id: job_id.to_string(),
-                            series_id: movie_id,
-                            worker_id: self.worker_id.clone(),
-                            files_found: vec![],
-                            errors: vec![],
-                        });
-                    }
-                }
-            }
-            ScanType::RescanPodcast => {
-                for &(podcast_id, path_str) in series_paths {
-                    info!(
-                        "[scan][podcast] Podcast scanning not yet implemented (id={}, path={})",
-                        podcast_id, path_str
-                    );
-                    results.push(Message::ScanResult {
-                        job_id: job_id.to_string(),
-                        series_id: podcast_id,
-                        worker_id: self.worker_id.clone(),
-                        files_found: vec![],
-                        errors: vec!["Podcast scanning not yet implemented".to_string()],
-                    });
-                }
-            }
-            ScanType::RescanMusic => {
-                for &(music_id, path_str) in series_paths {
-                    info!(
-                        "[scan][music] Music scanning not yet implemented (id={}, path={})",
-                        music_id, path_str
-                    );
-                    results.push(Message::ScanResult {
-                        job_id: job_id.to_string(),
-                        series_id: music_id,
-                        worker_id: self.worker_id.clone(),
-                        files_found: vec![],
-                        errors: vec!["Music scanning not yet implemented".to_string()],
-                    });
-                }
-            }
-            ScanType::DownloadedEpisodesScan | ScanType::DownloadedMovieScan => {
-                for &(series_id, path_str) in series_paths {
-                    let path = PathBuf::from(path_str);
-
-                    if !path.exists() {
-                        warn!("[scan][download] Path does not exist, skipping: {}", path_str);
-                        continue;
-                    }
-
-                    let scan_start = std::time::Instant::now();
-                    info!("[scan][download] Scanning {}", path_str);
-                    let mut files = scanner::scan_download_directory(&path);
-                    let file_count = files.len();
-                    info!("[scan][download] Found {} video file(s) in {}", file_count, path_str);
-
-                    for (idx, file) in files.iter_mut().enumerate() {
-                        enrich_scanned_file(file, (idx + 1, file_count)).await;
-                    }
-
-                    let elapsed = scan_start.elapsed();
-                    total_files_found += file_count as u64;
-                    info!(
-                        "[scan][download] Complete — {} file(s) enriched in {:.1}s",
-                        file_count, elapsed.as_secs_f64()
-                    );
-
-                    results.push(Message::ScanResult {
-                        job_id: job_id.to_string(),
-                        series_id,
-                        worker_id: self.worker_id.clone(),
-                        files_found: files,
-                        errors: vec![],
-                    });
-                }
-            }
-        }
-
-        // Record statistics
-        self.record_scan(total_files_found);
-
-        results
-    }
 }
 
 /// Result of a file import operation
@@ -1309,15 +1086,6 @@ async fn hash_scanned_file(file: &mut ScannedFile, progress: (usize, usize)) {
             );
         }
     }
-}
-
-/// Enrich a scanned file with FFmpeg media info and BLAKE3 content hash.
-///
-/// Convenience wrapper that calls probe + hash sequentially.
-/// Used by code paths that don't need per-stage progress reporting.
-async fn enrich_scanned_file(file: &mut ScannedFile, progress: (usize, usize)) {
-    probe_scanned_file(file, progress).await;
-    hash_scanned_file(file, progress).await;
 }
 
 #[cfg(test)]

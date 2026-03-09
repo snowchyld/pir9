@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -35,6 +35,10 @@ pub struct PendingScanJobs {
     download_job_trackers: HashMap<String, DownloadJobTracker>,
     /// Maps per-file import_job_id → original scan job_id for tracker lookup
     import_to_scan_job: HashMap<String, String>,
+    /// Tracks which (job_id, entity_id) pairs have received at least one file
+    /// via streaming. Used to distinguish "worker found 0 files" (needs fallback)
+    /// from "streaming completion signal after files were already sent".
+    streamed_entities: HashSet<(String, i64)>,
 }
 
 #[derive(Debug)]
@@ -542,7 +546,12 @@ impl ScanResultConsumer {
         Ok(())
     }
 
-    /// Handle a series scan result from a worker
+    /// Handle a series scan result from a worker (streaming-aware).
+    ///
+    /// Workers stream one file per ScanResult, then send an empty completion signal.
+    /// - Non-empty files: process immediately, don't mark job received yet
+    /// - Empty files (completion): mark job received; try local fallback only if
+    ///   no files were previously streamed for this entity
     async fn handle_scan_result(
         &self,
         job_id: &str,
@@ -551,15 +560,6 @@ impl ScanResultConsumer {
         files_found: Vec<ScannedFile>,
         errors: Vec<String>,
     ) {
-        info!(
-            "Received scan result: job_id={}, series_id={}, worker={}, files={}, errors={}",
-            job_id,
-            series_id,
-            worker_id,
-            files_found.len(),
-            errors.len()
-        );
-
         // Log any errors from the worker
         for error in &errors {
             warn!(
@@ -568,30 +568,54 @@ impl ScanResultConsumer {
             );
         }
 
-        // If worker returned 0 files, try local fallback scan (server may have
-        // updated parser patterns that the worker doesn't have yet)
-        let files_to_process = if files_found.is_empty() {
-            self.try_local_fallback_scan(series_id).await
-        } else {
-            files_found
-        };
-
-        // Process the files
-        if let Err(e) = self
-            .process_scanned_files(series_id, files_to_process)
-            .await
-        {
-            error!(
-                "Failed to process scanned files for series {}: {}",
-                series_id, e
+        if !files_found.is_empty() {
+            // Per-file streaming result — process immediately, track that we got files
+            debug!(
+                "Streaming scan result: job={}, series={}, files={}",
+                job_id, series_id, files_found.len()
             );
+            {
+                let mut jobs = self.pending_jobs.write().await;
+                jobs.streamed_entities.insert((job_id.to_string(), series_id));
+            }
+            if let Err(e) = self.process_scanned_files(series_id, files_found).await {
+                error!(
+                    "Failed to process scanned files for series {}: {}",
+                    series_id, e
+                );
+            }
+            return;
         }
 
-        // Update job tracking
+        // Empty result = per-entity completion signal
+        info!(
+            "Scan complete for series {} (job={})",
+            series_id, job_id
+        );
+
+        // Only try local fallback if the worker streamed zero files for this entity
+        let had_files = {
+            let jobs = self.pending_jobs.read().await;
+            jobs.streamed_entities.contains(&(job_id.to_string(), series_id))
+        };
+        if !had_files {
+            let fallback = self.try_local_fallback_scan(series_id).await;
+            if let Err(e) = self.process_scanned_files(series_id, fallback).await {
+                error!(
+                    "Failed to process fallback scan for series {}: {}",
+                    series_id, e
+                );
+            }
+        }
+
+        // Mark this entity's result as received
         self.mark_job_result_received(job_id).await;
     }
 
-    /// Handle a movie scan result from a worker
+    /// Handle a movie scan result from a worker (streaming-aware).
+    ///
+    /// Movies typically have 1 file, but the streaming protocol is the same:
+    /// non-empty = per-file result, empty = completion signal.
     async fn handle_movie_scan_result(
         &self,
         job_id: &str,
@@ -600,15 +624,6 @@ impl ScanResultConsumer {
         files_found: Vec<ScannedFile>,
         errors: Vec<String>,
     ) {
-        info!(
-            "Received movie scan result: job_id={}, movie_id={}, worker={}, files={}, errors={}",
-            job_id,
-            movie_id,
-            worker_id,
-            files_found.len(),
-            errors.len()
-        );
-
         for error in &errors {
             warn!(
                 "Worker {} reported error for movie job {}: {}",
@@ -617,15 +632,36 @@ impl ScanResultConsumer {
         }
 
         if let Some(file) = files_found.into_iter().next() {
+            // Per-file streaming result — process immediately
+            debug!(
+                "Streaming movie scan result: job={}, movie={}, file={}",
+                job_id, movie_id, file.filename
+            );
+            {
+                let mut jobs = self.pending_jobs.write().await;
+                jobs.streamed_entities.insert((job_id.to_string(), movie_id));
+            }
             if let Err(e) = self.process_movie_scan_result(movie_id, file).await {
                 error!(
                     "Failed to process movie scan result for movie {}: {}",
                     movie_id, e
                 );
             }
-        } else {
-            info!("No video files found for movie {} by worker", movie_id);
-            // Clear file reference if movie thought it had one
+            return;
+        }
+
+        // Empty result = per-entity completion signal
+        info!(
+            "Movie scan complete for movie {} (job={})",
+            movie_id, job_id
+        );
+
+        // If no files were streamed, clear file reference (movie has no file on disk)
+        let had_files = {
+            let jobs = self.pending_jobs.read().await;
+            jobs.streamed_entities.contains(&(job_id.to_string(), movie_id))
+        };
+        if !had_files {
             let movie_repo = MovieRepository::new(self.db.clone());
             if let Ok(Some(movie)) = movie_repo.get_by_id(movie_id).await {
                 if movie.has_file {
@@ -1670,6 +1706,8 @@ impl ScanResultConsumer {
                     "Scan job {} completed ({}/{} results)",
                     job_id, job.results_received, job.entity_ids.len()
                 );
+                // Clean up streaming state for this job
+                jobs.streamed_entities.retain(|(jid, _)| jid != job_id);
             } else {
                 debug!(
                     "Job {} received result {}/{}",
