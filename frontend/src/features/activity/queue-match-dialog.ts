@@ -1,10 +1,10 @@
 /**
- * Queue match dialog - manually fix the series/episode match for a queue item.
- * Used when the auto-detection picks the wrong Series/Season/Episode.
+ * Queue match dialog - manually fix the series match for a queue item.
+ * Episodes are resolved during import, not at match time.
  */
 
 import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
-import { type Episode, http, type Movie, type QueueItem, type Series } from '../../core/http';
+import { http, type Movie, type QueueItem, type Series } from '../../core/http';
 import { createMutation, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
 import { showError, showSuccess } from '../../stores/app.store';
@@ -21,10 +21,7 @@ export class QueueMatchDialog extends BaseComponent {
   private queueTitle = signal('');
   private allSeries = signal<Series[]>([]);
   private selectedSeriesId = signal<number | null>(null);
-  private episodes = signal<Episode[]>([]);
-  private selectedEpisodeIds = signal<Set<number>>(new Set());
   private isLoadingSeries = signal(false);
-  private isLoadingEpisodes = signal(false);
   private seriesFilter = signal('');
   private downloadFiles = signal<DownloadFile[]>([]);
   private isLoadingFiles = signal(false);
@@ -77,10 +74,7 @@ export class QueueMatchDialog extends BaseComponent {
     this.watch(this.isOpen);
     this.watch(this.allSeries);
     this.watch(this.selectedSeriesId);
-    this.watch(this.episodes);
-    this.watch(this.selectedEpisodeIds);
     this.watch(this.isLoadingSeries);
-    this.watch(this.isLoadingEpisodes);
     this.watch(this.seriesFilter);
     this.watch(this.matchMutation.isLoading);
     this.watch(this.downloadFiles);
@@ -100,8 +94,6 @@ export class QueueMatchDialog extends BaseComponent {
     this.queueItem.set(item);
     this.queueTitle.set(item.title);
     this.selectedSeriesId.set(null);
-    this.episodes.set([]);
-    this.selectedEpisodeIds.set(new Set());
     this.seriesFilter.set('');
     this.downloadFiles.set([]);
     this.showFiles.set(false);
@@ -159,66 +151,18 @@ export class QueueMatchDialog extends BaseComponent {
 
   selectSeries(seriesId: number): void {
     this.selectedSeriesId.set(seriesId);
-    this.selectedEpisodeIds.set(new Set());
-    this.loadEpisodes(seriesId);
-  }
-
-  private async loadEpisodes(seriesId: number): Promise<void> {
-    this.isLoadingEpisodes.set(true);
-    try {
-      const episodes = await http.get<Episode[]>(`/episode?seriesId=${seriesId}`);
-      this.episodes.set(
-        episodes.sort((a, b) =>
-          a.seasonNumber !== b.seasonNumber
-            ? a.seasonNumber - b.seasonNumber
-            : a.episodeNumber - b.episodeNumber,
-        ),
-      );
-    } catch {
-      showError('Failed to load episodes');
-    } finally {
-      this.isLoadingEpisodes.set(false);
-    }
-  }
-
-  toggleEpisode(episodeId: number): void {
-    const current = new Set(this.selectedEpisodeIds.value);
-    if (current.has(episodeId)) {
-      current.delete(episodeId);
-    } else {
-      current.add(episodeId);
-    }
-    this.selectedEpisodeIds.set(current);
-  }
-
-  toggleSeason(seasonNumber: number): void {
-    const seasonEps = this.episodes.value.filter((ep) => ep.seasonNumber === seasonNumber);
-    const current = new Set(this.selectedEpisodeIds.value);
-    const allSelected = seasonEps.every((ep) => current.has(ep.id));
-
-    for (const ep of seasonEps) {
-      if (allSelected) {
-        current.delete(ep.id);
-      } else {
-        current.add(ep.id);
-      }
-    }
-    this.selectedEpisodeIds.set(current);
   }
 
   confirmMatch(): void {
     const item = this.queueItem.value;
     const seriesId = this.selectedSeriesId.value;
-    const episodeIds = [...this.selectedEpisodeIds.value];
-    if (!item || !seriesId || episodeIds.length === 0) return;
+    if (!item || !seriesId) return;
 
-    // For untracked downloads (id >= 10000), include extra context so the
-    // backend can promote them to tracked downloads
+    // Series-only match — episodes resolved during import
     const isUntracked = item.id >= 10000;
     this.matchMutation.mutate({
       id: item.id,
       seriesId,
-      episodeIds,
       ...(isUntracked
         ? {
             downloadId: item.downloadId,
@@ -229,12 +173,6 @@ export class QueueMatchDialog extends BaseComponent {
           }
         : {}),
     });
-  }
-
-  goBack(): void {
-    this.selectedSeriesId.set(null);
-    this.episodes.set([]);
-    this.selectedEpisodeIds.set(new Set());
   }
 
   updateSeriesFilter(value: string): void {
@@ -295,13 +233,12 @@ export class QueueMatchDialog extends BaseComponent {
 
     const title = this.queueTitle.value;
     const seriesId = this.selectedSeriesId.value;
-    const episodeIds = this.selectedEpisodeIds.value;
     const isSubmitting = this.matchMutation.isLoading.value;
     const isMovie = this.contentType.value === 'movie';
     const movieId = this.selectedMovieId.value;
 
     // Determine confirm button state and handler
-    const canConfirm = isMovie ? movieId !== null : seriesId !== null && episodeIds.size > 0;
+    const canConfirm = isMovie ? movieId !== null : seriesId !== null;
     const confirmHandler = isMovie ? 'confirmMovieMatch' : 'confirmMatch';
 
     return html`
@@ -322,25 +259,10 @@ export class QueueMatchDialog extends BaseComponent {
 
             ${this.renderFilesPanel()}
 
-            ${
-              isMovie
-                ? this.renderMovieSelector()
-                : !seriesId
-                  ? this.renderSeriesSelector()
-                  : this.renderEpisodeSelector()
-            }
+            ${isMovie ? this.renderMovieSelector() : this.renderSeriesSelector()}
           </div>
 
           <div class="dialog-footer">
-            ${
-              !isMovie && seriesId
-                ? html`
-              <button class="btn secondary" onclick="this.closest('queue-match-dialog').goBack()">
-                Back
-              </button>
-            `
-                : ''
-            }
             <button class="btn secondary" onclick="this.closest('queue-match-dialog').close()">Cancel</button>
             <button
               class="btn primary"
@@ -457,79 +379,6 @@ export class QueueMatchDialog extends BaseComponent {
           font-size: 0.8125rem;
         }
 
-        .episode-list {
-          display: flex;
-          flex-direction: column;
-          gap: 0.125rem;
-          max-height: 400px;
-          overflow-y: auto;
-        }
-
-        .season-label {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          font-weight: 600;
-          padding: 0.5rem 0 0.25rem;
-          color: var(--text-color-muted);
-          font-size: 0.8125rem;
-        }
-
-        .season-label.clickable {
-          cursor: pointer;
-          border-radius: 0.25rem;
-          padding: 0.5rem 0.5rem 0.25rem;
-        }
-
-        .season-label.clickable:hover {
-          color: var(--text-color);
-        }
-
-        .season-checkbox {
-          accent-color: var(--color-primary);
-        }
-
-        .season-count {
-          font-weight: 400;
-          font-size: 0.75rem;
-        }
-
-        .episode-option {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          padding: 0.375rem 0.75rem;
-          border-radius: 0.25rem;
-          cursor: pointer;
-        }
-
-        .episode-option:hover {
-          background: var(--bg-table-row-hover);
-        }
-
-        .episode-option.selected {
-          background: var(--color-primary);
-          color: white;
-          border: 1px solid var(--color-primary);
-        }
-
-        .episode-option input[type="checkbox"] {
-          accent-color: var(--color-primary);
-        }
-
-        .ep-label {
-          font-weight: 500;
-          min-width: 60px;
-        }
-
-        .ep-title {
-          color: var(--text-color-muted);
-          font-size: 0.8125rem;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
         .dialog-footer {
           display: flex;
           justify-content: flex-end;
@@ -568,16 +417,7 @@ export class QueueMatchDialog extends BaseComponent {
           padding: 2rem;
         }
 
-        .selected-series {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          padding: 0.5rem 0.75rem;
-          background: var(--bg-card-alt);
-          border-radius: 0.25rem;
-          margin-bottom: 0.75rem;
-          font-weight: 500;
-        }
+
 
         .files-panel {
           margin-bottom: 0.75rem;
@@ -712,6 +552,7 @@ export class QueueMatchDialog extends BaseComponent {
     const series = this.allSeries.value.filter(
       (s) => !filter || s.title.toLowerCase().includes(filter),
     );
+    const selectedId = this.selectedSeriesId.value;
 
     return html`
       <input
@@ -725,70 +566,12 @@ export class QueueMatchDialog extends BaseComponent {
         ${series
           .map(
             (s) => html`
-          <div class="series-option" onclick="this.closest('queue-match-dialog').selectSeries(${s.id})">
+          <div class="series-option ${s.id === selectedId ? 'selected-movie' : ''}" onclick="this.closest('queue-match-dialog').selectSeries(${s.id})">
             <span class="series-option-title">${escapeHtml(s.title)}</span>
             <span class="series-option-year">(${s.year})</span>
           </div>
         `,
           )
-          .join('')}
-      </div>
-    `;
-  }
-
-  private renderEpisodeSelector(): string {
-    const seriesId = this.selectedSeriesId.value;
-    const series = this.allSeries.value.find((s) => s.id === seriesId);
-
-    if (this.isLoadingEpisodes.value) {
-      return html`
-        <div class="selected-series">${escapeHtml(series?.title ?? 'Unknown')}</div>
-        <div class="loading-text">Loading episodes...</div>
-      `;
-    }
-
-    const episodes = this.episodes.value;
-    const selectedIds = this.selectedEpisodeIds.value;
-    let currentSeason = -1;
-
-    // Pre-compute which seasons are fully selected
-    const seasonEpMap = new Map<number, Episode[]>();
-    for (const ep of episodes) {
-      const list = seasonEpMap.get(ep.seasonNumber) ?? [];
-      list.push(ep);
-      seasonEpMap.set(ep.seasonNumber, list);
-    }
-
-    return html`
-      <div class="selected-series">${escapeHtml(series?.title ?? 'Unknown')}</div>
-      <div class="episode-list">
-        ${episodes
-          .map((ep) => {
-            const seasonHeader =
-              ep.seasonNumber !== currentSeason
-                ? (() => {
-                    currentSeason = ep.seasonNumber;
-                    const seasonEps = seasonEpMap.get(ep.seasonNumber) ?? [];
-                    const allSelected =
-                      seasonEps.length > 0 && seasonEps.every((e) => selectedIds.has(e.id));
-                    return html`
-                    <div class="season-label clickable" onclick="this.closest('queue-match-dialog').toggleSeason(${ep.seasonNumber})">
-                      <input type="checkbox" class="season-checkbox" ${allSelected ? 'checked' : ''} onclick="event.stopPropagation(); this.closest('queue-match-dialog').toggleSeason(${ep.seasonNumber})" />
-                      ${ep.seasonNumber === 0 ? 'Specials' : `Season ${ep.seasonNumber}`}
-                      <span class="season-count">(${seasonEps.length} episodes)</span>
-                    </div>`;
-                  })()
-                : '';
-            const isSelected = selectedIds.has(ep.id);
-            return html`
-            ${seasonHeader}
-            <div class="episode-option ${isSelected ? 'selected' : ''}" onclick="this.closest('queue-match-dialog').toggleEpisode(${ep.id})">
-              <input type="checkbox" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); this.closest('queue-match-dialog').toggleEpisode(${ep.id})" />
-              <span class="ep-label">S${String(ep.seasonNumber).padStart(2, '0')}E${String(ep.episodeNumber).padStart(2, '0')}</span>
-              <span class="ep-title">${escapeHtml(ep.title)}</span>
-            </div>
-          `;
-          })
           .join('')}
       </div>
     `;

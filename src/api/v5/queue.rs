@@ -2163,6 +2163,7 @@ async fn update_match(
         }
     } else {
         // --- Series match ---
+        // Only series is required; episode_ids are optional and resolved during import
         let series_id = match body.series_id {
             Some(sid) => sid,
             None => return Err(StatusCode::BAD_REQUEST),
@@ -2170,20 +2171,11 @@ async fn update_match(
         let episode_ids = body.episode_ids.unwrap_or_default();
 
         let series_repo = SeriesRepository::new(state.db.clone());
-        let episode_repo = EpisodeRepository::new(state.db.clone());
 
         // Validate series exists
         match series_repo.get_by_id(series_id).await {
             Ok(Some(_)) => {}
             _ => return Err(StatusCode::NOT_FOUND),
-        }
-
-        // Validate episode IDs exist
-        for &ep_id in &episode_ids {
-            match episode_repo.get_by_id(ep_id).await {
-                Ok(Some(_)) => {}
-                _ => return Err(StatusCode::NOT_FOUND),
-            }
         }
 
         let episode_ids_json =
