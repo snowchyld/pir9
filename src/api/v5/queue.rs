@@ -1428,21 +1428,23 @@ async fn import_queue_item(
     use crate::core::datastore::repositories::TrackedDownloadRepository;
     use crate::core::download::import::ImportService;
 
-    // Parse optional overrides, explicit series ID, and force-reimport list from request body
-    let (overrides, explicit_series_id, force_reimport): (
+    // Parse optional overrides, explicit series ID, force-reimport, and skip list from request body
+    let (overrides, explicit_series_id, force_reimport, skip_files): (
         std::collections::HashMap<String, EpisodeOverride>,
         Option<i64>,
         std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
     ) = if body.is_empty() {
-        (std::collections::HashMap::new(), None, std::collections::HashSet::new())
+        (std::collections::HashMap::new(), None, std::collections::HashSet::new(), std::collections::HashSet::new())
     } else {
         match serde_json::from_slice::<ImportQueueBody>(&body) {
             Ok(b) => (
                 b.overrides.unwrap_or_default(),
                 b.series_id,
                 b.force_reimport.unwrap_or_default().into_iter().collect(),
+                b.skip_files.unwrap_or_default().into_iter().collect(),
             ),
-            Err(_) => (std::collections::HashMap::new(), None, std::collections::HashSet::new()),
+            Err(_) => (std::collections::HashMap::new(), None, std::collections::HashSet::new(), std::collections::HashSet::new()),
         }
     };
 
@@ -1862,6 +1864,7 @@ async fn import_queue_item(
         episodes,
         overrides: override_map.clone(),
         force_reimport: force_reimport.clone(),
+        skip_files: skip_files.clone(),
     };
 
     // Dispatch to Redis worker when available — worker has fast local disk access
@@ -1889,6 +1892,7 @@ async fn import_queue_item(
                     episodes: pending.episodes.clone(),
                     overrides: override_map.clone(),
                     force_reimport: force_reimport.clone(),
+                    skip_files: skip_files.clone(),
                 };
 
                 consumer
@@ -2386,6 +2390,9 @@ pub struct ImportQueueBody {
     /// Source file paths to force-reimport even if identical (same size) to existing files.
     /// Used when the destination file is damaged but hasn't been rescanned/rehashed yet.
     pub force_reimport: Option<Vec<String>>,
+    /// Source file paths to skip during import (user chose "Do not import").
+    /// Frontend-only state — not persisted, so files reappear on next import attempt.
+    pub skip_files: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]

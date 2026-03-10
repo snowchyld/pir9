@@ -88,6 +88,8 @@ struct PendingDownloadImport {
     pre_resolved_episodes: Vec<(i32, i32)>,
     /// Source file paths to force-reimport even if identical (same size as existing)
     force_reimport: std::collections::HashSet<String>,
+    /// Source file paths to skip during import (user chose "Do not import")
+    skip_files: std::collections::HashSet<String>,
 }
 
 /// Per-file data needed to insert episode_file records after the worker moves the file
@@ -179,6 +181,8 @@ pub struct DownloadImportInfo {
     pub overrides: std::collections::HashMap<String, Vec<(i32, i32)>>,
     /// Source file paths to force-reimport even if identical (same size as existing)
     pub force_reimport: std::collections::HashSet<String>,
+    /// Source file paths to skip during import (user chose "Do not import")
+    pub skip_files: std::collections::HashSet<String>,
 }
 
 /// Progress info from a worker's scan enrichment pipeline
@@ -370,6 +374,7 @@ impl ScanResultConsumer {
                     overrides: import_info.overrides.clone(),
                     pre_resolved_episodes: pre_resolved,
                     force_reimport: import_info.force_reimport.clone(),
+                    skip_files: import_info.skip_files.clone(),
                 },
             );
         }
@@ -1100,6 +1105,7 @@ impl ScanResultConsumer {
         let known_series_id: Option<i64>;
         let pre_resolved_episodes: Vec<(i32, i32)>;
         let force_reimport: std::collections::HashSet<String>;
+        let skip_files: std::collections::HashSet<String>;
         if let Some(key) = download_keys.first() {
             let jobs = self.pending_jobs.read().await;
             if let Some(pending) = jobs.download_imports.get(key) {
@@ -1108,22 +1114,36 @@ impl ScanResultConsumer {
                 known_series_id = pending.series_id;
                 pre_resolved_episodes = pending.pre_resolved_episodes.clone();
                 force_reimport = pending.force_reimport.clone();
+                skip_files = pending.skip_files.clone();
             } else {
                 file_overrides = HashMap::new();
                 known_series_id = None;
                 pre_resolved_episodes = Vec::new();
                 force_reimport = std::collections::HashSet::new();
+                skip_files = std::collections::HashSet::new();
             }
         } else {
             file_overrides = HashMap::new();
             known_series_id = None;
             pre_resolved_episodes = Vec::new();
             force_reimport = std::collections::HashSet::new();
+            skip_files = std::collections::HashSet::new();
         }
 
         // Process each file (typically 1 in per-file streaming mode)
         for file in &files_found {
             let filename = &file.filename;
+
+            // User explicitly chose "Do not import" for this file
+            if skip_files.contains(filename)
+                || skip_files.iter().any(|p| p.ends_with(filename))
+            {
+                info!(
+                    "[worker:{}] skipping '{}' — user chose Do not import",
+                    worker_id, filename,
+                );
+                continue;
+            }
 
             // Parse episode info from the filename, falling back to manual overrides
             let mut parsed_eps = crate::core::scanner::parse_episodes_from_filename(filename);
@@ -1376,6 +1396,7 @@ impl ScanResultConsumer {
                         overrides: HashMap::new(),
                         pre_resolved_episodes: Vec::new(),
                         force_reimport: force_reimport.clone(),
+                        skip_files: skip_files.clone(),
                     },
                 );
                 // Map import_job_id back to scan job for tracker updates

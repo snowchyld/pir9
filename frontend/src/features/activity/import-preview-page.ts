@@ -98,6 +98,8 @@ export class ImportPreviewPage extends BaseComponent {
   private manualOverrides = new Map<string, { seasonNumber: number; episodeNumbers: number[] }>();
   /** Source files to force-reimport even if identical (same size as existing) */
   private forceReimportFiles = signal<Set<string>>(new Set());
+  /** Source files explicitly skipped by the user ("Do not import") — frontend-only, not persisted */
+  private skippedFiles = signal<Set<string>>(new Set());
 
   private importMutation = createMutation({
     mutationFn: (params: {
@@ -105,17 +107,20 @@ export class ImportPreviewPage extends BaseComponent {
       overrides: Record<string, { seasonNumber: number; episodeNumbers: number[] }>;
       seriesId?: number;
       forceReimport?: string[];
+      skipFiles?: string[];
     }) => {
       const hasOverrides = Object.keys(params.overrides).length > 0;
       const hasForceReimport = params.forceReimport && params.forceReimport.length > 0;
-      const body =
-        hasOverrides || params.seriesId || hasForceReimport
-          ? {
-              overrides: hasOverrides ? params.overrides : undefined,
-              seriesId: params.seriesId,
-              forceReimport: hasForceReimport ? params.forceReimport : undefined,
-            }
-          : undefined;
+      const hasSkipFiles = params.skipFiles && params.skipFiles.length > 0;
+      const needsBody = hasOverrides || params.seriesId || hasForceReimport || hasSkipFiles;
+      const body = needsBody
+        ? {
+            overrides: hasOverrides ? params.overrides : undefined,
+            seriesId: params.seriesId,
+            forceReimport: hasForceReimport ? params.forceReimport : undefined,
+            skipFiles: hasSkipFiles ? params.skipFiles : undefined,
+          }
+        : undefined;
       return http.post<{ success: boolean }>(`/queue/${params.id}/import`, body);
     },
     onSuccess: (result: { success: boolean }) => {
@@ -144,6 +149,7 @@ export class ImportPreviewPage extends BaseComponent {
     this.watch(this.filterMode);
     this.watch(this.editingFile);
     this.watch(this.forceReimportFiles);
+    this.watch(this.skippedFiles);
   }
 
   protected onMount(): void {
@@ -205,6 +211,7 @@ export class ImportPreviewPage extends BaseComponent {
       (f) => f.existingFile || this.getOverrideHasFile(f.sourceFile),
     );
     const sameFileCount = data.files.filter((f) => {
+      if (this.skippedFiles.value.has(f.sourceFile)) return false;
       const isMatched = f.matched || this.manualOverrides.has(f.sourceFile);
       if (!isMatched) return false;
       if (this.forceReimportFiles.value.has(f.sourceFile)) return false;
@@ -214,6 +221,7 @@ export class ImportPreviewPage extends BaseComponent {
       return existingSize != null && existingSize === f.sourceSize;
     }).length;
     const upgradeCount = data.files.filter((f) => {
+      if (this.skippedFiles.value.has(f.sourceFile)) return false;
       const isMatched = f.matched || this.manualOverrides.has(f.sourceFile);
       if (!isMatched) return false;
       const hasExisting = f.existingFile || this.getOverrideHasFile(f.sourceFile);
@@ -222,9 +230,11 @@ export class ImportPreviewPage extends BaseComponent {
       return existingSize == null || existingSize !== f.sourceSize;
     }).length;
     const matchedCount = this.getMatchedCount(data);
-    const unmatchedCount = data.files.length - sameFileCount - matchedCount;
+    const skippedCount = this.skippedFiles.value.size;
+    const unmatchedCount = data.files.length - sameFileCount - matchedCount - skippedCount;
     const totalSize = data.files
       .filter((f) => {
+        if (this.skippedFiles.value.has(f.sourceFile)) return false;
         const isMatched = f.matched || this.manualOverrides.has(f.sourceFile);
         if (!isMatched) return false;
         const hasExisting = f.existingFile || this.getOverrideHasFile(f.sourceFile);
@@ -336,6 +346,7 @@ export class ImportPreviewPage extends BaseComponent {
 
   private getMatchedCount(data: ImportPreviewResponse): number {
     return data.files.filter((f) => {
+      if (this.skippedFiles.value.has(f.sourceFile)) return false;
       const isMatched = f.matched || this.manualOverrides.has(f.sourceFile);
       if (!isMatched) return false;
       // Exclude same-size files unless force-reimport is toggled
@@ -371,9 +382,10 @@ export class ImportPreviewPage extends BaseComponent {
 
   private renderFileRow(file: ImportPreviewFile, data: ImportPreviewResponse): string {
     const filename = file.sourceFile.split('/').pop() ?? file.sourceFile;
+    const isSkipped = this.skippedFiles.value.has(file.sourceFile);
     const ov = this.manualOverrides.get(file.sourceFile);
-    const isManuallyMatched = !!ov && ov.episodeNumbers.length > 0;
-    const effectivelyMatched = file.matched || isManuallyMatched;
+    const isManuallyMatched = !isSkipped && !!ov && ov.episodeNumbers.length > 0;
+    const effectivelyMatched = !isSkipped && (file.matched || isManuallyMatched);
 
     const seasonNum = ov?.seasonNumber ?? file.seasonNumber;
     // Effective episode numbers: override > backend multi > backend single
@@ -427,7 +439,10 @@ export class ImportPreviewPage extends BaseComponent {
 
     let statusClass = 'status-skip';
     let statusLabel = 'Skipped';
-    if (effectivelyMatched && isSameFile && !isForceReimport) {
+    if (isSkipped) {
+      statusClass = 'status-skip';
+      statusLabel = 'Do not import';
+    } else if (effectivelyMatched && isSameFile && !isForceReimport) {
       statusClass = 'status-same';
       statusLabel = 'Identical';
     } else if (effectivelyMatched && isSameFile && isForceReimport) {
@@ -485,6 +500,11 @@ export class ImportPreviewPage extends BaseComponent {
       effectivelyMatched && isSameFile
         ? `<button class="reimport-btn ${isForceReimport ? 'active' : ''}" onclick="this.closest('import-preview-page').toggleForceReimportFromRow(this)" title="${isForceReimport ? 'Cancel reimport' : 'Force reimport (overwrite existing file)'}">${isForceReimport ? 'Undo' : 'Reimport'}</button>`
         : '';
+    // Show skip/unskip for matched video files (or already-skipped files to allow undo)
+    const canSkip = isVideoFile(filename) && (file.matched || isManuallyMatched || isSkipped);
+    const skipBtn = canSkip
+      ? `<button class="reimport-btn ${isSkipped ? 'active' : ''}" onclick="this.closest('import-preview-page').toggleSkipFileFromRow(this)" title="${isSkipped ? 'Undo skip' : 'Do not import this file'}">${isSkipped ? 'Undo' : 'Skip'}</button>`
+      : '';
 
     return html`
       <tr class="${rowClass}" data-source="${escapeHtml(file.sourceFile)}">
@@ -501,6 +521,7 @@ export class ImportPreviewPage extends BaseComponent {
         <td>
           <span class="status-badge ${statusClass}">${statusLabel}</span>
           ${safeHtml(reimportBtn)}
+          ${safeHtml(skipBtn)}
         </td>
       </tr>
     `;
@@ -661,15 +682,40 @@ export class ImportPreviewPage extends BaseComponent {
     this.importing.set(true);
     const overrides: Record<string, { seasonNumber: number; episodeNumbers: number[] }> = {};
     for (const [key, value] of this.manualOverrides) {
-      overrides[key] = value;
+      // Don't send overrides for skipped files
+      if (!this.skippedFiles.value.has(key)) {
+        overrides[key] = value;
+      }
     }
     const forceReimport = [...this.forceReimportFiles.value];
+    const skipFiles = [...this.skippedFiles.value];
     this.importMutation.mutate({
       id: data.id,
       overrides,
       seriesId: data.series?.id,
       forceReimport: forceReimport.length > 0 ? forceReimport : undefined,
+      skipFiles: skipFiles.length > 0 ? skipFiles : undefined,
     });
+  }
+
+  toggleSkipFile(sourceFile: string): void {
+    const current = new Set(this.skippedFiles.value);
+    if (current.has(sourceFile)) {
+      current.delete(sourceFile);
+    } else {
+      current.add(sourceFile);
+      // If skipping, also remove from force-reimport
+      const reimportSet = new Set(this.forceReimportFiles.value);
+      if (reimportSet.delete(sourceFile)) {
+        this.forceReimportFiles.set(reimportSet);
+      }
+    }
+    this.skippedFiles.set(current);
+  }
+
+  toggleSkipFileFromRow(el: HTMLElement): void {
+    const src = this.getSourceFileFromRow(el);
+    if (src) this.toggleSkipFile(src);
   }
 
   toggleForceReimport(sourceFile: string): void {
@@ -702,6 +748,7 @@ export class ImportPreviewPage extends BaseComponent {
   }
 
   private getFileStatus(file: ImportPreviewFile): string {
+    if (this.skippedFiles.value.has(file.sourceFile)) return 'skip';
     const ov = this.manualOverrides.get(file.sourceFile);
     const effectivelyMatched = file.matched || (!!ov && ov.episodeNumbers.length > 0);
     if (!effectivelyMatched) return 'skip';

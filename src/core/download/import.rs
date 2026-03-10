@@ -205,6 +205,8 @@ pub struct PendingImport {
     pub overrides: std::collections::HashMap<String, Vec<(i32, i32)>>,
     /// Source file paths to force-reimport even if identical (same size as existing)
     pub force_reimport: std::collections::HashSet<String>,
+    /// Source file paths to skip during import (user chose "Do not import")
+    pub skip_files: std::collections::HashSet<String>,
 }
 
 /// Result of importing a single file
@@ -293,6 +295,7 @@ impl ImportService {
             episodes: Vec::new(),
             overrides: std::collections::HashMap::new(),
             force_reimport: std::collections::HashSet::new(),
+            skip_files: std::collections::HashSet::new(),
         };
 
         // Try to match to a series
@@ -441,6 +444,7 @@ impl ImportService {
                 &pending.overrides,
                 &pending.output_path,
                 &pending.force_reimport,
+                &pending.skip_files,
             )
             .await
         }
@@ -509,6 +513,7 @@ impl ImportService {
         file_overrides: &HashMap<String, Vec<(i32, i32)>>,
         download_path: &Path,
         force_reimport: &std::collections::HashSet<String>,
+        skip_files: &std::collections::HashSet<String>,
     ) -> Result<ImportResult> {
         // Build episode lookup: (season, episode_number) -> EpisodeDbModel
         let mut episode_map: HashMap<(i32, i32), &EpisodeDbModel> = HashMap::new();
@@ -554,6 +559,18 @@ impl ImportService {
                     continue;
                 }
             };
+
+            // User explicitly chose "Do not import" for this file
+            if skip_files.contains(filename)
+                || skip_files.iter().any(|p| p.ends_with(filename))
+            {
+                tracing::info!(
+                    "Season pack import: skipping '{}' — user chose Do not import",
+                    filename,
+                );
+                files_skipped += 1;
+                continue;
+            }
 
             let parsed_eps = parse_episodes_from_filename(filename);
 
