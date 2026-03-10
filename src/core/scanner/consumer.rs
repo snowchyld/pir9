@@ -86,6 +86,8 @@ struct PendingDownloadImport {
     /// Pre-resolved episodes from the import handler (season, episode) pairs.
     /// Used as fallback when filename has no S##E## pattern and no overrides are provided.
     pre_resolved_episodes: Vec<(i32, i32)>,
+    /// Source file paths to force-reimport even if identical (same size as existing)
+    force_reimport: std::collections::HashSet<String>,
 }
 
 /// Per-file data needed to insert episode_file records after the worker moves the file
@@ -175,6 +177,8 @@ pub struct DownloadImportInfo {
     pub episodes: Vec<EpisodeDbModel>,
     /// Manual episode overrides from import preview UI: source_file → [(season, episode)]
     pub overrides: std::collections::HashMap<String, Vec<(i32, i32)>>,
+    /// Source file paths to force-reimport even if identical (same size as existing)
+    pub force_reimport: std::collections::HashSet<String>,
 }
 
 /// Progress info from a worker's scan enrichment pipeline
@@ -365,6 +369,7 @@ impl ScanResultConsumer {
                     file_mappings: HashMap::new(),
                     overrides: import_info.overrides.clone(),
                     pre_resolved_episodes: pre_resolved,
+                    force_reimport: import_info.force_reimport.clone(),
                 },
             );
         }
@@ -1094,6 +1099,7 @@ impl ScanResultConsumer {
         let file_overrides: HashMap<String, Vec<(i32, i32)>>;
         let known_series_id: Option<i64>;
         let pre_resolved_episodes: Vec<(i32, i32)>;
+        let force_reimport: std::collections::HashSet<String>;
         if let Some(key) = download_keys.first() {
             let jobs = self.pending_jobs.read().await;
             if let Some(pending) = jobs.download_imports.get(key) {
@@ -1101,15 +1107,18 @@ impl ScanResultConsumer {
                 file_overrides = pending.overrides.clone();
                 known_series_id = pending.series_id;
                 pre_resolved_episodes = pending.pre_resolved_episodes.clone();
+                force_reimport = pending.force_reimport.clone();
             } else {
                 file_overrides = HashMap::new();
                 known_series_id = None;
                 pre_resolved_episodes = Vec::new();
+                force_reimport = std::collections::HashSet::new();
             }
         } else {
             file_overrides = HashMap::new();
             known_series_id = None;
             pre_resolved_episodes = Vec::new();
+            force_reimport = std::collections::HashSet::new();
         }
 
         // Process each file (typically 1 in per-file streaming mode)
@@ -1279,27 +1288,34 @@ impl ScanResultConsumer {
             };
 
             // Same-size skip: if ALL matched episodes already have files of the same size,
-            // the source file is identical — skip to avoid wasteful overwrite
-            let episode_file_repo =
-                crate::core::datastore::repositories::EpisodeFileRepository::new(self.db.clone());
-            let ep_file_sizes: HashMap<i64, i64> = episode_file_repo
-                .get_by_series_id(series.id)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|f| (f.id, f.size))
-                .collect();
-            if episodes.iter().all(|ep| {
-                ep.episode_file_id
-                    .and_then(|fid| ep_file_sizes.get(&fid))
-                    .map(|&existing_size| existing_size == file.size)
-                    .unwrap_or(false)
-            }) {
-                info!(
-                    "[worker:{}] skipping '{}' — same size as existing file(s)",
-                    worker_id, filename,
-                );
-                continue;
+            // the source file is identical — skip to avoid wasteful overwrite.
+            // force_reimport bypasses this check (for damaged destination files).
+            let is_force_reimport = force_reimport.contains(filename)
+                || force_reimport.iter().any(|p| p.ends_with(filename));
+            if !is_force_reimport {
+                let episode_file_repo =
+                    crate::core::datastore::repositories::EpisodeFileRepository::new(
+                        self.db.clone(),
+                    );
+                let ep_file_sizes: HashMap<i64, i64> = episode_file_repo
+                    .get_by_series_id(series.id)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|f| (f.id, f.size))
+                    .collect();
+                if episodes.iter().all(|ep| {
+                    ep.episode_file_id
+                        .and_then(|fid| ep_file_sizes.get(&fid))
+                        .map(|&existing_size| existing_size == file.size)
+                        .unwrap_or(false)
+                }) {
+                    info!(
+                        "[worker:{}] skipping '{}' — same size as existing file(s)",
+                        worker_id, filename,
+                    );
+                    continue;
+                }
             }
 
             let season_number = episodes.first().map(|e| e.season_number).unwrap_or(1);
@@ -1359,6 +1375,7 @@ impl ScanResultConsumer {
                         file_mappings,
                         overrides: HashMap::new(),
                         pre_resolved_episodes: Vec::new(),
+                        force_reimport: force_reimport.clone(),
                     },
                 );
                 // Map import_job_id back to scan job for tracker updates

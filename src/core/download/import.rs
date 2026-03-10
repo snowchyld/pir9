@@ -203,6 +203,8 @@ pub struct PendingImport {
     pub episodes: Vec<EpisodeDbModel>,
     /// Manual episode overrides from import preview UI: source_file → [(season, episode)]
     pub overrides: std::collections::HashMap<String, Vec<(i32, i32)>>,
+    /// Source file paths to force-reimport even if identical (same size as existing)
+    pub force_reimport: std::collections::HashSet<String>,
 }
 
 /// Result of importing a single file
@@ -290,6 +292,7 @@ impl ImportService {
             series: None,
             episodes: Vec::new(),
             overrides: std::collections::HashMap::new(),
+            force_reimport: std::collections::HashSet::new(),
         };
 
         // Try to match to a series
@@ -437,6 +440,7 @@ impl ImportService {
                 &pending.title,
                 &pending.overrides,
                 &pending.output_path,
+                &pending.force_reimport,
             )
             .await
         }
@@ -504,6 +508,7 @@ impl ImportService {
         download_title: &str,
         file_overrides: &HashMap<String, Vec<(i32, i32)>>,
         download_path: &Path,
+        force_reimport: &std::collections::HashSet<String>,
     ) -> Result<ImportResult> {
         // Build episode lookup: (season, episode_number) -> EpisodeDbModel
         let mut episode_map: HashMap<(i32, i32), &EpisodeDbModel> = HashMap::new();
@@ -625,13 +630,19 @@ impl ImportService {
             }
 
             // Same-size skip: if ALL matched episodes already have files of the same size,
-            // the source file is identical — skip to avoid wasteful overwrite
-            if matched.iter().all(|ep| {
-                ep.episode_file_id
-                    .and_then(|fid| existing_file_sizes.get(&fid))
-                    .map(|&existing_size| existing_size == file_size as i64)
-                    .unwrap_or(false)
-            }) {
+            // the source file is identical — skip to avoid wasteful overwrite.
+            // force_reimport bypasses this check (for damaged destination files).
+            // Check both basename and relative path since frontend sends sourceFile (relative path).
+            let is_force_reimport = force_reimport.contains(filename)
+                || force_reimport.iter().any(|p| p.ends_with(filename));
+            if !is_force_reimport
+                && matched.iter().all(|ep| {
+                    ep.episode_file_id
+                        .and_then(|fid| existing_file_sizes.get(&fid))
+                        .map(|&existing_size| existing_size == file_size as i64)
+                        .unwrap_or(false)
+                })
+            {
                 tracing::info!(
                     "Season pack import: skipping '{}' — same size as existing file(s)",
                     filename,

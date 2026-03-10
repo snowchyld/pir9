@@ -1428,13 +1428,21 @@ async fn import_queue_item(
     use crate::core::datastore::repositories::TrackedDownloadRepository;
     use crate::core::download::import::ImportService;
 
-    // Parse optional overrides and explicit series ID from request body
-    let (overrides, explicit_series_id): (std::collections::HashMap<String, EpisodeOverride>, Option<i64>) = if body.is_empty() {
-        (std::collections::HashMap::new(), None)
+    // Parse optional overrides, explicit series ID, and force-reimport list from request body
+    let (overrides, explicit_series_id, force_reimport): (
+        std::collections::HashMap<String, EpisodeOverride>,
+        Option<i64>,
+        std::collections::HashSet<String>,
+    ) = if body.is_empty() {
+        (std::collections::HashMap::new(), None, std::collections::HashSet::new())
     } else {
         match serde_json::from_slice::<ImportQueueBody>(&body) {
-            Ok(b) => (b.overrides.unwrap_or_default(), b.series_id),
-            Err(_) => (std::collections::HashMap::new(), None),
+            Ok(b) => (
+                b.overrides.unwrap_or_default(),
+                b.series_id,
+                b.force_reimport.unwrap_or_default().into_iter().collect(),
+            ),
+            Err(_) => (std::collections::HashMap::new(), None, std::collections::HashSet::new()),
         }
     };
 
@@ -1853,6 +1861,7 @@ async fn import_queue_item(
         series,
         episodes,
         overrides: override_map.clone(),
+        force_reimport: force_reimport.clone(),
     };
 
     // Dispatch to Redis worker when available — worker has fast local disk access
@@ -1879,6 +1888,7 @@ async fn import_queue_item(
                     series: pending.series.clone(),
                     episodes: pending.episodes.clone(),
                     overrides: override_map.clone(),
+                    force_reimport: force_reimport.clone(),
                 };
 
                 consumer
@@ -2373,6 +2383,9 @@ pub struct ImportQueueBody {
     /// Explicit series ID from the import preview UI — used as fallback when
     /// download title doesn't match any series (e.g., "Serenity" for Firefly S00E01)
     pub series_id: Option<i64>,
+    /// Source file paths to force-reimport even if identical (same size) to existing files.
+    /// Used when the destination file is damaged but hasn't been rescanned/rehashed yet.
+    pub force_reimport: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]

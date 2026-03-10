@@ -1737,6 +1737,7 @@ async fn execute_process_downloads_distributed(
             series: item.series.clone(),
             episodes: item.episodes.clone(),
             overrides: std::collections::HashMap::new(),
+            force_reimport: std::collections::HashSet::new(),
         };
 
         consumer

@@ -96,17 +96,25 @@ export class ImportPreviewPage extends BaseComponent {
   private editingFile = signal<string | null>(null);
   /** Manual episode overrides: sourceFile -> { seasonNumber, episodeNumbers[] } */
   private manualOverrides = new Map<string, { seasonNumber: number; episodeNumbers: number[] }>();
+  /** Source files to force-reimport even if identical (same size as existing) */
+  private forceReimportFiles = signal<Set<string>>(new Set());
 
   private importMutation = createMutation({
     mutationFn: (params: {
       id: number;
       overrides: Record<string, { seasonNumber: number; episodeNumbers: number[] }>;
       seriesId?: number;
+      forceReimport?: string[];
     }) => {
       const hasOverrides = Object.keys(params.overrides).length > 0;
+      const hasForceReimport = params.forceReimport && params.forceReimport.length > 0;
       const body =
-        hasOverrides || params.seriesId
-          ? { overrides: hasOverrides ? params.overrides : undefined, seriesId: params.seriesId }
+        hasOverrides || params.seriesId || hasForceReimport
+          ? {
+              overrides: hasOverrides ? params.overrides : undefined,
+              seriesId: params.seriesId,
+              forceReimport: hasForceReimport ? params.forceReimport : undefined,
+            }
           : undefined;
       return http.post<{ success: boolean }>(`/queue/${params.id}/import`, body);
     },
@@ -135,6 +143,7 @@ export class ImportPreviewPage extends BaseComponent {
     this.watch(this.sortDirection);
     this.watch(this.filterMode);
     this.watch(this.editingFile);
+    this.watch(this.forceReimportFiles);
   }
 
   protected onMount(): void {
@@ -198,6 +207,7 @@ export class ImportPreviewPage extends BaseComponent {
     const sameFileCount = data.files.filter((f) => {
       const isMatched = f.matched || this.manualOverrides.has(f.sourceFile);
       if (!isMatched) return false;
+      if (this.forceReimportFiles.value.has(f.sourceFile)) return false;
       const hasExisting = f.existingFile || this.getOverrideHasFile(f.sourceFile);
       if (!hasExisting) return false;
       const existingSize = this.getEffectiveExistingSize(f);
@@ -220,7 +230,7 @@ export class ImportPreviewPage extends BaseComponent {
         const hasExisting = f.existingFile || this.getOverrideHasFile(f.sourceFile);
         const existingSize = this.getEffectiveExistingSize(f);
         if (hasExisting && existingSize != null && existingSize === f.sourceSize) {
-          return false;
+          return this.forceReimportFiles.value.has(f.sourceFile);
         }
         return true;
       })
@@ -328,11 +338,11 @@ export class ImportPreviewPage extends BaseComponent {
     return data.files.filter((f) => {
       const isMatched = f.matched || this.manualOverrides.has(f.sourceFile);
       if (!isMatched) return false;
-      // Exclude same-size files (identical, no upgrade needed)
+      // Exclude same-size files unless force-reimport is toggled
       const hasExisting = f.existingFile || this.getOverrideHasFile(f.sourceFile);
       const existingSize = this.getEffectiveExistingSize(f);
       if (hasExisting && existingSize != null && existingSize === f.sourceSize) {
-        return false;
+        return this.forceReimportFiles.value.has(f.sourceFile);
       }
       return true;
     }).length;
@@ -413,14 +423,17 @@ export class ImportPreviewPage extends BaseComponent {
     const isSameFile =
       hasExistingFile && effectiveExistingSize != null && effectiveExistingSize === file.sourceSize;
 
-    // Hide identical files entirely — they won't be imported
-    if (effectivelyMatched && isSameFile) {
-      return '';
-    }
+    const isForceReimport = this.forceReimportFiles.value.has(file.sourceFile);
 
     let statusClass = 'status-skip';
     let statusLabel = 'Skipped';
-    if (effectivelyMatched && hasExistingFile) {
+    if (effectivelyMatched && isSameFile && !isForceReimport) {
+      statusClass = 'status-same';
+      statusLabel = 'Identical';
+    } else if (effectivelyMatched && isSameFile && isForceReimport) {
+      statusClass = 'status-upgrade';
+      statusLabel = 'Reimport';
+    } else if (effectivelyMatched && hasExistingFile) {
       statusClass = 'status-upgrade';
       statusLabel = 'Upgrade';
     } else if (effectivelyMatched) {
@@ -464,8 +477,18 @@ export class ImportPreviewPage extends BaseComponent {
       ? `<span class="manual-badge">${manualLabel}</span>`
       : escapeHtml(destFilename);
 
+    const rowClass = !effectivelyMatched
+      ? 'row-skipped'
+      : isSameFile && !isForceReimport
+        ? 'row-same'
+        : '';
+    const reimportBtn =
+      effectivelyMatched && isSameFile
+        ? `<button class="reimport-btn ${isForceReimport ? 'active' : ''}" onclick="this.closest('import-preview-page').toggleForceReimport('${escapedSourceFile}')" title="${isForceReimport ? 'Cancel reimport' : 'Force reimport (overwrite existing file)'}">${isForceReimport ? 'Undo' : 'Reimport'}</button>`
+        : '';
+
     return html`
-      <tr class="${!effectivelyMatched ? 'row-skipped' : isSameFile ? 'row-same' : ''}">
+      <tr class="${rowClass}">
         <td class="file-cell" title="${escapeHtml(file.sourceFile)}">
           ${escapeHtml(filename)}
         </td>
@@ -478,6 +501,7 @@ export class ImportPreviewPage extends BaseComponent {
         </td>
         <td>
           <span class="status-badge ${statusClass}">${statusLabel}</span>
+          ${safeHtml(reimportBtn)}
         </td>
       </tr>
     `;
@@ -617,11 +641,23 @@ export class ImportPreviewPage extends BaseComponent {
     for (const [key, value] of this.manualOverrides) {
       overrides[key] = value;
     }
+    const forceReimport = [...this.forceReimportFiles.value];
     this.importMutation.mutate({
       id: data.id,
       overrides,
       seriesId: data.series?.id,
+      forceReimport: forceReimport.length > 0 ? forceReimport : undefined,
     });
+  }
+
+  toggleForceReimport(sourceFile: string): void {
+    const current = new Set(this.forceReimportFiles.value);
+    if (current.has(sourceFile)) {
+      current.delete(sourceFile);
+    } else {
+      current.add(sourceFile);
+    }
+    this.forceReimportFiles.set(current);
   }
 
   toggleSort(field: SortField): void {
@@ -648,7 +684,13 @@ export class ImportPreviewPage extends BaseComponent {
     const effectivelyMatched = file.matched || (!!ov && ov.episodeNumbers.length > 0);
     if (!effectivelyMatched) return 'skip';
     const hasExisting = file.existingFile || this.getOverrideHasFile(file.sourceFile);
-    if (hasExisting) return 'upgrade';
+    if (hasExisting) {
+      const existingSize = this.getEffectiveExistingSize(file);
+      if (existingSize != null && existingSize === file.sourceSize) {
+        return this.forceReimportFiles.value.has(file.sourceFile) ? 'reimport' : 'same';
+      }
+      return 'upgrade';
+    }
     return 'ready';
   }
 
@@ -1009,6 +1051,27 @@ export class ImportPreviewPage extends BaseComponent {
 
       .row-same {
         opacity: 0.65;
+      }
+
+      .reimport-btn {
+        display: inline-block;
+        margin-top: 0.25rem;
+        padding: 0.15rem 0.4rem;
+        font-size: 0.7rem;
+        border: 1px solid var(--border-color);
+        border-radius: 3px;
+        background: transparent;
+        color: var(--text-color-muted);
+        cursor: pointer;
+      }
+      .reimport-btn:hover {
+        background: var(--bg-hover);
+        color: var(--text-color);
+      }
+      .reimport-btn.active {
+        background: var(--color-warning);
+        color: var(--color-white, #fff);
+        border-color: var(--color-warning);
       }
 
       /* Footer */
