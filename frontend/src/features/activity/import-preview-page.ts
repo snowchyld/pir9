@@ -452,7 +452,6 @@ export class ImportPreviewPage extends BaseComponent {
       ? `${this.formatSize(file.sourceSize)}<div class="existing-size">${this.formatSize(effectiveExistingSize)} existing</div>`
       : this.formatSize(file.sourceSize);
 
-    const escapedSourceFile = escapeHtml(file.sourceFile).replace(/'/g, "\\'");
     let episodeCellContent: string;
     if (isEditing) {
       episodeCellContent = this.renderManualMatchSelects(
@@ -464,7 +463,7 @@ export class ImportPreviewPage extends BaseComponent {
       );
     } else if (canEdit) {
       const epTitleHtml = epTitle ? `<div class="ep-title">${escapeHtml(epTitle)}</div>` : '';
-      episodeCellContent = `<div class="ep-clickable" onclick="this.closest('import-preview-page').startEditEpisode('${escapedSourceFile}')" title="Click to change">${escapeHtml(episodeLabel)}${epTitleHtml}</div>`;
+      episodeCellContent = `<div class="ep-clickable" onclick="this.closest('import-preview-page').startEditEpisodeFromRow(this)" title="Click to change">${escapeHtml(episodeLabel)}${epTitleHtml}</div>`;
     } else {
       episodeCellContent = `<div>${escapeHtml(episodeLabel)}</div>${epTitle ? `<div class="ep-title">${escapeHtml(epTitle)}</div>` : ''}`;
     }
@@ -484,11 +483,11 @@ export class ImportPreviewPage extends BaseComponent {
         : '';
     const reimportBtn =
       effectivelyMatched && isSameFile
-        ? `<button class="reimport-btn ${isForceReimport ? 'active' : ''}" onclick="this.closest('import-preview-page').toggleForceReimport('${escapedSourceFile}')" title="${isForceReimport ? 'Cancel reimport' : 'Force reimport (overwrite existing file)'}">${isForceReimport ? 'Undo' : 'Reimport'}</button>`
+        ? `<button class="reimport-btn ${isForceReimport ? 'active' : ''}" onclick="this.closest('import-preview-page').toggleForceReimportFromRow(this)" title="${isForceReimport ? 'Cancel reimport' : 'Force reimport (overwrite existing file)'}">${isForceReimport ? 'Undo' : 'Reimport'}</button>`
         : '';
 
     return html`
-      <tr class="${rowClass}">
+      <tr class="${rowClass}" data-source="${escapeHtml(file.sourceFile)}">
         <td class="file-cell" title="${escapeHtml(file.sourceFile)}">
           ${escapeHtml(filename)}
         </td>
@@ -514,7 +513,6 @@ export class ImportPreviewPage extends BaseComponent {
     selectedEpNums: number[] = [],
     selectedSeason: number | null = null,
   ): string {
-    const escapedSourceFile = escapeHtml(sourceFile).replace(/'/g, "\\'");
     const activeSeason = selectedSeason ?? seasons[0] ?? 0;
 
     const seasonOptions = seasons
@@ -538,7 +536,7 @@ export class ImportPreviewPage extends BaseComponent {
 
     return `
       <div class="manual-match">
-        <select class="match-select" onchange="this.closest('import-preview-page').handleSeasonChange('${escapedSourceFile}', this)">
+        <select class="match-select" onchange="this.closest('import-preview-page').handleSeasonChangeFromRow(this)">
           ${seasonOptions}
         </select>
         <select class="match-select episode-select" data-source="${escapeHtml(sourceFile)}"
@@ -546,11 +544,35 @@ export class ImportPreviewPage extends BaseComponent {
           ${episodeOptions}
         </select>
         <div class="match-actions">
-          <button class="match-confirm-btn" onclick="this.closest('import-preview-page').confirmEpisodeSelect('${escapedSourceFile}', this)">Assign</button>
+          <button class="match-confirm-btn" onclick="this.closest('import-preview-page').confirmEpisodeSelectFromRow(this)">Assign</button>
           <button class="match-cancel-btn" onclick="this.closest('import-preview-page').cancelEditEpisode()">Cancel</button>
         </div>
       </div>
     `;
+  }
+
+  /** Read sourceFile from the row's data-source attribute (avoids inline JS string escaping issues) */
+  private getSourceFileFromRow(el: HTMLElement): string | null {
+    return el.closest('tr')?.dataset.source ?? null;
+  }
+
+  startEditEpisodeFromRow(el: HTMLElement): void {
+    const src = this.getSourceFileFromRow(el);
+    if (src) this.startEditEpisode(src);
+  }
+
+  toggleForceReimportFromRow(el: HTMLElement): void {
+    const src = this.getSourceFileFromRow(el);
+    if (src) this.toggleForceReimport(src);
+  }
+
+  handleSeasonChangeFromRow(select: HTMLSelectElement): void {
+    this.handleSeasonChange('', select);
+  }
+
+  confirmEpisodeSelectFromRow(button: HTMLButtonElement): void {
+    const src = this.getSourceFileFromRow(button);
+    if (src) this.confirmEpisodeSelect(src, button);
   }
 
   handleSeasonChange(_sourceFile: string, select: HTMLSelectElement): void {
