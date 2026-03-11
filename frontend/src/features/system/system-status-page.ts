@@ -64,7 +64,7 @@ interface ScanProgress {
 
 interface RunningTask {
   id: string;
-  taskType: 'command' | 'scan';
+  taskType: 'command' | 'scan' | 'imdb';
   name: string;
   status: string;
   started?: string;
@@ -107,6 +107,13 @@ export class SystemStatusPage extends BaseComponent {
 
   private cancelScanMutation = createMutation({
     mutationFn: (id: string) => http.delete<void>(`/system/task/scan/${id}`),
+    onSuccess: () => {
+      invalidateQueries(['/system/task/running']);
+    },
+  });
+
+  private cancelImdbMutation = createMutation({
+    mutationFn: () => http.delete<void>('/system/task/imdb'),
     onSuccess: () => {
       invalidateQueries(['/system/task/running']);
     },
@@ -683,7 +690,9 @@ export class SystemStatusPage extends BaseComponent {
   }
 
   handleCancelTask(id: string, taskType: string): void {
-    if (taskType === 'scan') {
+    if (taskType === 'imdb') {
+      this.cancelImdbMutation.mutate(undefined);
+    } else if (taskType === 'scan') {
       this.cancelScanMutation.mutate(id);
     } else {
       this.cancelCommandMutation.mutate(id);

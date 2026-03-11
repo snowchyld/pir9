@@ -20,6 +20,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/diskspace", get(get_disk_space))
         .route("/task/running", get(get_running_tasks))
         .route("/task/scan/{id}", delete(cancel_scan_job))
+        .route("/task/imdb", delete(cancel_imdb_sync))
         .route("/backup", get(list_backups).post(create_backup))
         .route("/backup/restore", post(restore_backup))
         .route("/logs", get(get_logs))
@@ -163,7 +164,96 @@ async fn get_running_tasks(
         }
     }
 
+    // IMDB sync status from pir9-imdb microservice
+    if state.imdb_client.is_enabled() {
+        if let Ok(resp) = state.imdb_client.get_sync_status().await {
+            if resp.status == 200 {
+                if let Ok(sync_status) = serde_json::from_value::<ImdbSyncStatus>(resp.body) {
+                    if sync_status.is_running {
+                        // Find the active dataset for detail text
+                        let datasets = [
+                            &sync_status.title_basics,
+                            &sync_status.title_episodes,
+                            &sync_status.title_ratings,
+                            &sync_status.name_basics,
+                            &sync_status.title_principals,
+                        ];
+                        let active = datasets.iter().find_map(|d| {
+                            d.as_ref().filter(|ds| ds.is_running)
+                        });
+                        let detail = active.map(|ds| {
+                            let name = ds.dataset_name
+                                .trim_end_matches(".tsv.gz")
+                                .replace('.', " ");
+                            if ds.rows_processed > 0 {
+                                format!(
+                                    "{}: {} rows processed ({} inserted, {} updated)",
+                                    name, ds.rows_processed, ds.rows_inserted, ds.rows_updated
+                                )
+                            } else {
+                                format!("{}: starting...", name)
+                            }
+                        });
+                        let started = active.map(|ds| ds.started_at.clone());
+                        tasks.push(RunningTask {
+                            id: "imdb-sync".to_string(),
+                            task_type: "imdb".to_string(),
+                            name: "IMDB Sync".to_string(),
+                            status: "started".to_string(),
+                            started,
+                            message: None,
+                            detail,
+                            worker_id: None,
+                            progress: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     Json(tasks)
+}
+
+/// Deserialization types for IMDB sync status response
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImdbSyncStatus {
+    #[serde(default)]
+    is_running: bool,
+    title_basics: Option<ImdbDatasetStatus>,
+    title_episodes: Option<ImdbDatasetStatus>,
+    title_ratings: Option<ImdbDatasetStatus>,
+    name_basics: Option<ImdbDatasetStatus>,
+    title_principals: Option<ImdbDatasetStatus>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImdbDatasetStatus {
+    dataset_name: String,
+    rows_processed: i64,
+    rows_inserted: i64,
+    rows_updated: i64,
+    started_at: String,
+    #[serde(default)]
+    is_running: bool,
+}
+
+/// DELETE /api/v5/system/task/imdb - Cancel IMDB sync
+async fn cancel_imdb_sync(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> axum::http::StatusCode {
+    if !state.imdb_client.is_enabled() {
+        return axum::http::StatusCode::NOT_FOUND;
+    }
+    match state.imdb_client.cancel_sync().await {
+        Ok(resp) if resp.status == 200 => {
+            tracing::info!("Cancelled IMDB sync via system task API");
+            axum::http::StatusCode::OK
+        }
+        _ => axum::http::StatusCode::NOT_FOUND,
+    }
 }
 
 #[derive(Debug, Serialize)]
