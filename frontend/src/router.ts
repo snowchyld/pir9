@@ -58,8 +58,9 @@ export const routes: Route[] = [
   { path: '/activity/blocklist', component: 'blocklist-page', title: 'Blocklist' },
 
   // Wanted
-  { path: '/wanted/missing', component: 'missing-page', title: 'Missing' },
-  { path: '/wanted/cutoffunmet', component: 'cutoff-unmet-page', title: 'Cutoff Unmet' },
+  { path: '/wanted', component: 'wanted-page', title: 'Wanted' },
+  { path: '/wanted/missing', component: 'wanted-page', title: 'Wanted' },
+  { path: '/wanted/cutoffunmet', component: 'wanted-page', title: 'Wanted' },
 
   // Settings
   { path: '/settings', component: 'settings-page', title: 'Settings' },

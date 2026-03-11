@@ -64,6 +64,7 @@ import './features/activity/history-page';
 import './features/activity/blocklist-page';
 
 // Wanted
+import './features/wanted/wanted-page';
 import './features/wanted/missing-page';
 import './features/wanted/cutoff-unmet-page';
 

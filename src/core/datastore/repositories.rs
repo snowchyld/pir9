@@ -924,6 +924,50 @@ impl MovieRepository {
             .await?;
         Ok(())
     }
+
+    /// Get missing movies (monitored, no file) with pagination
+    pub async fn get_missing(
+        &self,
+        monitored_only: bool,
+        page: i32,
+        page_size: i32,
+        sort_key: &str,
+        sort_direction: &str,
+    ) -> Result<(Vec<super::models::MovieDbModel>, i64)> {
+        let order = if sort_direction.to_lowercase() == "descending" {
+            "DESC"
+        } else {
+            "ASC"
+        };
+        let order_by = match sort_key {
+            "title" | "sortTitle" => "sort_title",
+            "year" => "year",
+            "added" => "added",
+            _ => "sort_title",
+        };
+        let offset = (page - 1) * page_size;
+
+        let pool = self.db.pool();
+        let mut base_where = "has_file = false".to_string();
+        if monitored_only {
+            base_where.push_str(" AND monitored = true");
+        }
+
+        let count_sql = format!("SELECT COUNT(*) FROM movies WHERE {}", base_where);
+        let total: (i64,) = sqlx::query_as(&count_sql).fetch_one(pool).await?;
+
+        let data_sql = format!(
+            "SELECT * FROM movies WHERE {} ORDER BY {} {} LIMIT $1 OFFSET $2",
+            base_where, order_by, order
+        );
+        let rows = sqlx::query_as::<_, super::models::MovieDbModel>(&data_sql)
+            .bind(page_size)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?;
+
+        Ok((rows, total.0))
+    }
 }
 
 /// Repository for movie files
@@ -1272,6 +1316,7 @@ impl EpisodeRepository {
     ///
     /// `exclude_episode_ids` omits episodes that are actively downloading from both
     /// the result set and the total count, so pagination stays accurate.
+    /// `series_types` optionally filters by series.series_type (0=standard, 1=daily, 2=anime).
     pub async fn get_missing(
         &self,
         monitored_only: bool,
@@ -1280,6 +1325,7 @@ impl EpisodeRepository {
         sort_key: &str,
         sort_direction: &str,
         exclude_episode_ids: &[i64],
+        series_types: Option<&[i32]>,
     ) -> Result<(Vec<super::models::EpisodeDbModel>, i64)> {
         let order = if sort_direction.to_lowercase() == "descending" {
             "DESC"
@@ -1301,6 +1347,16 @@ impl EpisodeRepository {
             "has_file = false AND air_date_utc IS NOT NULL AND air_date_utc < NOW() AND season_number > 0".to_string();
         if monitored_only {
             base_where.push_str(" AND monitored = true");
+        }
+        // Filter by series type via subquery (values are i32 literals, safe to inline)
+        if let Some(types) = series_types {
+            if !types.is_empty() {
+                let type_list = types.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(",");
+                base_where.push_str(&format!(
+                    " AND series_id IN (SELECT id FROM series WHERE series_type IN ({}))",
+                    type_list
+                ));
+            }
         }
 
         // Count query: exclude IDs are $1 (no LIMIT/OFFSET params)
@@ -1384,12 +1440,14 @@ impl EpisodeRepository {
     /// in Rust where the file's quality weight is below the profile's cutoff weight.
     /// Rust-side filtering is necessary because quality profiles store items as nested
     /// JSON that SQL cannot easily walk.
+    /// `series_types` optionally filters by series.series_type (0=standard, 1=daily, 2=anime).
     pub async fn get_cutoff_unmet(
         &self,
         page: i32,
         page_size: i32,
         sort_key: &str,
         sort_direction: &str,
+        series_types: Option<&[i32]>,
     ) -> Result<(Vec<super::models::EpisodeDbModel>, i64)> {
         use crate::core::profiles::qualities::QualityModel;
         use std::collections::HashMap;
@@ -1422,14 +1480,20 @@ impl EpisodeRepository {
             })
             .collect();
 
-        // Step 3: Load series → quality_profile_id mapping
+        // Step 3: Load series → (quality_profile_id, series_type) mapping
         let series_rows = sqlx::query_as::<_, super::models::SeriesDbModel>("SELECT * FROM series")
             .fetch_all(pool)
             .await?;
 
         let series_profile_map: HashMap<i64, i64> = series_rows
-            .into_iter()
+            .iter()
             .map(|s| (s.id, s.quality_profile_id))
+            .collect();
+
+        // Build series_type set for filtering (if requested)
+        let series_type_map: HashMap<i64, i32> = series_rows
+            .iter()
+            .map(|s| (s.id, s.series_type))
             .collect();
 
         // Step 4: Fetch all monitored episodes with files
@@ -1440,9 +1504,17 @@ impl EpisodeRepository {
         .await?;
 
         // Step 5: Filter — keep episodes where file quality < profile cutoff
+        //         and optionally filter by series type
         let mut cutoff_unmet: Vec<super::models::EpisodeDbModel> = episodes
             .into_iter()
             .filter(|ep| {
+                // Series type filter
+                if let Some(types) = series_types {
+                    let st = series_type_map.get(&ep.series_id).copied().unwrap_or(0);
+                    if !types.contains(&st) {
+                        return false;
+                    }
+                }
                 let file_id = match ep.episode_file_id {
                     Some(id) => id,
                     None => return false,

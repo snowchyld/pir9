@@ -20,7 +20,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/movies', label: 'Movies', icon: 'film' },
   { path: '/calendar', label: 'Calendar', icon: 'calendar' },
   { path: '/activity/queue', label: 'Activity', icon: 'download' },
-  { path: '/wanted/missing', label: 'Wanted', icon: 'alert-circle' },
+  { path: '/wanted', label: 'Wanted', icon: 'alert-circle' },
   { path: '/settings', label: 'Settings', icon: 'settings' },
   { path: '/system/status', label: 'System', icon: 'laptop' },
 ];

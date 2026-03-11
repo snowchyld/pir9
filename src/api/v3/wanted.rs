@@ -127,6 +127,7 @@ pub async fn get_wanted_missing(
             &sort_key,
             &sort_direction,
             &exclude_ids,
+            None,
         )
         .await
     {
@@ -196,7 +197,7 @@ pub async fn get_wanted_cutoff(
 
     // Fetch cutoff unmet episodes
     let (episodes, total) = match episode_repo
-        .get_cutoff_unmet(page, page_size, &sort_key, &sort_direction)
+        .get_cutoff_unmet(page, page_size, &sort_key, &sort_direction, None)
         .await
     {
         Ok(result) => result,

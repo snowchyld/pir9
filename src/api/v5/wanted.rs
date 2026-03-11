@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::core::datastore::models::EpisodeDbModel;
 use crate::core::datastore::repositories::{
-    EpisodeRepository, SeriesRepository, TrackedDownloadRepository,
+    EpisodeRepository, MovieRepository, SeriesRepository, TrackedDownloadRepository,
 };
 use crate::web::AppState;
 
@@ -26,6 +26,17 @@ pub struct WantedQuery {
     /// Accepted for backwards compatibility but series data is always included
     pub include_series: Option<bool>,
     pub monitored: Option<bool>,
+    /// Filter by content type: "series" (types 0,1), "anime" (type 2), or omit for all
+    pub content_type: Option<String>,
+}
+
+/// Map content_type query param to series_type values
+fn content_type_to_series_types(content_type: &Option<String>) -> Option<Vec<i32>> {
+    match content_type.as_deref() {
+        Some("series") => Some(vec![0, 1]), // standard + daily
+        Some("anime") => Some(vec![2]),
+        _ => None, // no filter
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -56,6 +67,35 @@ pub struct WantedPagingResource {
     pub sort_direction: String,
     pub total_records: i32,
     pub records: Vec<EpisodeResource>,
+}
+
+/// Movie resource for wanted/missing movies
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MovieResource {
+    pub id: i64,
+    pub title: String,
+    pub sort_title: String,
+    pub tmdb_id: i64,
+    pub imdb_id: Option<String>,
+    pub year: i32,
+    pub monitored: bool,
+    pub has_file: bool,
+    pub title_slug: String,
+    pub path: String,
+    pub status: i32,
+    pub added: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WantedMoviePagingResource {
+    pub page: i32,
+    pub page_size: i32,
+    pub sort_key: String,
+    pub sort_direction: String,
+    pub total_records: i32,
+    pub records: Vec<MovieResource>,
 }
 
 /// Convert EpisodeDbModel to EpisodeResource
@@ -94,6 +134,7 @@ pub async fn get_wanted_missing(
         .clone()
         .unwrap_or("descending".to_string());
     let monitored_only = query.monitored.unwrap_or(true);
+    let series_types = content_type_to_series_types(&query.content_type);
 
     let episode_repo = EpisodeRepository::new(state.db.clone());
     let series_repo = SeriesRepository::new(state.db.clone());
@@ -116,6 +157,7 @@ pub async fn get_wanted_missing(
             &sort_key,
             &sort_direction,
             &exclude_ids,
+            series_types.as_deref(),
         )
         .await
     {
@@ -143,6 +185,7 @@ pub async fn get_wanted_missing(
                 "titleSlug": series.title_slug,
                 "path": series.path,
                 "tvdbId": series.tvdb_id,
+                "seriesType": series.series_type,
             })),
             _ => None,
         };
@@ -172,11 +215,19 @@ pub async fn get_wanted_cutoff(
         .sort_direction
         .clone()
         .unwrap_or("descending".to_string());
+    let series_types = content_type_to_series_types(&query.content_type);
+
     let episode_repo = EpisodeRepository::new(state.db.clone());
     let series_repo = SeriesRepository::new(state.db.clone());
 
     let (episodes, total) = match episode_repo
-        .get_cutoff_unmet(page, page_size, &sort_key, &sort_direction)
+        .get_cutoff_unmet(
+            page,
+            page_size,
+            &sort_key,
+            &sort_direction,
+            series_types.as_deref(),
+        )
         .await
     {
         Ok(result) => result,
@@ -203,6 +254,7 @@ pub async fn get_wanted_cutoff(
                 "titleSlug": series.title_slug,
                 "path": series.path,
                 "tvdbId": series.tvdb_id,
+                "seriesType": series.series_type,
             })),
             _ => None,
         };
@@ -220,8 +272,71 @@ pub async fn get_wanted_cutoff(
     })
 }
 
+/// GET /api/v5/wanted/missing/movies
+pub async fn get_wanted_missing_movies(
+    State(state): State<Arc<AppState>>,
+    query: Query<WantedQuery>,
+) -> Json<WantedMoviePagingResource> {
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
+    let sort_key = query.sort_key.clone().unwrap_or("sortTitle".to_string());
+    let sort_direction = query
+        .sort_direction
+        .clone()
+        .unwrap_or("ascending".to_string());
+    let monitored_only = query.monitored.unwrap_or(true);
+
+    let movie_repo = MovieRepository::new(state.db.clone());
+
+    let (movies, total) = match movie_repo
+        .get_missing(monitored_only, page, page_size, &sort_key, &sort_direction)
+        .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::error!("Failed to fetch missing movies: {}", e);
+            return Json(WantedMoviePagingResource {
+                page,
+                page_size,
+                sort_key,
+                sort_direction,
+                total_records: 0,
+                records: vec![],
+            });
+        }
+    };
+
+    let records: Vec<MovieResource> = movies
+        .iter()
+        .map(|m| MovieResource {
+            id: m.id,
+            title: m.title.clone(),
+            sort_title: m.sort_title.clone(),
+            tmdb_id: m.tmdb_id,
+            imdb_id: m.imdb_id.clone(),
+            year: m.year,
+            monitored: m.monitored,
+            has_file: m.has_file,
+            title_slug: m.title_slug.clone(),
+            path: m.path.clone(),
+            status: m.status,
+            added: m.added.to_rfc3339(),
+        })
+        .collect();
+
+    Json(WantedMoviePagingResource {
+        page,
+        page_size,
+        sort_key,
+        sort_direction,
+        total_records: total as i32,
+        records,
+    })
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/missing", get(get_wanted_missing))
         .route("/cutoff", get(get_wanted_cutoff))
+        .route("/missing/movies", get(get_wanted_missing_movies))
 }
