@@ -967,6 +967,7 @@ impl ScanResultConsumer {
                     "Movie {} not found for download import job {}",
                     movie_id, job_id
                 );
+                self.mark_job_result_received(job_id).await;
                 return;
             }
         };
@@ -1035,6 +1036,14 @@ impl ScanResultConsumer {
                 }],
             })
             .await;
+
+        // Discovery complete — mark scan finished so cleanup fires after import
+        {
+            let mut jobs = self.pending_jobs.write().await;
+            if let Some(tracker) = jobs.download_job_trackers.get_mut(job_id) {
+                tracker.scan_finished = true;
+            }
+        }
     }
 
     /// Handle download scan result (Phase 2): match file → episodes, compute path, dispatch move.
@@ -1096,6 +1105,7 @@ impl ScanResultConsumer {
                 "No download import info found for job_id={}, skipping",
                 job_id
             );
+            self.mark_job_result_received(job_id).await;
             return;
         }
 
@@ -1426,6 +1436,29 @@ impl ScanResultConsumer {
                     }],
                 })
                 .await;
+        }
+
+        // Discovery phase complete — all files from this ScanResult have been
+        // processed and imports dispatched. Mark scan_finished so try_download_cleanup()
+        // can fire once all ImportFilesResults arrive.
+        let files_dispatched = {
+            let mut jobs = self.pending_jobs.write().await;
+            if let Some(tracker) = jobs.download_job_trackers.get_mut(job_id) {
+                tracker.scan_finished = true;
+                tracker.files_dispatched
+            } else {
+                0
+            }
+        };
+
+        // If no files were dispatched (all skipped/unmatched), mark job complete now
+        if files_dispatched == 0 {
+            info!(
+                "[worker:{}] No importable files for download job {} — marking complete",
+                worker_id, job_id
+            );
+            self.try_download_cleanup(job_id).await;
+            self.mark_job_result_received(job_id).await;
         }
     }
 
@@ -1833,6 +1866,9 @@ impl ScanResultConsumer {
             ),
         )
         .await;
+
+        // Mark the PendingJob as completed so system status stops showing "importing"
+        self.mark_job_result_received(scan_job_id).await;
     }
 
     /// Mark a job result as received in the pending jobs tracker.
