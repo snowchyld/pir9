@@ -1018,8 +1018,8 @@ export class SeriesDetailPage extends BaseComponent {
           </div>
           <button
             class="season-action-btn"
-            onclick="event.stopPropagation(); this.closest('series-detail-page').searchSeason(${season.seasonNumber})"
-            title="Search for ${seasonLabel} pack"
+            onclick="event.stopPropagation(); this.closest('series-detail-page').openSeasonSearch(${season.seasonNumber})"
+            title="Interactive search for ${seasonLabel}"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="11" cy="11" r="8"></circle>
