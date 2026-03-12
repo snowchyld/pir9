@@ -12,6 +12,73 @@ use tokio::sync::broadcast;
 pub use redis_bus::HybridEventBus;
 
 // ============================================================================
+// Redis Stream Constants
+// ============================================================================
+
+/// Redis stream key for durable job dispatch (server → workers)
+#[cfg(feature = "redis-events")]
+pub const REDIS_JOB_STREAM: &str = "pir9:stream:jobs";
+
+/// Redis stream key for durable result delivery (workers → server)
+#[cfg(feature = "redis-events")]
+pub const REDIS_RESULT_STREAM: &str = "pir9:stream:results";
+
+/// Consumer group name for workers reading from the job stream
+#[cfg(feature = "redis-events")]
+pub const REDIS_WORKER_GROUP: &str = "pir9-workers";
+
+/// Consumer group name for the server reading from the result stream
+#[cfg(feature = "redis-events")]
+pub const REDIS_SERVER_GROUP: &str = "pir9-server";
+
+/// Maximum stream length (approximate trimming to bound memory)
+#[cfg(feature = "redis-events")]
+pub const STREAM_MAXLEN: usize = 10000;
+
+// ============================================================================
+// Message Transport Classification
+// ============================================================================
+
+/// Determines which Redis transport a message should use.
+///
+/// - `Job`: Durable delivery via job stream (server → workers, exclusive via consumer group)
+/// - `Result`: Durable delivery via result stream (workers → server)
+/// - `Ephemeral`: Fire-and-forget pub/sub broadcast (progress, heartbeats, UI events)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageCategory {
+    /// Server → worker job dispatch (XADD to job stream)
+    Job,
+    /// Worker → server result delivery (XADD to result stream)
+    Result,
+    /// Broadcast to all subscribers (PUBLISH to pub/sub channel)
+    Ephemeral,
+}
+
+impl Message {
+    /// Classify this message for transport routing.
+    pub fn category(&self) -> MessageCategory {
+        match self {
+            // Jobs: server dispatches to workers
+            Message::ScanRequest { .. }
+            | Message::ProbeFileRequest { .. }
+            | Message::HashFileRequest { .. }
+            | Message::ImportFilesRequest { .. }
+            | Message::DeletePathsRequest { .. } => MessageCategory::Job,
+
+            // Results: workers send back to server
+            Message::ScanResult { .. }
+            | Message::ProbeFileResult { .. }
+            | Message::HashFileResult { .. }
+            | Message::ImportFilesResult { .. }
+            | Message::DeletePathsResult { .. } => MessageCategory::Result,
+
+            // Everything else: ephemeral broadcast
+            _ => MessageCategory::Ephemeral,
+        }
+    }
+}
+
+// ============================================================================
 // Distributed Scanner Types
 // ============================================================================
 

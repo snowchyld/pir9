@@ -215,6 +215,22 @@ async fn run_server_mode(args: &Args) -> Result<()> {
                 JobTrackerService, ScanResultConsumer, WorkerRegistryService,
             };
 
+            // Initialize Redis streams and consumer groups
+            hybrid_bus
+                .ensure_streams()
+                .await
+                .context("Failed to initialize Redis streams")?;
+
+            // Start result stream reader — reads durable results from workers
+            // and feeds them into the local broadcast for the consumer to process
+            let bus_for_results = hybrid_bus.clone();
+            tokio::spawn(async move {
+                if let Err(e) = bus_for_results.start_result_stream_reader().await {
+                    tracing::error!("Result stream reader error: {}", e);
+                }
+            });
+            info!("Result stream reader started");
+
             // Start scan result consumer (with media config for download import naming)
             let media_config = state.config.read().media.clone();
             let mut consumer_inner = ScanResultConsumer::new(
