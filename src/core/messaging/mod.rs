@@ -63,14 +63,16 @@ impl Message {
             | Message::ProbeFileRequest { .. }
             | Message::HashFileRequest { .. }
             | Message::ImportFilesRequest { .. }
-            | Message::DeletePathsRequest { .. } => MessageCategory::Job,
+            | Message::DeletePathsRequest { .. }
+            | Message::RenameFilesRequest { .. } => MessageCategory::Job,
 
             // Results: workers send back to server
             Message::ScanResult { .. }
             | Message::ProbeFileResult { .. }
             | Message::HashFileResult { .. }
             | Message::ImportFilesResult { .. }
-            | Message::DeletePathsResult { .. } => MessageCategory::Result,
+            | Message::DeletePathsResult { .. }
+            | Message::RenameFilesResult { .. } => MessageCategory::Result,
 
             // Everything else: ephemeral broadcast
             _ => MessageCategory::Ephemeral,
@@ -528,5 +530,24 @@ pub enum Message {
         worker_id: String,
         /// Per-path results: (path, success, error message)
         results: Vec<(String, bool, Option<String>)>,
+    },
+
+    /// Server asks worker to rename (move) files on local disk
+    RenameFilesRequest {
+        /// Unique job ID for tracking
+        job_id: String,
+        /// Files to rename (source → dest pairs)
+        files: Vec<ImportFileSpec>,
+        /// Episode file IDs matching each file (for DB update after rename)
+        episode_file_ids: Vec<i64>,
+    },
+    /// Worker confirms renames completed
+    RenameFilesResult {
+        /// Job ID matching the request
+        job_id: String,
+        /// Worker instance ID
+        worker_id: String,
+        /// Per-file results
+        results: Vec<ImportFileResult>,
     },
 }

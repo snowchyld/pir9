@@ -190,7 +190,9 @@ impl NotificationService {
             | Message::ProbeFileRequest { .. }
             | Message::ProbeFileResult { .. }
             | Message::HashFileRequest { .. }
-            | Message::HashFileResult { .. } => None,
+            | Message::HashFileResult { .. }
+            | Message::RenameFilesRequest { .. }
+            | Message::RenameFilesResult { .. } => None,
         }
     }
 

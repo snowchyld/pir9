@@ -13,6 +13,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, error, info, trace, warn};
 
+use crate::core::messaging::ImportFileResult;
+
 use crate::core::messaging::{KnownFileInfo, Message, ScannedFile, ScanType};
 use crate::core::scanner;
 use std::collections::HashMap;
@@ -64,6 +66,8 @@ fn message_type_name(message: &Message) -> &'static str {
         Message::HashFileResult { .. } => "HashFileResult",
         Message::DeletePathsRequest { .. } => "DeletePathsRequest",
         Message::DeletePathsResult { .. } => "DeletePathsResult",
+        Message::RenameFilesRequest { .. } => "RenameFilesRequest",
+        Message::RenameFilesResult { .. } => "RenameFilesResult",
     }
 }
 
@@ -697,6 +701,86 @@ impl WorkerRunner {
                 }
 
                 event_bus.publish(Message::DeletePathsResult {
+                    job_id: job_id.clone(),
+                    worker_id: self.worker_id.clone(),
+                    results,
+                }).await;
+            }
+            Message::RenameFilesRequest { job_id, files, episode_file_ids: _ } => {
+                let total = files.len();
+                info!("[rename] Starting rename job {} — {} file(s)", job_id, total);
+
+                let any_ours = files.iter().any(|f| self.handles_path(&f.source_path.to_string_lossy()));
+                if !any_ours {
+                    debug!("Rename request not for our paths, re-enqueuing");
+                    event_bus.enqueue_job(message).await;
+                    self.ack_job(&stream_id).await;
+                    return;
+                }
+
+                self.ack_job(&stream_id).await;
+
+                let mut results = Vec::new();
+                for (idx, spec) in files.iter().enumerate() {
+                    let src = &spec.source_path;
+                    let dst = &spec.dest_path;
+                    let name = src.file_name().unwrap_or_default().to_string_lossy();
+
+                    // Ensure target directory exists
+                    if let Some(parent) = dst.parent() {
+                        if let Err(e) = std::fs::create_dir_all(parent) {
+                            error!("[rename] ({}/{}) Failed to create dir for {}: {}", idx + 1, total, name, e);
+                            results.push(ImportFileResult {
+                                source_path: src.clone(),
+                                dest_path: dst.clone(),
+                                success: false,
+                                file_size: 0,
+                                error: Some(format!("Failed to create directory: {}", e)),
+                            });
+                            continue;
+                        }
+                    }
+
+                    if !src.exists() && dst.exists() {
+                        // Already renamed (idempotent)
+                        let size = std::fs::metadata(dst).map(|m| m.len() as i64).unwrap_or(0);
+                        info!("[rename] ({}/{}) {} — already at destination", idx + 1, total, name);
+                        results.push(ImportFileResult {
+                            source_path: src.clone(),
+                            dest_path: dst.clone(),
+                            success: true,
+                            file_size: size,
+                            error: None,
+                        });
+                        continue;
+                    }
+
+                    match std::fs::rename(src, dst) {
+                        Ok(()) => {
+                            let size = std::fs::metadata(dst).map(|m| m.len() as i64).unwrap_or(0);
+                            info!("[rename] ({}/{}) {} → {}", idx + 1, total, name, dst.display());
+                            results.push(ImportFileResult {
+                                source_path: src.clone(),
+                                dest_path: dst.clone(),
+                                success: true,
+                                file_size: size,
+                                error: None,
+                            });
+                        }
+                        Err(e) => {
+                            error!("[rename] ({}/{}) {} — failed: {}", idx + 1, total, name, e);
+                            results.push(ImportFileResult {
+                                source_path: src.clone(),
+                                dest_path: dst.clone(),
+                                success: false,
+                                file_size: 0,
+                                error: Some(e.to_string()),
+                            });
+                        }
+                    }
+                }
+
+                event_bus.publish(Message::RenameFilesResult {
                     job_id: job_id.clone(),
                     worker_id: self.worker_id.clone(),
                     results,

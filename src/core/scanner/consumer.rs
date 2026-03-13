@@ -20,7 +20,7 @@ use crate::core::datastore::repositories::{
 };
 use crate::core::datastore::Database;
 use crate::core::mediafiles::{compute_file_hash, derive_quality_from_media, MediaAnalyzer};
-use crate::core::messaging::{EventBus, HybridEventBus, ImportFileSpec, Message, ScanType, ScannedFile};
+use crate::core::messaging::{EventBus, HybridEventBus, ImportFileResult, ImportFileSpec, Message, ScanType, ScannedFile};
 
 /// Tracks pending scan jobs and their results
 #[derive(Debug, Default)]
@@ -44,6 +44,8 @@ pub struct PendingScanJobs {
     file_jobs: HashMap<String, PendingFileJob>,
     /// Maps probe_job_id → file_key and hash_job_id → file_key for lookup
     enrichment_job_to_file: HashMap<String, String>,
+    /// Pending rename jobs: maps job_id → episode_file_ids (for DB update on result)
+    pending_renames: HashMap<String, Vec<i64>>,
 }
 
 #[derive(Debug)]
@@ -603,6 +605,14 @@ impl ScanResultConsumer {
                                 &job_id, &file_path, entity_id, &worker_id,
                                 file_hash,
                             ).await;
+                        }
+                        Message::RenameFilesResult {
+                            job_id,
+                            worker_id,
+                            results,
+                        } => {
+                            self.handle_rename_files_result(&job_id, &worker_id, results)
+                                .await;
                         }
                         _ => {
                             // Ignore other message types
@@ -2546,6 +2556,105 @@ impl ScanResultConsumer {
             .await;
 
         Ok(())
+    }
+
+    /// Register a pending rename job so the consumer can update DB when the worker finishes.
+    pub async fn register_rename_job(&self, job_id: &str, episode_file_ids: Vec<i64>) {
+        let mut jobs = self.pending_jobs.write().await;
+        jobs.pending_renames
+            .insert(job_id.to_string(), episode_file_ids);
+    }
+
+    /// Handle rename files result from worker — update episode_file paths in DB.
+    async fn handle_rename_files_result(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        results: Vec<ImportFileResult>,
+    ) {
+        let episode_file_ids = {
+            let mut jobs = self.pending_jobs.write().await;
+            jobs.pending_renames.remove(job_id).unwrap_or_default()
+        };
+
+        let file_repo =
+            crate::core::datastore::repositories::EpisodeFileRepository::new(self.db.clone());
+
+        let mut renamed = 0;
+        let mut failed = 0;
+
+        for (idx, result) in results.iter().enumerate() {
+            if !result.success {
+                warn!(
+                    "[rename] Worker {} failed to rename {} → {}: {}",
+                    worker_id,
+                    result.source_path.display(),
+                    result.dest_path.display(),
+                    result.error.as_deref().unwrap_or("unknown error"),
+                );
+                failed += 1;
+                continue;
+            }
+
+            // Update episode_file DB record with new path
+            let file_id = episode_file_ids.get(idx).copied().unwrap_or(0);
+            if file_id == 0 {
+                warn!(
+                    "[rename] No episode_file_id for index {} in job {}",
+                    idx, job_id
+                );
+                continue;
+            }
+
+            match file_repo.get_by_id(file_id).await {
+                Ok(Some(mut ef)) => {
+                    let new_path = result.dest_path.to_string_lossy().to_string();
+                    // Compute relative path if we can determine the series root
+                    let series_repo =
+                        crate::core::datastore::repositories::SeriesRepository::new(
+                            self.db.clone(),
+                        );
+                    let relative = if let Ok(Some(series)) =
+                        series_repo.get_by_id(ef.series_id).await
+                    {
+                        std::path::Path::new(&new_path)
+                            .strip_prefix(&series.path)
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|_| new_path.clone())
+                    } else {
+                        new_path.clone()
+                    };
+
+                    ef.path = new_path;
+                    ef.relative_path = relative;
+                    if let Err(e) = file_repo.update(&ef).await {
+                        warn!(
+                            "[rename] DB update failed for episode_file {}: {}",
+                            file_id, e
+                        );
+                        failed += 1;
+                    } else {
+                        renamed += 1;
+                    }
+                }
+                Ok(None) => {
+                    warn!("[rename] episode_file {} not found in DB", file_id);
+                    failed += 1;
+                }
+                Err(e) => {
+                    warn!(
+                        "[rename] Failed to fetch episode_file {}: {}",
+                        file_id, e
+                    );
+                    failed += 1;
+                }
+            }
+        }
+
+        info!(
+            "[rename] Job {} complete (worker {}): {} renamed, {} failed",
+            job_id, worker_id, renamed, failed,
+        );
     }
 }
 

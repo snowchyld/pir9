@@ -531,6 +531,64 @@ pub async fn execute_rename(
         }
     }
 
+    // Dispatch to worker when Redis is available — worker has local disk access
+    if let Some(ref hybrid_bus) = state.hybrid_event_bus {
+        if hybrid_bus.is_redis_enabled() {
+            if let Some(consumer) = state.scan_result_consumer.get() {
+                let mut file_specs = Vec::new();
+                let mut episode_file_ids = Vec::new();
+
+                for entry in &body.files {
+                    if let Ok(Some(file)) = file_repo.get_by_id(entry.episode_file_id).await {
+                        if file.path != entry.new_path {
+                            file_specs.push(crate::core::messaging::ImportFileSpec {
+                                source_path: std::path::PathBuf::from(&file.path),
+                                dest_path: std::path::PathBuf::from(&entry.new_path),
+                            });
+                            episode_file_ids.push(entry.episode_file_id);
+                        }
+                    }
+                }
+
+                if file_specs.is_empty() {
+                    return Ok(Json(RenameResult {
+                        renamed: 0,
+                        failed: 0,
+                        errors: vec![],
+                    }));
+                }
+
+                let job_id = uuid::Uuid::new_v4().to_string();
+                let count = file_specs.len() as i32;
+
+                consumer
+                    .register_rename_job(&job_id, episode_file_ids.clone())
+                    .await;
+
+                let message = crate::core::messaging::Message::RenameFilesRequest {
+                    job_id: job_id.clone(),
+                    files: file_specs,
+                    episode_file_ids,
+                };
+                hybrid_bus.enqueue_job(message).await;
+
+                tracing::info!(
+                    "Rename dispatched to worker: {} file(s) for series '{}' (job_id={})",
+                    count,
+                    series.title,
+                    job_id,
+                );
+
+                return Ok(Json(RenameResult {
+                    renamed: count,
+                    failed: 0,
+                    errors: vec![],
+                }));
+            }
+        }
+    }
+
+    // Fallback: rename locally (server has NFS access to files)
     let mut renamed = 0i32;
     let mut failed = 0i32;
     let mut errors = Vec::new();
