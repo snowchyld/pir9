@@ -754,6 +754,10 @@ impl WorkerRunner {
 
     /// Read a job from the Redis job stream (XREADGROUP).
     /// Uses the dedicated stream_conn. Returns (stream_entry_id, message) or None.
+    ///
+    /// First drains the consumer's PEL (pending entries from prior runs or
+    /// XAUTOCLAIM), then reads new entries with `>`. This ensures entries
+    /// aren't stuck in the PEL forever after worker restarts.
     #[cfg(feature = "redis-events")]
     async fn read_job_from_stream(&self) -> Option<(String, Message)> {
         use crate::core::messaging::redis_bus::RedisEventBus;
@@ -768,6 +772,23 @@ impl WorkerRunner {
             }
         };
 
+        // First: drain any entries already in our PEL (from prior runs, restarts, or XAUTOCLAIM).
+        // XREADGROUP with "0" returns pending entries without blocking.
+        let pending = RedisEventBus::read_pending_entries(
+            conn,
+            REDIS_JOB_STREAM,
+            REDIS_WORKER_GROUP,
+            &self.worker_id,
+            1,
+        )
+        .await;
+
+        if let Some(entry) = pending.into_iter().next() {
+            debug!("Processing pending entry from PEL: {}", entry.0);
+            return Some(entry);
+        }
+
+        // PEL is empty — read new entries with ">" (blocks up to 1s)
         let entries = RedisEventBus::read_stream_entries(
             conn,
             REDIS_JOB_STREAM,
@@ -795,7 +816,11 @@ impl WorkerRunner {
     }
 
     /// Recover stale jobs from crashed workers via XAUTOCLAIM.
-    /// Re-processes any jobs that have been pending for too long.
+    ///
+    /// XAUTOCLAIM transfers entries idle > threshold from dead consumers
+    /// to this consumer's PEL. The `read_job_from_stream()` method drains
+    /// the PEL before reading new entries, so reclaimed jobs will be
+    /// picked up on the next poll cycle automatically.
     #[cfg(feature = "redis-events")]
     async fn recover_stale_jobs(&self) {
         use crate::core::messaging::redis_bus::RedisEventBus;
@@ -818,32 +843,12 @@ impl WorkerRunner {
 
         if !entries.is_empty() {
             info!(
-                "XAUTOCLAIM recovered {} stale job(s) from crashed workers",
+                "XAUTOCLAIM recovered {} stale job(s) — will process from PEL on next poll",
                 entries.len()
             );
-            // Re-enqueue recovered jobs so they go through normal delivery.
-            // ACK the stale entries to clean them up.
-            for (stale_id, _msg) in &entries {
-                RedisEventBus::ack_stream_entry(
-                    conn,
-                    REDIS_JOB_STREAM,
-                    REDIS_WORKER_GROUP,
-                    stale_id,
-                )
-                .await;
-            }
         }
-        // Drop the lock before enqueuing (enqueue uses event_bus which has its own conn)
-        drop(guard);
-
-        // Note: We don't process recovered jobs directly here because we'd need
-        // the event_bus reference. Instead, the re-enqueued jobs will be picked up
-        // by the normal stream read in the next poll cycle.
-        // Actually, XAUTOCLAIM already transferred them to our pending list, so
-        // they'll be picked up by our next XREADGROUP with ">" ... but only new
-        // messages. Autoclaimed messages need XREADGROUP with "0" to see pending.
-        // For simplicity, just log — the 5min threshold is conservative enough
-        // that truly stuck jobs are likely from crashed workers.
+        // Entries are now in our PEL. read_job_from_stream() checks PEL first
+        // (using "0"), so they'll be picked up and processed normally.
     }
 }
 

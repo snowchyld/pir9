@@ -247,6 +247,43 @@ impl RedisEventBus {
         }
     }
 
+    /// Read entries already in this consumer's Pending Entry List (PEL).
+    ///
+    /// Uses `0` instead of `>` — returns entries that were previously delivered
+    /// to this consumer but not yet ACK'd (e.g., from prior runs or XAUTOCLAIM).
+    /// No BLOCK — returns immediately. An empty result means the PEL is clear.
+    pub async fn read_pending_entries(
+        conn: &mut ConnectionManager,
+        stream: &str,
+        group: &str,
+        consumer: &str,
+        count: usize,
+    ) -> Vec<(String, Message)> {
+        let result: redis::RedisResult<redis::Value> = redis::cmd("XREADGROUP")
+            .arg("GROUP")
+            .arg(group)
+            .arg(consumer)
+            .arg("COUNT")
+            .arg(count)
+            .arg("STREAMS")
+            .arg(stream)
+            .arg("0")
+            .query_async(conn)
+            .await;
+
+        match result {
+            Ok(value) => parse_stream_response(&value),
+            Err(e) => {
+                let msg = e.to_string();
+                if !msg.contains("nil") && !msg.contains("timed out") && !msg.contains("timeout")
+                {
+                    debug!("XREADGROUP (PEL) on {}: {}", stream, msg);
+                }
+                vec![]
+            }
+        }
+    }
+
     /// ACK a stream entry (marks it as processed, removes from pending list).
     pub async fn ack_stream_entry(
         conn: &mut ConnectionManager,
@@ -291,7 +328,10 @@ impl RedisEventBus {
         match result {
             Ok(value) => parse_autoclaim_response(&value),
             Err(e) => {
-                debug!("XAUTOCLAIM on {}: {}", stream, e);
+                let msg = e.to_string();
+                if !msg.contains("nil") && !msg.contains("timed out") && !msg.contains("timeout") {
+                    debug!("XAUTOCLAIM on {}: {}", stream, msg);
+                }
                 vec![]
             }
         }
@@ -382,16 +422,63 @@ impl RedisEventBus {
             consumer_id, REDIS_RESULT_STREAM
         );
 
+        // First: drain any entries left in our PEL from a prior server instance
         loop {
-            let entries = Self::read_stream_entries(
+            let pending = Self::read_pending_entries(
                 &mut conn,
                 REDIS_RESULT_STREAM,
                 REDIS_SERVER_GROUP,
                 &consumer_id,
-                2000, // 2s block timeout
-                10,   // up to 10 entries per read
+                10,
             )
             .await;
+
+            if pending.is_empty() {
+                break;
+            }
+
+            info!(
+                "Draining {} pending result(s) from PEL",
+                pending.len()
+            );
+            for (stream_id, message) in pending {
+                let _ = self.local_sender.send(message);
+                Self::ack_stream_entry(
+                    &mut conn,
+                    REDIS_RESULT_STREAM,
+                    REDIS_SERVER_GROUP,
+                    &stream_id,
+                )
+                .await;
+            }
+        }
+
+        // Main loop: read new entries
+        loop {
+            // Check PEL first (entries from XAUTOCLAIM or re-delivery)
+            let pending = Self::read_pending_entries(
+                &mut conn,
+                REDIS_RESULT_STREAM,
+                REDIS_SERVER_GROUP,
+                &consumer_id,
+                10,
+            )
+            .await;
+
+            let entries = if !pending.is_empty() {
+                pending
+            } else {
+                // PEL empty — block-wait for new entries
+                Self::read_stream_entries(
+                    &mut conn,
+                    REDIS_RESULT_STREAM,
+                    REDIS_SERVER_GROUP,
+                    &consumer_id,
+                    2000, // 2s block timeout
+                    10,   // up to 10 entries per read
+                )
+                .await
+            };
 
             for (stream_id, message) in entries {
                 trace!("Result stream entry {}: forwarding locally", stream_id);

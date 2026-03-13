@@ -75,10 +75,25 @@ async fn run_worker_mode(args: &Args) -> Result<()> {
         .as_ref()
         .expect("Redis URL validated in args.validate()");
 
-    let worker_id = args
-        .worker_id
-        .clone()
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let worker_id = args.worker_id.clone().unwrap_or_else(|| {
+        // Deterministic ID from hostname + worker paths — survives restarts so
+        // the Redis Streams consumer ID stays the same, allowing PEL drain to
+        // recover entries from the previous run without XAUTOCLAIM delay.
+        // Hostname ensures distinct IDs when multiple hosts share the same paths.
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        let hostname = std::env::var("HOSTNAME")
+            .or_else(|_| std::env::var("HOST"))
+            .unwrap_or_else(|_| "unknown".to_string());
+        hasher.update(hostname.as_bytes());
+        let mut sorted_paths = args.worker_paths.clone();
+        sorted_paths.sort();
+        for p in &sorted_paths {
+            hasher.update(p.as_bytes());
+        }
+        let hash = hasher.finalize();
+        format!("worker-{}", hex::encode(&hash[..8]))
+    });
 
     info!("Worker ID: {}", worker_id);
     info!("Worker paths: {:?}", args.worker_paths);
