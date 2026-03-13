@@ -232,9 +232,8 @@ impl WorkerRunner {
 
         tokio::pin!(shutdown);
 
-        // Poll interval for stream read. XREADGROUP BLOCK handles the actual
-        // waiting, but we poll periodically to re-check semaphore availability
-        // and run XAUTOCLAIM for stale job recovery.
+        // Poll interval for stream read. Non-blocking XREADGROUP + interval timer
+        // avoids MultiplexedConnection desync from BLOCK commands.
         let mut stream_poll = tokio::time::interval(tokio::time::Duration::from_secs(1));
         stream_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -788,14 +787,13 @@ impl WorkerRunner {
             return Some(entry);
         }
 
-        // PEL is empty — read new entries with ">" (blocks up to 1s)
+        // PEL is empty — poll for new entries (non-blocking)
         let entries = RedisEventBus::read_stream_entries(
             conn,
             REDIS_JOB_STREAM,
             REDIS_WORKER_GROUP,
             &self.worker_id,
-            1000, // 1s block timeout (short so select! can check other branches)
-            1,    // one job at a time
+            1, // one job at a time
         )
         .await;
 

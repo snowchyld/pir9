@@ -208,24 +208,27 @@ impl RedisEventBus {
         }
     }
 
-    /// Read jobs from the job stream using XREADGROUP (for workers).
-    /// Blocks for `timeout_ms` milliseconds. Returns entries as (stream_id, Message).
+    /// Read new entries from a stream using XREADGROUP (non-blocking).
     ///
-    /// Uses a dedicated connection to avoid blocking the main connection.
+    /// Returns immediately with up to `count` new entries, or empty vec if none.
+    /// Callers should sleep between polls to avoid busy-looping.
+    ///
+    /// **Why non-blocking**: `ConnectionManager` wraps `MultiplexedConnection`, which
+    /// pipelines commands over a single TCP connection. `XREADGROUP BLOCK` holds the
+    /// connection open, desynchronizing command/response pairing for subsequent commands
+    /// (PEL reads return empty even when entries exist). Non-blocking read + app-level
+    /// sleep avoids this entirely.
     pub async fn read_stream_entries(
         conn: &mut ConnectionManager,
         stream: &str,
         group: &str,
         consumer: &str,
-        timeout_ms: usize,
         count: usize,
     ) -> Vec<(String, Message)> {
         let result: redis::RedisResult<redis::Value> = redis::cmd("XREADGROUP")
             .arg("GROUP")
             .arg(group)
             .arg(consumer)
-            .arg("BLOCK")
-            .arg(timeout_ms)
             .arg("COUNT")
             .arg(count)
             .arg("STREAMS")
@@ -238,8 +241,8 @@ impl RedisEventBus {
             Ok(value) => parse_stream_response(&value),
             Err(e) => {
                 let msg = e.to_string();
-                // Timeouts and nil responses are expected, not errors
-                if !msg.contains("nil") && !msg.contains("timed out") && !msg.contains("timeout") {
+                // Nil responses are expected when no new entries exist
+                if !msg.contains("nil") {
                     debug!("XREADGROUP on {}: {}", stream, msg);
                 }
                 vec![]
@@ -272,12 +275,11 @@ impl RedisEventBus {
             .await;
 
         match result {
-            Ok(value) => parse_stream_response(&value),
+            Ok(ref value) => parse_stream_response(value),
             Err(e) => {
                 let msg = e.to_string();
-                if !msg.contains("nil") && !msg.contains("timed out") && !msg.contains("timeout")
-                {
-                    debug!("XREADGROUP (PEL) on {}: {}", stream, msg);
+                if !msg.contains("nil") {
+                    warn!("XREADGROUP (PEL) error on {}: {}", stream, msg);
                 }
                 vec![]
             }
@@ -409,7 +411,6 @@ impl RedisEventBus {
     /// This should be spawned as a background task on the SERVER side only.
     /// Workers don't need to read from the result stream.
     pub async fn start_result_stream_reader(self: std::sync::Arc<Self>) -> Result<()> {
-        // Create a dedicated connection for blocking XREADGROUP
         let client = redis::Client::open(self.redis_url.as_str())
             .context("Failed to create Redis client for result stream reader")?;
         let mut conn = ConnectionManager::new(client)
@@ -455,7 +456,7 @@ impl RedisEventBus {
             }
         }
 
-        // Main loop: read new entries
+        // Main loop: poll for new entries + check PEL
         loop {
             // Check PEL first (entries from XAUTOCLAIM or re-delivery)
             let pending = Self::read_pending_entries(
@@ -467,28 +468,63 @@ impl RedisEventBus {
             )
             .await;
 
-            let entries = if !pending.is_empty() {
-                pending
-            } else {
-                // PEL empty — block-wait for new entries
-                Self::read_stream_entries(
-                    &mut conn,
-                    REDIS_RESULT_STREAM,
-                    REDIS_SERVER_GROUP,
-                    &consumer_id,
-                    2000, // 2s block timeout
-                    10,   // up to 10 entries per read
-                )
-                .await
-            };
-
-            for (stream_id, message) in entries {
-                debug!("Result stream → local broadcast: {} ({})", stream_id, message_type_label(&message));
-                let _ = self.local_sender.send(message);
-                // ACK immediately — the message is now in the local broadcast channel
-                Self::ack_stream_entry(&mut conn, REDIS_RESULT_STREAM, REDIS_SERVER_GROUP, &stream_id)
+            if !pending.is_empty() {
+                debug!("Result stream: processing {} PEL entries", pending.len());
+                for (stream_id, message) in pending {
+                    debug!(
+                        "Result stream → local broadcast: {} ({})",
+                        stream_id,
+                        message_type_label(&message)
+                    );
+                    let _ = self.local_sender.send(message);
+                    Self::ack_stream_entry(
+                        &mut conn,
+                        REDIS_RESULT_STREAM,
+                        REDIS_SERVER_GROUP,
+                        &stream_id,
+                    )
                     .await;
+                }
+                // Don't sleep — check for more entries immediately
+                continue;
             }
+
+            // PEL empty — poll for new entries (non-blocking)
+            let new_entries = Self::read_stream_entries(
+                &mut conn,
+                REDIS_RESULT_STREAM,
+                REDIS_SERVER_GROUP,
+                &consumer_id,
+                10,
+            )
+            .await;
+
+            if !new_entries.is_empty() {
+                debug!(
+                    "Result stream: received {} new entries",
+                    new_entries.len()
+                );
+                for (stream_id, message) in new_entries {
+                    debug!(
+                        "Result stream → local broadcast: {} ({})",
+                        stream_id,
+                        message_type_label(&message)
+                    );
+                    let _ = self.local_sender.send(message);
+                    Self::ack_stream_entry(
+                        &mut conn,
+                        REDIS_RESULT_STREAM,
+                        REDIS_SERVER_GROUP,
+                        &stream_id,
+                    )
+                    .await;
+                }
+                // Don't sleep — check for more entries immediately
+                continue;
+            }
+
+            // Nothing to process — sleep before next poll
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
     }
 
@@ -548,8 +584,11 @@ fn parse_stream_entry(entry: &redis::Value) -> Option<(String, Message)> {
         _ => return None,
     };
 
-    // Entry ID
-    let id: String = redis::FromRedisValue::from_redis_value(arr[0].clone()).ok()?;
+    // Entry ID (clone needed — from_redis_value takes owned Value in redis 1.0)
+    let id: String = match redis::FromRedisValue::from_redis_value(arr[0].clone()) {
+        Ok(id) => id,
+        Err(_) => return None,
+    };
 
     // Fields array: [field, value, field, value, ...]
     let fields = match &arr[1] {
@@ -560,10 +599,16 @@ fn parse_stream_entry(entry: &redis::Value) -> Option<(String, Message)> {
     // Find the "msg" field
     let mut i = 0;
     while i + 1 < fields.len() {
-        let field: String = redis::FromRedisValue::from_redis_value(fields[i].clone()).ok()?;
+        let field: String = match redis::FromRedisValue::from_redis_value(fields[i].clone()) {
+            Ok(f) => f,
+            Err(_) => return None,
+        };
         if field == "msg" {
             let json: String =
-                redis::FromRedisValue::from_redis_value(fields[i + 1].clone()).ok()?;
+                match redis::FromRedisValue::from_redis_value(fields[i + 1].clone()) {
+                    Ok(j) => j,
+                    Err(_) => return None,
+                };
             return match serde_json::from_str::<Message>(&json) {
                 Ok(msg) => Some((id, msg)),
                 Err(e) => {
@@ -574,7 +619,6 @@ fn parse_stream_entry(entry: &redis::Value) -> Option<(String, Message)> {
         }
         i += 2;
     }
-
     None
 }
 
