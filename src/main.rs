@@ -237,11 +237,27 @@ async fn run_server_mode(args: &Args) -> Result<()> {
                 .context("Failed to initialize Redis streams")?;
 
             // Start result stream reader — reads durable results from workers
-            // and feeds them into the local broadcast for the consumer to process
+            // and feeds them into the local broadcast for the consumer to process.
+            // Wrapped in a supervisor loop that restarts on error or panic.
             let bus_for_results = hybrid_bus.clone();
             tokio::spawn(async move {
-                if let Err(e) = bus_for_results.start_result_stream_reader().await {
-                    tracing::error!("Result stream reader error: {}", e);
+                loop {
+                    let bus = bus_for_results.clone();
+                    let handle = tokio::spawn(async move {
+                        bus.start_result_stream_reader().await
+                    });
+                    match handle.await {
+                        Ok(Ok(())) => {
+                            tracing::warn!("Result stream reader exited cleanly — restarting");
+                        }
+                        Ok(Err(e)) => {
+                            tracing::error!("Result stream reader error: {} — restarting in 5s", e);
+                        }
+                        Err(e) => {
+                            tracing::error!("Result stream reader panicked: {} — restarting in 5s", e);
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
             });
             info!("Result stream reader started");

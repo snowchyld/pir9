@@ -27,6 +27,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/update", get(get_update_info).post(trigger_update))
         .route("/restart", post(restart))
         .route("/shutdown", post(shutdown))
+        .route("/queue/redis", get(get_redis_queue))
+        .route("/queue/redis/prune", post(prune_redis_queue))
 }
 
 async fn get_status(
@@ -642,6 +644,297 @@ pub struct UpdateActionResponse {
 #[serde(rename_all = "camelCase")]
 pub struct SystemActionResponse {
     pub success: bool,
+}
+
+// ============================================================================
+// Redis Stream Queue Endpoints
+// ============================================================================
+
+/// GET /api/v5/system/queue/redis — View Redis stream status
+#[cfg(feature = "redis-events")]
+async fn get_redis_queue(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> Json<RedisQueueStatus> {
+    use crate::core::messaging::{
+        REDIS_JOB_STREAM, REDIS_RESULT_STREAM, REDIS_SERVER_GROUP, REDIS_WORKER_GROUP,
+    };
+
+    let Some(ref hybrid_bus) = state.hybrid_event_bus else {
+        return Json(RedisQueueStatus {
+            enabled: false,
+            ..Default::default()
+        });
+    };
+
+    let Some(redis_url) = hybrid_bus.redis_url() else {
+        return Json(RedisQueueStatus {
+            enabled: false,
+            ..Default::default()
+        });
+    };
+    let client = match redis::Client::open(redis_url) {
+        Ok(c) => c,
+        Err(e) => {
+            return Json(RedisQueueStatus {
+                enabled: true,
+                error: Some(format!("Failed to connect: {}", e)),
+                ..Default::default()
+            })
+        }
+    };
+
+    let mut conn = match redis::aio::ConnectionManager::new(client).await {
+        Ok(c) => c,
+        Err(e) => {
+            return Json(RedisQueueStatus {
+                enabled: true,
+                error: Some(format!("Connection failed: {}", e)),
+                ..Default::default()
+            })
+        }
+    };
+
+    let jobs = query_stream_info(&mut conn, REDIS_JOB_STREAM, REDIS_WORKER_GROUP).await;
+    let results = query_stream_info(&mut conn, REDIS_RESULT_STREAM, REDIS_SERVER_GROUP).await;
+
+    Json(RedisQueueStatus {
+        enabled: true,
+        error: None,
+        jobs,
+        results,
+    })
+}
+
+#[cfg(not(feature = "redis-events"))]
+async fn get_redis_queue() -> Json<RedisQueueStatus> {
+    Json(RedisQueueStatus {
+        enabled: false,
+        ..Default::default()
+    })
+}
+
+/// POST /api/v5/system/queue/redis/prune — ACK all pending entries and trim streams
+#[cfg(feature = "redis-events")]
+async fn prune_redis_queue(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> Json<RedisQueuePruneResult> {
+    use crate::core::messaging::{
+        REDIS_JOB_STREAM, REDIS_RESULT_STREAM, REDIS_SERVER_GROUP, REDIS_WORKER_GROUP,
+    };
+
+    let Some(ref hybrid_bus) = state.hybrid_event_bus else {
+        return Json(RedisQueuePruneResult {
+            success: false,
+            error: Some("Redis not enabled".to_string()),
+            ..Default::default()
+        });
+    };
+
+    let Some(redis_url) = hybrid_bus.redis_url() else {
+        return Json(RedisQueuePruneResult {
+            success: false,
+            error: Some("Redis not connected".to_string()),
+            ..Default::default()
+        });
+    };
+    let client = match redis::Client::open(redis_url) {
+        Ok(c) => c,
+        Err(e) => {
+            return Json(RedisQueuePruneResult {
+                success: false,
+                error: Some(format!("Failed to connect: {}", e)),
+                ..Default::default()
+            })
+        }
+    };
+
+    let mut conn = match redis::aio::ConnectionManager::new(client).await {
+        Ok(c) => c,
+        Err(e) => {
+            return Json(RedisQueuePruneResult {
+                success: false,
+                error: Some(format!("Connection failed: {}", e)),
+                ..Default::default()
+            })
+        }
+    };
+
+    let jobs_acked = ack_all_pending(&mut conn, REDIS_JOB_STREAM, REDIS_WORKER_GROUP).await;
+    let results_acked = ack_all_pending(&mut conn, REDIS_RESULT_STREAM, REDIS_SERVER_GROUP).await;
+
+    // Trim streams to a reasonable length
+    let _: redis::RedisResult<i64> = redis::cmd("XTRIM")
+        .arg(REDIS_JOB_STREAM)
+        .arg("MAXLEN")
+        .arg("~")
+        .arg(100)
+        .query_async(&mut conn)
+        .await;
+    let _: redis::RedisResult<i64> = redis::cmd("XTRIM")
+        .arg(REDIS_RESULT_STREAM)
+        .arg("MAXLEN")
+        .arg("~")
+        .arg(100)
+        .query_async(&mut conn)
+        .await;
+
+    Json(RedisQueuePruneResult {
+        success: true,
+        error: None,
+        jobs_acked,
+        results_acked,
+    })
+}
+
+#[cfg(not(feature = "redis-events"))]
+async fn prune_redis_queue() -> Json<RedisQueuePruneResult> {
+    Json(RedisQueuePruneResult {
+        success: false,
+        error: Some("Redis not enabled".to_string()),
+        ..Default::default()
+    })
+}
+
+/// Query XLEN + XPENDING + XINFO CONSUMERS for a stream
+#[cfg(feature = "redis-events")]
+async fn query_stream_info(
+    conn: &mut redis::aio::ConnectionManager,
+    stream: &str,
+    group: &str,
+) -> RedisStreamInfo {
+    let length: i64 = redis::cmd("XLEN")
+        .arg(stream)
+        .query_async(conn)
+        .await
+        .unwrap_or(0);
+
+    // XPENDING <stream> <group> returns [total_pending, min_id, max_id, [[consumer, count], ...]]
+    let pending_info: redis::RedisResult<redis::Value> = redis::cmd("XPENDING")
+        .arg(stream)
+        .arg(group)
+        .query_async(conn)
+        .await;
+
+    let (total_pending, consumers) = match pending_info {
+        Ok(redis::Value::Array(ref arr)) if arr.len() >= 4 => {
+            let total: i64 = redis::FromRedisValue::from_redis_value(arr[0].clone()).unwrap_or(0);
+            let consumer_list = match &arr[3] {
+                redis::Value::Array(pairs) => pairs
+                    .iter()
+                    .filter_map(|pair| {
+                        if let redis::Value::Array(kv) = pair {
+                            if kv.len() >= 2 {
+                                let name: String =
+                                    redis::FromRedisValue::from_redis_value(kv[0].clone()).ok()?;
+                                let count_str: String =
+                                    redis::FromRedisValue::from_redis_value(kv[1].clone()).ok()?;
+                                let count: i64 = count_str.parse().unwrap_or(0);
+                                return Some(RedisConsumerInfo {
+                                    name,
+                                    pending: count,
+                                });
+                            }
+                        }
+                        None
+                    })
+                    .collect(),
+                _ => vec![],
+            };
+            (total, consumer_list)
+        }
+        _ => (0, vec![]),
+    };
+
+    RedisStreamInfo {
+        stream: stream.to_string(),
+        group: group.to_string(),
+        length,
+        total_pending,
+        consumers,
+    }
+}
+
+/// ACK all pending entries in a stream group
+#[cfg(feature = "redis-events")]
+async fn ack_all_pending(
+    conn: &mut redis::aio::ConnectionManager,
+    stream: &str,
+    group: &str,
+) -> i64 {
+    // Get all pending entry IDs
+    let pending: redis::RedisResult<redis::Value> = redis::cmd("XPENDING")
+        .arg(stream)
+        .arg(group)
+        .arg("-")
+        .arg("+")
+        .arg(1000)
+        .query_async(conn)
+        .await;
+
+    let ids: Vec<String> = match pending {
+        Ok(redis::Value::Array(entries)) => entries
+            .iter()
+            .filter_map(|entry| {
+                if let redis::Value::Array(fields) = entry {
+                    if !fields.is_empty() {
+                        return redis::FromRedisValue::from_redis_value(fields[0].clone()).ok();
+                    }
+                }
+                None
+            })
+            .collect(),
+        _ => vec![],
+    };
+
+    if ids.is_empty() {
+        return 0;
+    }
+
+    let mut cmd = redis::cmd("XACK");
+    cmd.arg(stream).arg(group);
+    for id in &ids {
+        cmd.arg(id.as_str());
+    }
+
+    let result: redis::RedisResult<i64> = cmd.query_async(conn).await;
+    result.unwrap_or(0)
+}
+
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct RedisQueueStatus {
+    enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    jobs: RedisStreamInfo,
+    results: RedisStreamInfo,
+}
+
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct RedisStreamInfo {
+    stream: String,
+    group: String,
+    length: i64,
+    total_pending: i64,
+    consumers: Vec<RedisConsumerInfo>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RedisConsumerInfo {
+    name: String,
+    pending: i64,
+}
+
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct RedisQueuePruneResult {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    jobs_acked: i64,
+    results_acked: i64,
 }
 
 /// Read OS name and version from /etc/os-release (Linux) or fall back to consts

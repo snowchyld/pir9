@@ -180,7 +180,7 @@ impl RedisEventBus {
             .await;
 
         match result {
-            Ok(id) => trace!("XADD {} → {}", stream, id),
+            Ok(id) => debug!("XADD {} → {}", stream, id),
             Err(e) => error!("XADD to {} failed: {}", stream, e),
         }
     }
@@ -416,7 +416,9 @@ impl RedisEventBus {
             .await
             .context("Failed to connect to Redis for result stream reader")?;
 
-        let consumer_id = format!("server-{}", &self.instance_id[..8]);
+        // Fixed consumer ID — only one server reads results. Deterministic so
+        // PEL entries survive restarts (same fix as worker deterministic IDs).
+        let consumer_id = "server-main".to_string();
         info!(
             "Result stream reader started (consumer={}, stream={})",
             consumer_id, REDIS_RESULT_STREAM
@@ -481,7 +483,7 @@ impl RedisEventBus {
             };
 
             for (stream_id, message) in entries {
-                trace!("Result stream entry {}: forwarding locally", stream_id);
+                debug!("Result stream → local broadcast: {} ({})", stream_id, message_type_label(&message));
                 let _ = self.local_sender.send(message);
                 // ACK immediately — the message is now in the local broadcast channel
                 Self::ack_stream_entry(&mut conn, REDIS_RESULT_STREAM, REDIS_SERVER_GROUP, &stream_id)
@@ -598,6 +600,19 @@ fn parse_autoclaim_response(value: &redis::Value) -> Vec<(String, Message)> {
     }
 
     entries
+}
+
+/// Quick label for log messages
+#[cfg(feature = "redis-events")]
+fn message_type_label(msg: &Message) -> &'static str {
+    match msg {
+        Message::ScanResult { .. } => "ScanResult",
+        Message::ProbeFileResult { .. } => "ProbeFileResult",
+        Message::HashFileResult { .. } => "HashFileResult",
+        Message::ImportFilesResult { .. } => "ImportFilesResult",
+        Message::DeletePathsResult { .. } => "DeletePathsResult",
+        _ => "Other",
+    }
 }
 
 /// Wrapper for messages sent through Redis pub/sub
