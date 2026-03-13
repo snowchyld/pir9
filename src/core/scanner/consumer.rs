@@ -90,6 +90,8 @@ struct PendingDownloadImport {
     force_reimport: std::collections::HashSet<String>,
     /// Source file paths to skip during import (user chose "Do not import")
     skip_files: std::collections::HashSet<String>,
+    /// When true, bypass the same-size skip entirely (user-initiated imports)
+    force_import_all: bool,
 }
 
 /// Per-file data needed to insert episode_file records after the worker moves the file
@@ -183,6 +185,8 @@ pub struct DownloadImportInfo {
     pub force_reimport: std::collections::HashSet<String>,
     /// Source file paths to skip during import (user chose "Do not import")
     pub skip_files: std::collections::HashSet<String>,
+    /// When true, bypass the same-size skip entirely (user-initiated imports)
+    pub force_import_all: bool,
 }
 
 /// Progress info from a worker's scan enrichment pipeline
@@ -375,6 +379,7 @@ impl ScanResultConsumer {
                     pre_resolved_episodes: pre_resolved,
                     force_reimport: import_info.force_reimport.clone(),
                     skip_files: import_info.skip_files.clone(),
+                    force_import_all: import_info.force_import_all,
                 },
             );
         }
@@ -1116,6 +1121,7 @@ impl ScanResultConsumer {
         let pre_resolved_episodes: Vec<(i32, i32)>;
         let force_reimport: std::collections::HashSet<String>;
         let skip_files: std::collections::HashSet<String>;
+        let force_import_all: bool;
         if let Some(key) = download_keys.first() {
             let jobs = self.pending_jobs.read().await;
             if let Some(pending) = jobs.download_imports.get(key) {
@@ -1125,12 +1131,14 @@ impl ScanResultConsumer {
                 pre_resolved_episodes = pending.pre_resolved_episodes.clone();
                 force_reimport = pending.force_reimport.clone();
                 skip_files = pending.skip_files.clone();
+                force_import_all = pending.force_import_all;
             } else {
                 file_overrides = HashMap::new();
                 known_series_id = None;
                 pre_resolved_episodes = Vec::new();
                 force_reimport = std::collections::HashSet::new();
                 skip_files = std::collections::HashSet::new();
+                force_import_all = false;
             }
         } else {
             file_overrides = HashMap::new();
@@ -1138,6 +1146,7 @@ impl ScanResultConsumer {
             pre_resolved_episodes = Vec::new();
             force_reimport = std::collections::HashSet::new();
             skip_files = std::collections::HashSet::new();
+            force_import_all = false;
         }
 
         // Process each file (typically 1 in per-file streaming mode)
@@ -1317,34 +1326,59 @@ impl ScanResultConsumer {
                 continue;
             };
 
-            // Same-size skip: if ALL matched episodes already have files of the same size,
-            // the source file is identical — skip to avoid wasteful overwrite.
-            // force_reimport bypasses this check (for damaged destination files).
-            let is_force_reimport = force_reimport.contains(filename)
-                || force_reimport.iter().any(|p| p.ends_with(filename));
-            if !is_force_reimport {
-                let episode_file_repo =
-                    crate::core::datastore::repositories::EpisodeFileRepository::new(
-                        self.db.clone(),
-                    );
-                let ep_file_sizes: HashMap<i64, i64> = episode_file_repo
-                    .get_by_series_id(series.id)
-                    .await
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|f| (f.id, f.size))
-                    .collect();
-                if episodes.iter().all(|ep| {
-                    ep.episode_file_id
-                        .and_then(|fid| ep_file_sizes.get(&fid))
-                        .map(|&existing_size| existing_size == file.size)
-                        .unwrap_or(false)
-                }) {
-                    info!(
-                        "[worker:{}] skipping '{}' — same size as existing file(s)",
-                        worker_id, filename,
-                    );
-                    continue;
+            // Same-size skip: if ALL matched episodes already have files with the
+            // same size, the source file is likely identical — skip to avoid redundant
+            // processing during automatic imports (RSS sync, download completed).
+            // Bypassed entirely for user-initiated imports (force_import_all=true)
+            // and per-file force_reimport overrides.
+            if !force_import_all {
+                let is_force_reimport = force_reimport.contains(filename)
+                    || force_reimport.iter().any(|p| p.ends_with(filename));
+                if !is_force_reimport {
+                    let episode_file_repo =
+                        crate::core::datastore::repositories::EpisodeFileRepository::new(
+                            self.db.clone(),
+                        );
+                    let ep_files: Vec<_> = episode_file_repo
+                        .get_by_series_id(series.id)
+                        .await
+                        .unwrap_or_default();
+                    let ep_file_map: HashMap<i64, &_> = ep_files
+                        .iter()
+                        .map(|f| (f.id, f))
+                        .collect();
+                    let all_same = episodes.iter().all(|ep| {
+                        ep.episode_file_id
+                            .and_then(|fid| ep_file_map.get(&fid))
+                            .map(|existing| {
+                                let size_match = existing.size == file.size;
+                                if size_match {
+                                    match (&existing.file_hash, &file.file_hash) {
+                                        (Some(eh), Some(fh)) if !eh.is_empty() && !fh.is_empty() => {
+                                            eh == fh
+                                        }
+                                        _ => true,
+                                    }
+                                } else {
+                                    false
+                                }
+                            })
+                            .unwrap_or(false)
+                    });
+                    if all_same {
+                        info!(
+                            "[worker:{}] skipping '{}' — identical to existing file(s) \
+                             (source_size={}, existing_size={}, hash={})",
+                            worker_id, filename, file.size,
+                            episodes.first()
+                                .and_then(|ep| ep.episode_file_id)
+                                .and_then(|fid| ep_file_map.get(&fid))
+                                .map(|f| f.size)
+                                .unwrap_or(-1),
+                            file.file_hash.as_deref().unwrap_or("none"),
+                        );
+                        continue;
+                    }
                 }
             }
 
@@ -1407,6 +1441,7 @@ impl ScanResultConsumer {
                         pre_resolved_episodes: Vec::new(),
                         force_reimport: force_reimport.clone(),
                         skip_files: skip_files.clone(),
+                        force_import_all,
                     },
                 );
                 // Map import_job_id back to scan job for tracker updates

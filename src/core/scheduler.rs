@@ -657,6 +657,7 @@ async fn execute_downloaded_episodes_scan(
                     overrides: std::collections::HashMap::new(),
                     force_reimport: std::collections::HashSet::new(),
                     skip_files: std::collections::HashSet::new(),
+                    force_import_all: false,
                 };
 
                 consumer

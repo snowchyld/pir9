@@ -1739,6 +1739,7 @@ async fn execute_process_downloads_distributed(
             overrides: std::collections::HashMap::new(),
             force_reimport: std::collections::HashSet::new(),
             skip_files: std::collections::HashSet::new(),
+            force_import_all: false,
         };
 
         consumer

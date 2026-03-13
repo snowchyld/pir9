@@ -1893,6 +1893,7 @@ async fn import_queue_item(
                     overrides: override_map.clone(),
                     force_reimport: force_reimport.clone(),
                     skip_files: skip_files.clone(),
+                    force_import_all: true, // user-initiated: bypass same-size skip
                 };
 
                 consumer
