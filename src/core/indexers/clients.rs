@@ -614,8 +614,10 @@ pub struct ProwlarrClient {
 
 impl ProwlarrClient {
     pub fn new(name: String, url: String, api_key: String) -> Self {
+        // Prowlarr aggregates across multiple indexers, so movie/music searches
+        // can take significantly longer than direct indexer queries.
         let http_client = Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(60))
             .build()
             .unwrap_or_default();
 
@@ -834,22 +836,24 @@ impl IndexerClient for ProwlarrClient {
             url.push_str(&format!("&offset={}", offset));
         }
 
+        tracing::debug!("Prowlarr search URL: {}", url);
+
         let response = self
             .http_client
             .get(&url)
             .header("X-Api-Key", &self.api_key)
             .send()
             .await
-            .context("Failed to search Prowlarr")?;
+            .context(format!("Failed to search Prowlarr (type={}, url={})", search_type, &url[..url.find('?').unwrap_or(url.len())]))?;
 
         if !response.status().is_success() {
-            anyhow::bail!("Prowlarr search failed: {}", response.status());
+            anyhow::bail!("Prowlarr search failed: status={}, type={}", response.status(), search_type);
         }
 
         let releases: Vec<ProwlarrRelease> = response
             .json()
             .await
-            .context("Failed to parse Prowlarr JSON response")?;
+            .context(format!("Failed to parse Prowlarr JSON response (type={})", search_type))?;
 
         Ok(releases
             .into_iter()
@@ -889,6 +893,20 @@ impl IndexerClient for ProwlarrClient {
             .filter_map(|r| self.map_release(r))
             .collect())
     }
+}
+
+/// Detect Prowlarr per-indexer proxy URLs (e.g., `https://prowlarr.example.com/5/api`).
+/// These are Torznab/Newznab XML endpoints, NOT the Prowlarr REST API.
+fn is_prowlarr_per_indexer_url(url: &str) -> bool {
+    // Pattern: URL path ends with `/{digits}/api` (e.g., /5/api, /12/api)
+    let trimmed = url.trim_end_matches('/');
+    if trimmed.ends_with("/api") {
+        let before_api = &trimmed[..trimmed.len() - 4]; // strip "/api"
+        if let Some(last_segment) = before_api.rsplit('/').next() {
+            return !last_segment.is_empty() && last_segment.chars().all(|c| c.is_ascii_digit());
+        }
+    }
+    false
 }
 
 /// Normalize a URL by ensuring it has a scheme prefix
@@ -1121,11 +1139,30 @@ pub fn create_client_from_model(
             base_url.to_string(),
             api_key.to_string(),
         ))),
-        "Prowlarr" => Ok(Box::new(ProwlarrClient::new(
-            model.name.clone(),
-            base_url.to_string(),
-            api_key.to_string(),
-        ))),
+        "Prowlarr" => {
+            // Prowlarr per-indexer proxy URLs (e.g., /5/api) are Torznab endpoints,
+            // not the Prowlarr REST API. Detect this and use TorznabClient instead.
+            // Strip trailing "/api" since TorznabClient.build_url() appends its own "/api".
+            if is_prowlarr_per_indexer_url(base_url) {
+                let proxy_base = base_url.trim_end_matches('/').trim_end_matches("/api");
+                tracing::debug!(
+                    "Indexer '{}' uses Prowlarr per-indexer proxy URL, using Torznab client (base={})",
+                    model.name,
+                    proxy_base
+                );
+                Ok(Box::new(TorznabClient::new(
+                    model.name.clone(),
+                    proxy_base.to_string(),
+                    api_key.to_string(),
+                )))
+            } else {
+                Ok(Box::new(ProwlarrClient::new(
+                    model.name.clone(),
+                    base_url.to_string(),
+                    api_key.to_string(),
+                )))
+            }
+        }
         _ => {
             anyhow::bail!(
                 "Unsupported indexer implementation: {}",

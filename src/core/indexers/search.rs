@@ -203,7 +203,7 @@ impl IndexerSearchService {
                     all_releases.extend(releases);
                 }
                 Err(e) => {
-                    tracing::warn!("Indexer {} movie search failed: {}", indexer.name, e);
+                    tracing::warn!("Indexer {} movie search failed: {:#}", indexer.name, e);
                 }
             }
         }
@@ -236,7 +236,7 @@ impl IndexerSearchService {
                     all_releases.extend(releases);
                 }
                 Err(e) => {
-                    tracing::warn!("Indexer {} movie search failed: {}", indexer.name, e);
+                    tracing::warn!("Indexer {} movie search failed: {:#}", indexer.name, e);
                 }
             }
         }
