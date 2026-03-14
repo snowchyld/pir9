@@ -58,9 +58,29 @@ impl MediaAnalyzer {
     /// Returns real resolution, codec, bitrate, audio channels, etc.
     pub async fn analyze(path: &Path) -> Result<MediaInfoModel> {
         let path_owned = path.to_path_buf();
-        tokio::task::spawn_blocking(move || Self::probe_file(&path_owned))
-            .await
-            .context("Media probe task panicked")?
+        tokio::task::spawn_blocking(move || {
+            // catch_unwind guards against panics in FFmpeg/unbundle (e.g. negative
+            // chapter PTS values that Duration::from_secs_f64 can't represent).
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Self::probe_file(&path_owned)
+            })) {
+                Ok(result) => result,
+                Err(panic) => {
+                    let msg = panic
+                        .downcast_ref::<String>()
+                        .map(|s| s.as_str())
+                        .or_else(|| panic.downcast_ref::<&str>().copied())
+                        .unwrap_or("unknown panic");
+                    Err(anyhow::anyhow!(
+                        "FFmpeg probe panicked for {}: {}",
+                        path_owned.display(),
+                        msg
+                    ))
+                }
+            }
+        })
+        .await
+        .context("Media probe task failed")?
     }
 
     /// Synchronous probe using unbundle's MediaProbe.
