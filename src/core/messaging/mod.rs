@@ -278,6 +278,51 @@ pub enum Message {
         movie_id: i64,
     },
 
+    // Podcast events
+    PodcastAdded {
+        podcast_id: i64,
+        title: String,
+    },
+    PodcastUpdated {
+        podcast_id: i64,
+        title: String,
+    },
+    PodcastDeleted {
+        podcast_id: i64,
+        title: String,
+    },
+    PodcastRefreshed {
+        podcast_id: i64,
+        title: String,
+    },
+
+    // Artist (music) events
+    ArtistAdded {
+        artist_id: i64,
+        name: String,
+    },
+    ArtistUpdated {
+        artist_id: i64,
+        name: String,
+    },
+    ArtistDeleted {
+        artist_id: i64,
+        name: String,
+    },
+    ArtistRefreshed {
+        artist_id: i64,
+        name: String,
+    },
+    TrackFileImported {
+        track_file_id: i64,
+        artist_id: i64,
+        album_id: i64,
+    },
+    TrackFileDeleted {
+        track_file_id: i64,
+        artist_id: i64,
+    },
+
     // Episode events
     EpisodeAdded {
         episode_id: i64,

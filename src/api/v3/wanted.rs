@@ -195,9 +195,9 @@ pub async fn get_wanted_cutoff(
     let episode_repo = EpisodeRepository::new(state.db.clone());
     let series_repo = SeriesRepository::new(state.db.clone());
 
-    // Fetch cutoff unmet episodes
+    // Fetch cutoff unmet episodes (no exclusions in v3 cutoff)
     let (episodes, total) = match episode_repo
-        .get_cutoff_unmet(page, page_size, &sort_key, &sort_direction, None)
+        .get_cutoff_unmet(page, page_size, &sort_key, &sort_direction, None, &[])
         .await
     {
         Ok(result) => result,

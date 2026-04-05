@@ -63,7 +63,7 @@ fn db_to_resource(model: &DelayProfileDbModel) -> DelayProfileResource {
         bypass_if_highest_quality: model.bypass_if_highest_quality,
         bypass_if_above_custom_format_score: model.bypass_if_above_custom_format_score > 0,
         minimum_custom_format_score: model.bypass_if_above_custom_format_score,
-        order: model.id as i32,
+        order: model.order,
         tags,
     }
 }
@@ -79,6 +79,7 @@ fn resource_to_db(resource: &DelayProfileResource, id: Option<i64>) -> DelayProf
         bypass_if_highest_quality: resource.bypass_if_highest_quality,
         bypass_if_above_custom_format_score: resource.minimum_custom_format_score,
         tags: serde_json::to_string(&resource.tags).unwrap_or_else(|_| "[]".to_string()),
+        order: resource.order,
     }
 }
 

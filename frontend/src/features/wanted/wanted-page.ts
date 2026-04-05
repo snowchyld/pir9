@@ -129,9 +129,10 @@ export class WantedPage extends BaseComponent {
           monitored: true,
           sortKey: this.sortKey.value,
           sortDirection: this.sortDirection.value,
-          contentType: this.contentTab === 'series' || this.contentTab === 'anime'
-            ? this.contentTab
-            : undefined,
+          contentType:
+            this.contentTab === 'series' || this.contentTab === 'anime'
+              ? this.contentTab
+              : undefined,
         },
       }),
   });
@@ -153,9 +154,10 @@ export class WantedPage extends BaseComponent {
           monitored: true,
           sortKey: this.sortKey.value,
           sortDirection: this.sortDirection.value,
-          contentType: this.contentTab === 'series' || this.contentTab === 'anime'
-            ? this.contentTab
-            : undefined,
+          contentType:
+            this.contentTab === 'series' || this.contentTab === 'anime'
+              ? this.contentTab
+              : undefined,
         },
       }),
   });
@@ -272,9 +274,10 @@ export class WantedPage extends BaseComponent {
     if (this.contentTab === 'movies') {
       count = this.movieQuery.data.value?.totalRecords ?? 0;
     } else if (this.contentTab === 'series' || this.contentTab === 'anime') {
-      count = this.subTab === 'missing'
-        ? (this.missingQuery.data.value?.totalRecords ?? 0)
-        : (this.cutoffQuery.data.value?.totalRecords ?? 0);
+      count =
+        this.subTab === 'missing'
+          ? (this.missingQuery.data.value?.totalRecords ?? 0)
+          : (this.cutoffQuery.data.value?.totalRecords ?? 0);
     }
     if (this.contentTab === 'music' || this.contentTab === 'podcasts') return '';
     const label = this.contentTab === 'movies' ? 'movies' : 'episodes';
@@ -285,9 +288,10 @@ export class WantedPage extends BaseComponent {
 
   private renderContentTab(tab: ContentTab, label: string, count: number): string {
     const active = this.contentTab === tab;
-    const countBadge = count >= 0
-      ? `<span class="tab-count">${count}</span>`
-      : '<span class="tab-count tab-count-stub">--</span>';
+    const countBadge =
+      count >= 0
+        ? `<span class="tab-count">${count}</span>`
+        : '<span class="tab-count tab-count-stub">--</span>';
     return `<button class="content-tab ${active ? 'active' : ''}"
       onclick="this.closest('wanted-page').handleContentTabClick('${tab}')">${label}${countBadge}</button>`;
   }
@@ -309,13 +313,14 @@ export class WantedPage extends BaseComponent {
   private renderToolbarActions(): string {
     if (this.contentTab === 'music' || this.contentTab === 'podcasts') return '';
 
-    const hasEpisodes = this.contentTab !== 'movies' && (
-      this.subTab === 'missing'
+    const hasEpisodes =
+      this.contentTab !== 'movies' &&
+      (this.subTab === 'missing'
         ? (this.missingQuery.data.value?.records?.length ?? 0) > 0
-        : (this.cutoffQuery.data.value?.records?.length ?? 0) > 0
-    );
+        : (this.cutoffQuery.data.value?.records?.length ?? 0) > 0);
 
-    const searchAllBtn = hasEpisodes ? html`
+    const searchAllBtn = hasEpisodes
+      ? html`
       <button class="search-all-btn"
         onclick="this.closest('wanted-page').handleSearchAll()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -324,7 +329,8 @@ export class WantedPage extends BaseComponent {
         </svg>
         Search All
       </button>
-    ` : '';
+    `
+      : '';
 
     return html`
       ${searchAllBtn}
@@ -458,9 +464,8 @@ export class WantedPage extends BaseComponent {
 
   private renderEpisodeRow(episode: MissingEpisode): string {
     const airDate = episode.airDate ? new Date(episode.airDate) : null;
-    const seriesPath = this.contentTab === 'anime'
-      ? `/anime`
-      : `/series/${episode.series.titleSlug}`;
+    const seriesPath =
+      this.contentTab === 'anime' ? `/anime` : `/series/${episode.series.titleSlug}`;
 
     return html`
       <tr>
@@ -670,9 +675,10 @@ export class WantedPage extends BaseComponent {
 
   handleSearchAll(): void {
     if (this.contentTab === 'movies') return;
-    const episodes = this.subTab === 'missing'
-      ? (this.missingQuery.data.value?.records ?? [])
-      : (this.cutoffQuery.data.value?.records ?? []);
+    const episodes =
+      this.subTab === 'missing'
+        ? (this.missingQuery.data.value?.records ?? [])
+        : (this.cutoffQuery.data.value?.records ?? []);
     const episodeIds = episodes.map((e) => e.id);
     if (episodeIds.length > 0) {
       this.searchMutation.mutate(episodeIds);
@@ -692,7 +698,9 @@ export class WantedPage extends BaseComponent {
 
   handleMovieSort(key: MovieSortKey): void {
     if (this.movieSortKey.value === key) {
-      this.movieSortDirection.set(this.movieSortDirection.value === 'ascending' ? 'descending' : 'ascending');
+      this.movieSortDirection.set(
+        this.movieSortDirection.value === 'ascending' ? 'descending' : 'ascending',
+      );
     } else {
       this.movieSortKey.set(key);
       this.movieSortDirection.set('ascending');

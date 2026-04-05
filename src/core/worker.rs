@@ -68,6 +68,16 @@ fn message_type_name(message: &Message) -> &'static str {
         Message::DeletePathsResult { .. } => "DeletePathsResult",
         Message::RenameFilesRequest { .. } => "RenameFilesRequest",
         Message::RenameFilesResult { .. } => "RenameFilesResult",
+        Message::PodcastAdded { .. } => "PodcastAdded",
+        Message::PodcastUpdated { .. } => "PodcastUpdated",
+        Message::PodcastDeleted { .. } => "PodcastDeleted",
+        Message::PodcastRefreshed { .. } => "PodcastRefreshed",
+        Message::ArtistAdded { .. } => "ArtistAdded",
+        Message::ArtistUpdated { .. } => "ArtistUpdated",
+        Message::ArtistDeleted { .. } => "ArtistDeleted",
+        Message::ArtistRefreshed { .. } => "ArtistRefreshed",
+        Message::TrackFileImported { .. } => "TrackFileImported",
+        Message::TrackFileDeleted { .. } => "TrackFileDeleted",
     }
 }
 

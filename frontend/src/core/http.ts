@@ -506,6 +506,108 @@ export interface UpdateInfo {
   updateAvailable: boolean;
 }
 
+export interface Artist {
+  id: number;
+  title: string;
+  titleSlug: string;
+  sortTitle: string;
+  status: 'continuing' | 'ended' | 'upcoming' | 'deleted';
+  overview?: string;
+  path: string;
+  rootFolderPath: string;
+  qualityProfileId: number;
+  monitored: boolean;
+  genres: string[];
+  tags: number[];
+  added: string;
+  images: SeriesImage[];
+  statistics?: ArtistStatistics;
+}
+
+export interface ArtistStatistics {
+  albumCount: number;
+  trackCount: number;
+  trackFileCount: number;
+  totalTrackCount: number;
+  sizeOnDisk: number;
+  percentOfTracks: number;
+}
+
+export interface Album {
+  id: number;
+  artistId: number;
+  title: string;
+  releaseDate?: string;
+  albumType: string;
+  monitored: boolean;
+  statistics?: {
+    trackCount: number;
+    trackFileCount: number;
+    totalTrackCount: number;
+    sizeOnDisk: number;
+    percentOfTracks: number;
+  };
+  images: SeriesImage[];
+}
+
+export interface ArtistLookupResult {
+  title: string;
+  sortTitle: string;
+  overview?: string;
+  images: SeriesImage[];
+  genres: string[];
+  statistics?: { albumCount: number };
+}
+
+export interface Podcast {
+  id: number;
+  title: string;
+  titleSlug: string;
+  sortTitle: string;
+  status: 'continuing' | 'ended';
+  overview?: string;
+  author?: string;
+  path: string;
+  rootFolderPath: string;
+  qualityProfileId: number;
+  monitored: boolean;
+  genres: string[];
+  tags: number[];
+  added: string;
+  images: SeriesImage[];
+  statistics?: PodcastStatistics;
+}
+
+export interface PodcastStatistics {
+  episodeCount: number;
+  episodeFileCount: number;
+  totalEpisodeCount: number;
+  sizeOnDisk: number;
+  percentOfEpisodes: number;
+}
+
+export interface PodcastEpisode {
+  id: number;
+  podcastId: number;
+  title: string;
+  airDate?: string;
+  overview?: string;
+  hasFile: boolean;
+  monitored: boolean;
+  episodeNumber: number;
+  seasonNumber: number;
+}
+
+export interface PodcastLookupResult {
+  title: string;
+  sortTitle: string;
+  overview?: string;
+  author?: string;
+  images: SeriesImage[];
+  genres: string[];
+  statistics?: { episodeCount: number };
+}
+
 /**
  * Extract the root folder from a full item path.
  * e.g. "/volume1/tv/Breaking Bad" → "/volume1/tv"

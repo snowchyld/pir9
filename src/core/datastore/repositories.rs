@@ -1448,6 +1448,7 @@ impl EpisodeRepository {
         sort_key: &str,
         sort_direction: &str,
         series_types: Option<&[i32]>,
+        exclude_episode_ids: &[i64],
     ) -> Result<(Vec<super::models::EpisodeDbModel>, i64)> {
         use crate::core::profiles::qualities::QualityModel;
         use std::collections::HashMap;
@@ -1504,10 +1505,14 @@ impl EpisodeRepository {
         .await?;
 
         // Step 5: Filter — keep episodes where file quality < profile cutoff
-        //         and optionally filter by series type
+        //         and optionally filter by series type and exclude specific episode IDs
         let mut cutoff_unmet: Vec<super::models::EpisodeDbModel> = episodes
             .into_iter()
             .filter(|ep| {
+                // Exclude specific episode IDs (e.g., actively downloading)
+                if !exclude_episode_ids.is_empty() && exclude_episode_ids.contains(&ep.id) {
+                    return false;
+                }
                 // Series type filter
                 if let Some(types) = series_types {
                     let st = series_type_map.get(&ep.series_id).copied().unwrap_or(0);
@@ -3083,6 +3088,1102 @@ impl LanguageProfileRepository {
     pub async fn delete(&self, id: i64) -> Result<()> {
         let pool = self.db.pool();
         sqlx::query("DELETE FROM language_profiles WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for import exclusions (global exclusion list)
+pub struct ImportExclusionRepository {
+    db: Database,
+}
+
+impl ImportExclusionRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_all(&self) -> Result<Vec<super::models::ImportExclusionDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::ImportExclusionDbModel>(
+            "SELECT * FROM import_exclusions ORDER BY title",
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_id(
+        &self,
+        id: i64,
+    ) -> Result<Option<super::models::ImportExclusionDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::ImportExclusionDbModel>(
+            "SELECT * FROM import_exclusions WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn add(
+        &self,
+        tmdb_id: Option<i32>,
+        imdb_id: Option<&str>,
+        tvdb_id: Option<i32>,
+        title: &str,
+        year: Option<i32>,
+        content_type: &str,
+    ) -> Result<i64> {
+        let pool = self.db.pool();
+        let tmdb_id_i64 = tmdb_id.map(|v| v as i64);
+        let tvdb_id_i64 = tvdb_id.map(|v| v as i64);
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO import_exclusions (tmdb_id, imdb_id, tvdb_id, title, year, content_type, added)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW())
+            RETURNING id
+            "#,
+        )
+        .bind(tmdb_id_i64)
+        .bind(imdb_id)
+        .bind(tvdb_id_i64)
+        .bind(title)
+        .bind(year)
+        .bind(content_type)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM import_exclusions WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn is_excluded_movie(
+        &self,
+        tmdb_id: Option<i64>,
+        imdb_id: Option<&str>,
+    ) -> Result<bool> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*) FROM import_exclusions
+            WHERE content_type = 'movie'
+              AND (
+                (tmdb_id IS NOT NULL AND tmdb_id = $1)
+                OR (imdb_id IS NOT NULL AND imdb_id = $2)
+              )
+            "#,
+        )
+        .bind(tmdb_id)
+        .bind(imdb_id)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0 > 0)
+    }
+
+    pub async fn is_excluded_series(
+        &self,
+        tvdb_id: Option<i64>,
+        imdb_id: Option<&str>,
+    ) -> Result<bool> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*) FROM import_exclusions
+            WHERE content_type = 'series'
+              AND (
+                (tvdb_id IS NOT NULL AND tvdb_id = $1)
+                OR (imdb_id IS NOT NULL AND imdb_id = $2)
+              )
+            "#,
+        )
+        .bind(tvdb_id)
+        .bind(imdb_id)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0 > 0)
+    }
+}
+
+/// Repository for import lists
+pub struct ImportListRepository {
+    db: Database,
+}
+
+impl ImportListRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_all(&self) -> Result<Vec<super::models::ImportListDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::ImportListDbModel>(
+            "SELECT * FROM import_lists ORDER BY name",
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_id(
+        &self,
+        id: i64,
+    ) -> Result<Option<super::models::ImportListDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::ImportListDbModel>(
+            "SELECT * FROM import_lists WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn insert(&self, item: &super::models::ImportListDbModel) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO import_lists (
+                name, enabled, list_type, list_url, root_folder_path,
+                quality_profile_id, monitored, search_on_add, content_type,
+                sync_interval_hours, last_synced_at, tags
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            RETURNING id
+            "#,
+        )
+        .bind(&item.name)
+        .bind(item.enabled)
+        .bind(&item.list_type)
+        .bind(&item.list_url)
+        .bind(&item.root_folder_path)
+        .bind(item.quality_profile_id)
+        .bind(item.monitored)
+        .bind(item.search_on_add)
+        .bind(&item.content_type)
+        .bind(item.sync_interval_hours)
+        .bind(item.last_synced_at)
+        .bind(&item.tags)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn update(&self, item: &super::models::ImportListDbModel) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            r#"
+            UPDATE import_lists SET
+                name = $1, enabled = $2, list_type = $3, list_url = $4,
+                root_folder_path = $5, quality_profile_id = $6, monitored = $7,
+                search_on_add = $8, content_type = $9, sync_interval_hours = $10,
+                last_synced_at = $11, tags = $12
+            WHERE id = $13
+            "#,
+        )
+        .bind(&item.name)
+        .bind(item.enabled)
+        .bind(&item.list_type)
+        .bind(&item.list_url)
+        .bind(&item.root_folder_path)
+        .bind(item.quality_profile_id)
+        .bind(item.monitored)
+        .bind(item.search_on_add)
+        .bind(&item.content_type)
+        .bind(item.sync_interval_hours)
+        .bind(item.last_synced_at)
+        .bind(&item.tags)
+        .bind(item.id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM import_lists WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_enabled(&self) -> Result<Vec<super::models::ImportListDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::ImportListDbModel>(
+            "SELECT * FROM import_lists WHERE enabled = true ORDER BY name",
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn update_last_synced(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("UPDATE import_lists SET last_synced_at = NOW() WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for per-import-list exclusions (tracks already-processed items)
+pub struct ImportListExclusionRepository {
+    db: Database,
+}
+
+impl ImportListExclusionRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn is_excluded(&self, list_id: i64, external_id: &str) -> Result<bool> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*) FROM import_list_exclusions
+            WHERE list_id = $1 AND external_id = $2
+            "#,
+        )
+        .bind(list_id)
+        .bind(external_id)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0 > 0)
+    }
+
+    pub async fn add(
+        &self,
+        list_id: i64,
+        external_id: &str,
+        title: &str,
+        content_type: &str,
+    ) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            r#"
+            INSERT INTO import_list_exclusions (list_id, external_id, title, content_type, added)
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (list_id, external_id) DO NOTHING
+            "#,
+        )
+        .bind(list_id)
+        .bind(external_id)
+        .bind(title)
+        .bind(content_type)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+}
+
+// ============================================================================
+// Music domain repositories
+// ============================================================================
+
+/// Repository for artists
+pub struct ArtistRepository {
+    db: Database,
+}
+
+impl ArtistRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_all(&self) -> Result<Vec<super::models::ArtistDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::ArtistDbModel>(
+            "SELECT * FROM artists ORDER BY sort_name",
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::ArtistDbModel>> {
+        let pool = self.db.pool();
+        let row =
+            sqlx::query_as::<_, super::models::ArtistDbModel>("SELECT * FROM artists WHERE id = $1")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+        Ok(row)
+    }
+
+    pub async fn get_by_musicbrainz_id(
+        &self,
+        musicbrainz_id: &str,
+    ) -> Result<Option<super::models::ArtistDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::ArtistDbModel>(
+            "SELECT * FROM artists WHERE musicbrainz_id = $1",
+        )
+        .bind(musicbrainz_id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_by_path(&self, path: &str) -> Result<Option<super::models::ArtistDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::ArtistDbModel>(
+            "SELECT * FROM artists WHERE path = $1",
+        )
+        .bind(path)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn insert(&self, artist: &super::models::ArtistDbModel) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO artists (
+                musicbrainz_id, name, clean_name, sort_name, overview,
+                artist_type, status, genres, images, tags,
+                path, root_folder_path, quality_profile_id, monitored,
+                added, last_info_sync, title_slug
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                $11, $12, $13, $14, $15, $16, $17
+            ) RETURNING id
+            "#,
+        )
+        .bind(&artist.musicbrainz_id)
+        .bind(&artist.name)
+        .bind(&artist.clean_name)
+        .bind(&artist.sort_name)
+        .bind(&artist.overview)
+        .bind(&artist.artist_type)
+        .bind(&artist.status)
+        .bind(&artist.genres)
+        .bind(&artist.images)
+        .bind(&artist.tags)
+        .bind(&artist.path)
+        .bind(&artist.root_folder_path)
+        .bind(artist.quality_profile_id)
+        .bind(artist.monitored)
+        .bind(artist.added)
+        .bind(artist.last_info_sync)
+        .bind(&artist.title_slug)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn update(&self, artist: &super::models::ArtistDbModel) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            r#"
+            UPDATE artists SET
+                musicbrainz_id = $1, name = $2, clean_name = $3, sort_name = $4,
+                overview = $5, artist_type = $6, status = $7, genres = $8,
+                images = $9, tags = $10, path = $11, root_folder_path = $12,
+                quality_profile_id = $13, monitored = $14, last_info_sync = $15,
+                title_slug = $16
+            WHERE id = $17
+            "#,
+        )
+        .bind(&artist.musicbrainz_id)
+        .bind(&artist.name)
+        .bind(&artist.clean_name)
+        .bind(&artist.sort_name)
+        .bind(&artist.overview)
+        .bind(&artist.artist_type)
+        .bind(&artist.status)
+        .bind(&artist.genres)
+        .bind(&artist.images)
+        .bind(&artist.tags)
+        .bind(&artist.path)
+        .bind(&artist.root_folder_path)
+        .bind(artist.quality_profile_id)
+        .bind(artist.monitored)
+        .bind(artist.last_info_sync)
+        .bind(&artist.title_slug)
+        .bind(artist.id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        // Albums and tracks cascade on delete via FK
+        sqlx::query("DELETE FROM artists WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for albums
+pub struct AlbumRepository {
+    db: Database,
+}
+
+impl AlbumRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_all(&self) -> Result<Vec<super::models::AlbumDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::AlbumDbModel>(
+            "SELECT * FROM albums ORDER BY artist_id, release_date",
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::AlbumDbModel>> {
+        let pool = self.db.pool();
+        let row =
+            sqlx::query_as::<_, super::models::AlbumDbModel>("SELECT * FROM albums WHERE id = $1")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+        Ok(row)
+    }
+
+    pub async fn get_by_artist_id(
+        &self,
+        artist_id: i64,
+    ) -> Result<Vec<super::models::AlbumDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::AlbumDbModel>(
+            "SELECT * FROM albums WHERE artist_id = $1 ORDER BY release_date",
+        )
+        .bind(artist_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_musicbrainz_id(
+        &self,
+        musicbrainz_id: &str,
+    ) -> Result<Option<super::models::AlbumDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::AlbumDbModel>(
+            "SELECT * FROM albums WHERE musicbrainz_id = $1",
+        )
+        .bind(musicbrainz_id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn insert(&self, album: &super::models::AlbumDbModel) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO albums (
+                artist_id, musicbrainz_id, title, clean_title, album_type,
+                release_date, genres, images, monitored, added, last_info_sync
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+            ) RETURNING id
+            "#,
+        )
+        .bind(album.artist_id)
+        .bind(&album.musicbrainz_id)
+        .bind(&album.title)
+        .bind(&album.clean_title)
+        .bind(&album.album_type)
+        .bind(album.release_date)
+        .bind(&album.genres)
+        .bind(&album.images)
+        .bind(album.monitored)
+        .bind(album.added)
+        .bind(album.last_info_sync)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn update(&self, album: &super::models::AlbumDbModel) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            r#"
+            UPDATE albums SET
+                artist_id = $1, musicbrainz_id = $2, title = $3, clean_title = $4,
+                album_type = $5, release_date = $6, genres = $7, images = $8,
+                monitored = $9, last_info_sync = $10
+            WHERE id = $11
+            "#,
+        )
+        .bind(album.artist_id)
+        .bind(&album.musicbrainz_id)
+        .bind(&album.title)
+        .bind(&album.clean_title)
+        .bind(&album.album_type)
+        .bind(album.release_date)
+        .bind(&album.genres)
+        .bind(&album.images)
+        .bind(album.monitored)
+        .bind(album.last_info_sync)
+        .bind(album.id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        // Tracks cascade on delete via FK
+        sqlx::query("DELETE FROM albums WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for tracks
+pub struct TrackRepository {
+    db: Database,
+}
+
+impl TrackRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::TrackDbModel>> {
+        let pool = self.db.pool();
+        let row =
+            sqlx::query_as::<_, super::models::TrackDbModel>("SELECT * FROM tracks WHERE id = $1")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+        Ok(row)
+    }
+
+    pub async fn get_by_album_id(
+        &self,
+        album_id: i64,
+    ) -> Result<Vec<super::models::TrackDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::TrackDbModel>(
+            "SELECT * FROM tracks WHERE album_id = $1 ORDER BY disc_number, track_number",
+        )
+        .bind(album_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_artist_id(
+        &self,
+        artist_id: i64,
+    ) -> Result<Vec<super::models::TrackDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::TrackDbModel>(
+            "SELECT * FROM tracks WHERE artist_id = $1 ORDER BY album_id, disc_number, track_number",
+        )
+        .bind(artist_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn insert(&self, track: &super::models::TrackDbModel) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO tracks (
+                album_id, artist_id, title, track_number, disc_number,
+                duration_ms, has_file, track_file_id, monitored, air_date_utc
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+            ) RETURNING id
+            "#,
+        )
+        .bind(track.album_id)
+        .bind(track.artist_id)
+        .bind(&track.title)
+        .bind(track.track_number)
+        .bind(track.disc_number)
+        .bind(track.duration_ms)
+        .bind(track.has_file)
+        .bind(track.track_file_id)
+        .bind(track.monitored)
+        .bind(track.air_date_utc)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn update(&self, track: &super::models::TrackDbModel) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            r#"
+            UPDATE tracks SET
+                album_id = $1, artist_id = $2, title = $3, track_number = $4,
+                disc_number = $5, duration_ms = $6, has_file = $7,
+                track_file_id = $8, monitored = $9, air_date_utc = $10
+            WHERE id = $11
+            "#,
+        )
+        .bind(track.album_id)
+        .bind(track.artist_id)
+        .bind(&track.title)
+        .bind(track.track_number)
+        .bind(track.disc_number)
+        .bind(track.duration_ms)
+        .bind(track.has_file)
+        .bind(track.track_file_id)
+        .bind(track.monitored)
+        .bind(track.air_date_utc)
+        .bind(track.id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM tracks WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for track files
+pub struct TrackFileRepository {
+    db: Database,
+}
+
+impl TrackFileRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::TrackFileDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::TrackFileDbModel>(
+            "SELECT * FROM track_files WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_by_artist_id(
+        &self,
+        artist_id: i64,
+    ) -> Result<Vec<super::models::TrackFileDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::TrackFileDbModel>(
+            "SELECT * FROM track_files WHERE artist_id = $1 ORDER BY album_id, path",
+        )
+        .bind(artist_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_album_id(
+        &self,
+        album_id: i64,
+    ) -> Result<Vec<super::models::TrackFileDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::TrackFileDbModel>(
+            "SELECT * FROM track_files WHERE album_id = $1 ORDER BY path",
+        )
+        .bind(album_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn insert(&self, file: &super::models::TrackFileDbModel) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO track_files (
+                artist_id, album_id, relative_path, path, size,
+                quality, media_info, date_added
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8
+            ) RETURNING id
+            "#,
+        )
+        .bind(file.artist_id)
+        .bind(file.album_id)
+        .bind(&file.relative_path)
+        .bind(&file.path)
+        .bind(file.size)
+        .bind(&file.quality)
+        .bind(&file.media_info)
+        .bind(file.date_added)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM track_files WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for podcasts
+pub struct PodcastRepository {
+    db: Database,
+}
+
+impl PodcastRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_all(&self) -> Result<Vec<super::models::PodcastDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::PodcastDbModel>(
+            "SELECT * FROM podcasts ORDER BY sort_title",
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::PodcastDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::PodcastDbModel>(
+            "SELECT * FROM podcasts WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_by_feed_url(
+        &self,
+        feed_url: &str,
+    ) -> Result<Option<super::models::PodcastDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::PodcastDbModel>(
+            "SELECT * FROM podcasts WHERE feed_url = $1",
+        )
+        .bind(feed_url)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn insert(&self, podcast: &super::models::PodcastDbModel) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO podcasts (
+                title, clean_title, sort_title, overview, author,
+                feed_url, website_url, genres, images, tags,
+                path, root_folder_path, quality_profile_id, monitored,
+                added, last_info_sync, title_slug
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                $11, $12, $13, $14, $15, $16, $17
+            ) RETURNING id
+            "#,
+        )
+        .bind(&podcast.title)
+        .bind(&podcast.clean_title)
+        .bind(&podcast.sort_title)
+        .bind(&podcast.overview)
+        .bind(&podcast.author)
+        .bind(&podcast.feed_url)
+        .bind(&podcast.website_url)
+        .bind(&podcast.genres)
+        .bind(&podcast.images)
+        .bind(&podcast.tags)
+        .bind(&podcast.path)
+        .bind(&podcast.root_folder_path)
+        .bind(podcast.quality_profile_id)
+        .bind(podcast.monitored)
+        .bind(podcast.added)
+        .bind(podcast.last_info_sync)
+        .bind(&podcast.title_slug)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn update(&self, podcast: &super::models::PodcastDbModel) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            r#"
+            UPDATE podcasts SET
+                title = $1, clean_title = $2, sort_title = $3, overview = $4,
+                author = $5, feed_url = $6, website_url = $7, genres = $8,
+                images = $9, tags = $10, path = $11, root_folder_path = $12,
+                quality_profile_id = $13, monitored = $14, last_info_sync = $15,
+                title_slug = $16
+            WHERE id = $17
+            "#,
+        )
+        .bind(&podcast.title)
+        .bind(&podcast.clean_title)
+        .bind(&podcast.sort_title)
+        .bind(&podcast.overview)
+        .bind(&podcast.author)
+        .bind(&podcast.feed_url)
+        .bind(&podcast.website_url)
+        .bind(&podcast.genres)
+        .bind(&podcast.images)
+        .bind(&podcast.tags)
+        .bind(&podcast.path)
+        .bind(&podcast.root_folder_path)
+        .bind(podcast.quality_profile_id)
+        .bind(podcast.monitored)
+        .bind(podcast.last_info_sync)
+        .bind(&podcast.title_slug)
+        .bind(podcast.id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        // podcast_episodes cascade on delete, but be explicit
+        sqlx::query("DELETE FROM podcast_episodes WHERE podcast_id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        sqlx::query("DELETE FROM podcast_files WHERE podcast_id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        sqlx::query("DELETE FROM podcasts WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for podcast episodes
+pub struct PodcastEpisodeRepository {
+    db: Database,
+}
+
+impl PodcastEpisodeRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_by_podcast_id(
+        &self,
+        podcast_id: i64,
+    ) -> Result<Vec<super::models::PodcastEpisodeDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::PodcastEpisodeDbModel>(
+            "SELECT * FROM podcast_episodes WHERE podcast_id = $1 ORDER BY season_number, COALESCE(episode_number, 0)",
+        )
+        .bind(podcast_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_id(
+        &self,
+        id: i64,
+    ) -> Result<Option<super::models::PodcastEpisodeDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::PodcastEpisodeDbModel>(
+            "SELECT * FROM podcast_episodes WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_by_guid(
+        &self,
+        podcast_id: i64,
+        guid: &str,
+    ) -> Result<Option<super::models::PodcastEpisodeDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::PodcastEpisodeDbModel>(
+            "SELECT * FROM podcast_episodes WHERE podcast_id = $1 AND guid = $2",
+        )
+        .bind(podcast_id)
+        .bind(guid)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn insert(
+        &self,
+        episode: &super::models::PodcastEpisodeDbModel,
+    ) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO podcast_episodes (
+                podcast_id, title, overview, episode_number, season_number,
+                air_date_utc, duration_ms, download_url, file_size,
+                has_file, podcast_file_id, monitored, guid
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+            ) RETURNING id
+            "#,
+        )
+        .bind(episode.podcast_id)
+        .bind(&episode.title)
+        .bind(&episode.overview)
+        .bind(episode.episode_number)
+        .bind(episode.season_number)
+        .bind(episode.air_date_utc)
+        .bind(episode.duration_ms)
+        .bind(&episode.download_url)
+        .bind(episode.file_size)
+        .bind(episode.has_file)
+        .bind(episode.podcast_file_id)
+        .bind(episode.monitored)
+        .bind(&episode.guid)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn update(
+        &self,
+        episode: &super::models::PodcastEpisodeDbModel,
+    ) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            r#"
+            UPDATE podcast_episodes SET
+                title = $1, overview = $2, episode_number = $3, season_number = $4,
+                air_date_utc = $5, duration_ms = $6, download_url = $7, file_size = $8,
+                has_file = $9, podcast_file_id = $10, monitored = $11, guid = $12
+            WHERE id = $13
+            "#,
+        )
+        .bind(&episode.title)
+        .bind(&episode.overview)
+        .bind(episode.episode_number)
+        .bind(episode.season_number)
+        .bind(episode.air_date_utc)
+        .bind(episode.duration_ms)
+        .bind(&episode.download_url)
+        .bind(episode.file_size)
+        .bind(episode.has_file)
+        .bind(episode.podcast_file_id)
+        .bind(episode.monitored)
+        .bind(&episode.guid)
+        .bind(episode.id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM podcast_episodes WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for podcast files
+pub struct PodcastFileRepository {
+    db: Database,
+}
+
+impl PodcastFileRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_by_id(
+        &self,
+        id: i64,
+    ) -> Result<Option<super::models::PodcastFileDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::PodcastFileDbModel>(
+            "SELECT * FROM podcast_files WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_by_podcast_id(
+        &self,
+        podcast_id: i64,
+    ) -> Result<Vec<super::models::PodcastFileDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::PodcastFileDbModel>(
+            "SELECT * FROM podcast_files WHERE podcast_id = $1 ORDER BY date_added DESC",
+        )
+        .bind(podcast_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn insert(
+        &self,
+        file: &super::models::PodcastFileDbModel,
+    ) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO podcast_files (
+                podcast_id, relative_path, path, size, quality,
+                media_info, date_added
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7
+            ) RETURNING id
+            "#,
+        )
+        .bind(file.podcast_id)
+        .bind(&file.relative_path)
+        .bind(&file.path)
+        .bind(file.size)
+        .bind(&file.quality)
+        .bind(&file.media_info)
+        .bind(file.date_added)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM podcast_files WHERE id = $1")
             .bind(id)
             .execute(pool)
             .await?;

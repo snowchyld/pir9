@@ -147,8 +147,9 @@ pub fn parse_title(title: &str) -> Option<ParsedEpisodeInfo> {
         ..Default::default()
     };
 
-    // Parse quality
+    // Parse quality and language
     info.quality = parse_quality(title);
+    info.languages = detect_languages(title);
     info.is_proper = PROPER_REGEX.is_match(title);
     info.is_repack = REPACK_REGEX.is_match(title);
 
@@ -280,6 +281,79 @@ pub fn parse_title(title: &str) -> Option<ParsedEpisodeInfo> {
     }
 
     Some(info)
+}
+
+/// Detect languages from a release title based on common markers.
+/// Returns English as default if no explicit language marker is found.
+pub fn detect_languages(title: &str) -> Vec<Language> {
+    let upper = title.to_uppercase();
+    let mut langs = Vec::new();
+
+    // Map of title markers to language IDs (matching LANGUAGES static)
+    let markers: &[(&[&str], i32)] = &[
+        (&["FRENCH", "VOSTFR", "TRUEFRENCH", "VFF", "VFQ"], 2),     // French
+        (&["SPANISH", "LATINO", "CASTELLANO", "SPA"], 3),             // Spanish
+        (&["GERMAN", "DEUTSCH"], 4),                                   // German
+        (&["ITALIAN", "ITA"], 5),                                      // Italian
+        (&["DANISH", "DAN"], 6),                                       // Danish
+        (&["DUTCH", "NLD", "FLEMISH"], 7),                             // Dutch
+        (&["JAPANESE", "JPN"], 8),                                     // Japanese
+        (&["ICELANDIC"], 9),                                           // Icelandic
+        (&["CHINESE", "CHI", "MANDARIN", "CANTONESE"], 10),           // Chinese
+        (&["RUSSIAN", "RUS"], 11),                                     // Russian
+        (&["POLISH", "POL", "PL."], 12),                               // Polish
+        (&["VIETNAMESE", "VIE"], 13),                                  // Vietnamese
+        (&["SWEDISH", "SWE"], 14),                                     // Swedish
+        (&["NORWEGIAN", "NOR", "NORSK"], 15),                         // Norwegian
+        (&["FINNISH", "FIN"], 16),                                     // Finnish
+        (&["TURKISH", "TUR"], 17),                                     // Turkish
+        (&["PORTUGUESE", "POR"], 18),                                  // Portuguese
+        (&["KOREAN", "KOR"], 19),                                      // Korean
+        (&["HUNGARIAN", "HUN"], 20),                                   // Hungarian
+        (&["HEBREW", "HEB"], 21),                                      // Hebrew
+        (&["CZECH", "CZE", "CES"], 22),                                // Czech
+        (&["HINDI", "HIN"], 23),                                       // Hindi
+        (&["ROMANIAN", "RON", "ROM"], 24),                             // Romanian
+        (&["THAI", "THA"], 25),                                        // Thai
+        (&["ARABIC", "ARA"], 26),                                      // Arabic
+    ];
+
+    // Check for multi-language indicators
+    let is_multi = upper.contains("MULTI") || upper.contains("DUAL");
+
+    for (terms, lang_id) in markers {
+        for term in *terms {
+            // Match as whole word: surrounded by separators or string boundary
+            let pattern = format!(r"(?:^|[.\s_\-\[\(]){}(?:$|[.\s_\-\]\)])", regex::escape(term));
+            if let Ok(re) = Regex::new(&pattern) {
+                if re.is_match(&upper) {
+                    if let Some(lang) = Language::from_id(*lang_id) {
+                        if !langs.iter().any(|l: &Language| l.id == *lang_id) {
+                            langs.push(lang);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // If multi-language flag but no specific language found, add English
+    if is_multi && langs.is_empty() {
+        langs.push(Language::english());
+    }
+
+    // Default to English if no language markers found
+    if langs.is_empty() {
+        langs.push(Language::english());
+    }
+
+    // For MULTI/DUAL, ensure English is included
+    if is_multi && !langs.iter().any(|l| l.id == 1) {
+        langs.insert(0, Language::english());
+    }
+
+    langs
 }
 
 /// Clean a title string (remove dots, underscores, normalize spaces)
@@ -722,5 +796,43 @@ mod tests {
 
         // Should pick the 2014 version (index 1), not the 1990 version
         assert_eq!(best_series_match(&parsed, &candidates), Some(1));
+    }
+
+    #[test]
+    fn test_detect_languages_english_default() {
+        let langs = detect_languages("Show.S01E01.1080p.WEB-DL.DD5.1.H.264-GROUP");
+        assert_eq!(langs.len(), 1);
+        assert_eq!(langs[0].id, 1); // English
+    }
+
+    #[test]
+    fn test_detect_languages_french() {
+        let langs = detect_languages("Show.S01E01.FRENCH.1080p.WEB-DL");
+        assert!(langs.iter().any(|l| l.id == 2)); // French
+    }
+
+    #[test]
+    fn test_detect_languages_multi() {
+        let langs = detect_languages("Show.S01E01.MULTi.1080p.BluRay");
+        assert!(langs.iter().any(|l| l.id == 1)); // English included for MULTI
+    }
+
+    #[test]
+    fn test_detect_languages_german() {
+        let langs = detect_languages("Show.S01E01.GERMAN.720p.WEB-DL");
+        assert!(langs.iter().any(|l| l.id == 4)); // German
+    }
+
+    #[test]
+    fn test_detect_languages_dual_french() {
+        let langs = detect_languages("Show.S01E01.DUAL.FRENCH.1080p");
+        assert!(langs.iter().any(|l| l.id == 1)); // English
+        assert!(langs.iter().any(|l| l.id == 2)); // French
+    }
+
+    #[test]
+    fn test_detect_languages_vostfr() {
+        let langs = detect_languages("Show.S01E01.VOSTFR.1080p.WEB-DL");
+        assert!(langs.iter().any(|l| l.id == 2)); // French (VOSTFR marker)
     }
 }

@@ -87,6 +87,7 @@ services:
       - PIR9_DB_CONNECTION=postgresql://${POSTGRES_USER:-pir9}:${POSTGRES_PASSWORD:-pir9}@postgres:5432/${POSTGRES_DB:-pir9}
       - PIR9_IMDB_SERVICE_URL=http://imdb:8990
       - PIR9_IMDB_ENABLED=${PIR9_IMDB_ENABLED:-true}
+      - PIR9_MB_URL=http://musicbrainz:8991
       - PIR9_TVDB_API_KEY=${PIR9_TVDB_API_KEY:-}
       - PIR9_TMDB_API_KEY=${PIR9_TMDB_API_KEY:-}
       - FANART_API=${FANART_API:-}
@@ -97,6 +98,8 @@ services:
       postgres:
         condition: service_healthy
       imdb:
+        condition: service_healthy
+      musicbrainz:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -208,9 +211,64 @@ services:
       retries: 3
       start_period: 10s
 
+  # ============================================================================
+  # PostgreSQL - MusicBrainz database
+  # ============================================================================
+  postgres-musicbrainz:
+    image: postgres:16-alpine
+    container_name: pir9-postgres-musicbrainz
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pir9}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pir9}
+      POSTGRES_DB: pir9_musicbrainz
+    volumes:
+      - postgres-musicbrainz-data:/var/lib/postgresql/data
+    ports:
+      - "5436:5432"
+    networks:
+      - pir9-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pir9} -d pir9_musicbrainz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # MusicBrainz Service - Manages MusicBrainz dataset sync and lookups
+  # ============================================================================
+  musicbrainz:
+    build:
+      context: ./services/pir9-musicbrainz
+      dockerfile: Dockerfile
+    image: pir9-musicbrainz:latest
+    container_name: pir9-musicbrainz
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    environment:
+      - RUST_LOG=info,pir9_musicbrainz=debug
+      - PIR9_MB_PORT=8991
+      - PIR9_MB_DB_URL=postgresql://${POSTGRES_USER:-pir9}:${POSTGRES_PASSWORD:-pir9}@postgres-musicbrainz:5432/pir9_musicbrainz
+    depends_on:
+      postgres-musicbrainz:
+        condition: service_healthy
+    networks:
+      - pir9-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8991/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
 volumes:
   postgres-data:
   postgres-imdb-data:
+  postgres-musicbrainz-data:
   redis-data:
 
 networks:

@@ -19,13 +19,18 @@ pub mod filesystem;
 pub mod health;
 pub mod history;
 pub mod imdb;
+pub mod importexclusion;
+pub mod importlist;
 pub mod indexers;
 pub mod localization;
 pub mod log;
 pub mod manualimport;
 pub mod movies;
+pub mod music;
+pub mod musicbrainz;
 pub mod notification;
 pub mod parse;
+pub mod podcast;
 pub mod profile;
 pub mod quality;
 pub mod queue;
@@ -46,6 +51,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         // Core resources
         .nest("/series", series::routes())
         .nest("/movie", movies::routes())
+        .nest("/artist", music::routes())
+        .nest("/album", music::album_routes())
+        .nest("/track", music::track_routes())
+        .nest("/podcast", podcast::routes())
         .nest("/episode", episodes::routes())
         .nest("/episodeFile", episodefile::routes())
         .nest("/episodefile", episodefile::routes()) // lowercase alias
@@ -91,6 +100,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .nest("/filesystem", filesystem::routes()) // lowercase alias
         // IMDB local database
         .nest("/imdb", imdb::routes())
+        // MusicBrainz service
+        .nest("/musicbrainz", musicbrainz::routes())
         // Other
         .nest("/localization", localization::routes())
         .nest("/tag", tag::routes())
@@ -99,6 +110,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .nest("/remotePathMapping", remotepathmapping::routes())
         .nest("/remotepathmapping", remotepathmapping::routes()) // lowercase alias
         .nest("/blocklist", blocklist::routes())
+        .nest("/importExclusion", importexclusion::routes())
+        .nest("/importexclusion", importexclusion::routes()) // lowercase alias
+        .nest("/importList", importlist::routes())
+        .nest("/importlist", importlist::routes()) // lowercase alias
         // Rename (top-level for Sonarr compat, also available under /episodefile/rename)
         .route(
             "/rename",

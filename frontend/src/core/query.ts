@@ -222,6 +222,26 @@ export function useMovieDetailQuery(id: number) {
 }
 
 /**
+ * Create a query for fetching artists list
+ */
+export function useArtistsQuery() {
+  return createQuery({
+    queryKey: ['/artist'],
+    queryFn: () => http.get<import('./http').Artist[]>('/artist'),
+  });
+}
+
+/**
+ * Create a query for fetching podcasts list
+ */
+export function usePodcastsQuery() {
+  return createQuery({
+    queryKey: ['/podcast'],
+    queryFn: () => http.get<import('./http').Podcast[]>('/podcast'),
+  });
+}
+
+/**
  * Create a query for fetching episodes
  */
 export function useEpisodesQuery(seriesId: number) {

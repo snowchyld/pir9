@@ -48,6 +48,20 @@ export const routes: Route[] = [
   { path: '/add/movies', component: 'add-movie-page', title: 'Add Movie' },
   { path: '/add/movies/import', component: 'import-movie-page', title: 'Import Movies' },
 
+  // Music
+  { path: '/music', component: 'music-index-page', title: 'Music' },
+  { path: '/music/:titleSlug', component: 'artist-detail-page', title: 'Artist' },
+
+  // Add Music
+  { path: '/add-music', component: 'add-music-page', title: 'Add Artist' },
+
+  // Podcasts
+  { path: '/podcasts', component: 'podcasts-index-page', title: 'Podcasts' },
+  { path: '/podcasts/:titleSlug', component: 'podcast-detail-page', title: 'Podcast' },
+
+  // Add Podcast
+  { path: '/add-podcast', component: 'add-podcast-page', title: 'Add Podcast' },
+
   // Calendar
   { path: '/calendar', component: 'calendar-page', title: 'Calendar' },
 

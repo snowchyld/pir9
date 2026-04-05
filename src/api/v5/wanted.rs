@@ -227,6 +227,7 @@ pub async fn get_wanted_cutoff(
             &sort_key,
             &sort_direction,
             series_types.as_deref(),
+            &[],
         )
         .await
     {

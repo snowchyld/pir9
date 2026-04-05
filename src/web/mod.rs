@@ -23,6 +23,7 @@ use crate::core::{
     imdb::ImdbClient,
     messaging::{EventBus, HybridEventBus},
     metadata::MetadataService,
+    musicbrainz::MusicBrainzClient,
     scanner::ScanResultConsumer,
     scheduler::JobScheduler,
 };
@@ -35,6 +36,8 @@ pub struct AppState {
     pub scheduler: JobScheduler,
     /// IMDB microservice client
     pub imdb_client: ImdbClient,
+    /// MusicBrainz microservice client (None if PIR9_MB_URL not set)
+    pub musicbrainz_client: Option<MusicBrainzClient>,
     /// Unified metadata service (IMDB + Skyhook)
     pub metadata_service: MetadataService,
     /// Event bus for real-time updates (local or Redis-backed)
@@ -55,6 +58,7 @@ impl AppState {
         scheduler: JobScheduler,
     ) -> anyhow::Result<Arc<Self>> {
         let imdb_client = ImdbClient::from_env();
+        let musicbrainz_client = MusicBrainzClient::from_env();
         let tvmaze_client = crate::core::tvmaze::TvMazeClient::new();
         let tvdb_client = crate::core::tvdb::TvdbClient::from_env();
         let metadata_service = MetadataService::new(imdb_client.clone(), tvmaze_client, tvdb_client);
@@ -63,6 +67,7 @@ impl AppState {
             db,
             scheduler,
             imdb_client,
+            musicbrainz_client,
             metadata_service,
             event_bus: EventBus::new(),
             hybrid_event_bus: None,
@@ -95,6 +100,7 @@ impl AppState {
         info!("Redis event bus initialized");
 
         let imdb_client = ImdbClient::from_env();
+        let musicbrainz_client = MusicBrainzClient::from_env();
         let tvmaze_client = crate::core::tvmaze::TvMazeClient::new();
         let tvdb_client = crate::core::tvdb::TvdbClient::from_env();
         let metadata_service = MetadataService::new(imdb_client.clone(), tvmaze_client, tvdb_client);
@@ -103,6 +109,7 @@ impl AppState {
             db,
             scheduler,
             imdb_client,
+            musicbrainz_client,
             metadata_service,
             event_bus: EventBus::new(),
             hybrid_event_bus: Some(hybrid_bus),

@@ -249,6 +249,7 @@ pub struct DelayProfileDbModel {
     pub bypass_if_highest_quality: bool,
     pub bypass_if_above_custom_format_score: i32,
     pub tags: String, // JSON serialized
+    pub order: i32,
 }
 
 /// Custom format database model
@@ -382,4 +383,177 @@ pub struct TrackedDownloadDbModel {
     pub is_upgrade: bool,              // Whether this is an upgrade
     pub added: DateTime<Utc>,
     pub movie_id: Option<i64>, // FK to movies (for movie downloads)
+}
+
+/// Import exclusion database model
+/// Tracks movies/series that should be excluded from automatic import
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ImportExclusionDbModel {
+    pub id: i64,
+    pub tmdb_id: Option<i64>,
+    pub imdb_id: Option<String>,
+    pub tvdb_id: Option<i64>,
+    pub title: String,
+    pub year: Option<i32>,
+    pub content_type: String,
+    pub added: DateTime<Utc>,
+}
+
+/// Import list database model
+/// Configuration for external lists (IMDB, Trakt) that auto-add content
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ImportListDbModel {
+    pub id: i64,
+    pub name: String,
+    pub enabled: bool,
+    pub list_type: String,
+    pub list_url: Option<String>,
+    pub root_folder_path: String,
+    pub quality_profile_id: i64,
+    pub monitored: bool,
+    pub search_on_add: bool,
+    pub content_type: String,
+    pub sync_interval_hours: i32,
+    pub last_synced_at: Option<DateTime<Utc>>,
+    pub tags: String,
+}
+
+/// Release profile database model
+/// Preferred words, required/ignored terms for release scoring
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ReleaseProfileDbModel {
+    pub id: i64,
+    pub name: String,
+    pub enabled: bool,
+    pub required: String,  // JSON array of required terms
+    pub ignored: String,   // JSON array of ignored terms
+    pub preferred: String, // JSON array of {key: term, value: score}
+    pub include_preferred_when_renaming: bool,
+    pub indexer_id: i64,
+    pub tags: String,
+}
+
+/// Artist database model (music domain)
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ArtistDbModel {
+    pub id: i64,
+    pub musicbrainz_id: Option<String>,
+    pub name: String,
+    pub clean_name: String,
+    pub sort_name: String,
+    pub overview: Option<String>,
+    pub artist_type: String,
+    pub status: String,
+    pub genres: String,  // JSON serialized
+    pub images: String,  // JSON serialized
+    pub tags: String,    // JSON serialized
+    pub path: String,
+    pub root_folder_path: String,
+    pub quality_profile_id: i64,
+    pub monitored: bool,
+    pub added: DateTime<Utc>,
+    pub last_info_sync: Option<DateTime<Utc>>,
+    pub title_slug: String,
+}
+
+/// Album database model (music domain)
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct AlbumDbModel {
+    pub id: i64,
+    pub artist_id: i64,
+    pub musicbrainz_id: Option<String>,
+    pub title: String,
+    pub clean_title: String,
+    pub album_type: String,
+    pub release_date: Option<NaiveDate>,
+    pub genres: String,  // JSON serialized
+    pub images: String,  // JSON serialized
+    pub monitored: bool,
+    pub added: DateTime<Utc>,
+    pub last_info_sync: Option<DateTime<Utc>>,
+}
+
+/// Track database model (music domain)
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct TrackDbModel {
+    pub id: i64,
+    pub album_id: i64,
+    pub artist_id: i64,
+    pub title: String,
+    pub track_number: i32,
+    pub disc_number: i32,
+    pub duration_ms: Option<i32>,
+    pub has_file: bool,
+    pub track_file_id: Option<i64>,
+    pub monitored: bool,
+    pub air_date_utc: Option<DateTime<Utc>>,
+}
+
+/// Track file database model (music domain)
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct TrackFileDbModel {
+    pub id: i64,
+    pub artist_id: i64,
+    pub album_id: i64,
+    pub relative_path: String,
+    pub path: String,
+    pub size: i64,
+    pub quality: String,            // JSON serialized
+    pub media_info: Option<String>, // JSON serialized
+    pub date_added: DateTime<Utc>,
+}
+
+/// Podcast database model
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PodcastDbModel {
+    pub id: i64,
+    pub title: String,
+    pub clean_title: String,
+    pub sort_title: String,
+    pub overview: Option<String>,
+    pub author: Option<String>,
+    pub feed_url: String,
+    pub website_url: Option<String>,
+    pub genres: String,  // JSON serialized
+    pub images: String,  // JSON serialized
+    pub tags: String,    // JSON serialized
+    pub path: String,
+    pub root_folder_path: String,
+    pub quality_profile_id: i64,
+    pub monitored: bool,
+    pub added: DateTime<Utc>,
+    pub last_info_sync: Option<DateTime<Utc>>,
+    pub title_slug: String,
+}
+
+/// Podcast episode database model
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PodcastEpisodeDbModel {
+    pub id: i64,
+    pub podcast_id: i64,
+    pub title: String,
+    pub overview: Option<String>,
+    pub episode_number: Option<i32>,
+    pub season_number: i32,
+    pub air_date_utc: Option<DateTime<Utc>>,
+    pub duration_ms: Option<i32>,
+    pub download_url: Option<String>,
+    pub file_size: Option<i64>,
+    pub has_file: bool,
+    pub podcast_file_id: Option<i64>,
+    pub monitored: bool,
+    pub guid: Option<String>,
+}
+
+/// Podcast file database model
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PodcastFileDbModel {
+    pub id: i64,
+    pub podcast_id: i64,
+    pub relative_path: String,
+    pub path: String,
+    pub size: i64,
+    pub quality: String,            // JSON serialized
+    pub media_info: Option<String>, // JSON serialized
+    pub date_added: DateTime<Utc>,
 }

@@ -54,6 +54,20 @@ import './features/add-series/import-series-page';
 import './features/add-movie/add-movie-page';
 import './features/add-movie/import-movie-page';
 
+// Music
+import './features/music/music-index-page';
+import './features/music/artist-detail-page';
+
+// Add Music
+import './features/add-music/add-music-page';
+
+// Podcasts
+import './features/podcasts/podcasts-index-page';
+import './features/podcasts/podcast-detail-page';
+
+// Add Podcast
+import './features/add-podcast/add-podcast-page';
+
 // Calendar
 import './features/calendar/calendar-page';
 

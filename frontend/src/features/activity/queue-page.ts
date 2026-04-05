@@ -791,9 +791,7 @@ export class QueuePage extends BaseComponent {
     const bytesCopied = p.bytesCopied ?? 0;
     const bytesTotal = p.bytesTotal ?? 0;
     const hasBytesData = p.stage === 'copying' && bytesTotal > 0;
-    const pct = hasBytesData
-      ? ((bytesCopied / bytesTotal) * 100).toFixed(1)
-      : p.percent.toFixed(1);
+    const pct = hasBytesData ? ((bytesCopied / bytesTotal) * 100).toFixed(1) : p.percent.toFixed(1);
     const stageLabel = this.importStageLabel(p.stage);
     const fileLabel = p.currentFile ? this.truncate(p.currentFile, 30) : '';
     const fileInfo = p.filesTotal > 1 ? `${p.filesProcessed}/${p.filesTotal} files` : '';

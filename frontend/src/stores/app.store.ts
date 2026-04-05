@@ -232,6 +232,86 @@ export function setAnimeRootFolderFilter(folder: string): void {
 }
 
 /**
+ * Music view mode
+ */
+export const musicViewMode = persistedSignal<ViewMode>('music-view-mode', 'posters');
+
+export function setMusicViewMode(mode: ViewMode): void {
+  musicViewMode.set(mode);
+}
+
+/**
+ * Music sort key
+ */
+export type MusicSortKey = 'sortTitle' | 'status' | 'added' | 'sizeOnDisk';
+
+export const musicSortKey = persistedSignal<MusicSortKey>('music-sort-key', 'sortTitle');
+export const musicSortDirection = persistedSignal<'ascending' | 'descending'>(
+  'music-sort-direction',
+  'ascending',
+);
+
+export function setMusicSort(key: MusicSortKey, direction?: 'ascending' | 'descending'): void {
+  if (key === musicSortKey.value && !direction) {
+    musicSortDirection.update((d) => (d === 'ascending' ? 'descending' : 'ascending'));
+  } else {
+    musicSortKey.set(key);
+    if (direction) {
+      musicSortDirection.set(direction);
+    }
+  }
+}
+
+/**
+ * Music filter
+ */
+export const musicFilter = persistedSignal<string>('music-filter', 'all');
+
+export function setMusicFilter(filter: string): void {
+  musicFilter.set(filter);
+}
+
+/**
+ * Podcast view mode
+ */
+export const podcastViewMode = persistedSignal<ViewMode>('podcast-view-mode', 'posters');
+
+export function setPodcastViewMode(mode: ViewMode): void {
+  podcastViewMode.set(mode);
+}
+
+/**
+ * Podcast sort key
+ */
+export type PodcastSortKey = 'sortTitle' | 'status' | 'added' | 'sizeOnDisk';
+
+export const podcastSortKey = persistedSignal<PodcastSortKey>('podcast-sort-key', 'sortTitle');
+export const podcastSortDirection = persistedSignal<'ascending' | 'descending'>(
+  'podcast-sort-direction',
+  'ascending',
+);
+
+export function setPodcastSort(key: PodcastSortKey, direction?: 'ascending' | 'descending'): void {
+  if (key === podcastSortKey.value && !direction) {
+    podcastSortDirection.update((d) => (d === 'ascending' ? 'descending' : 'ascending'));
+  } else {
+    podcastSortKey.set(key);
+    if (direction) {
+      podcastSortDirection.set(direction);
+    }
+  }
+}
+
+/**
+ * Podcast filter
+ */
+export const podcastFilter = persistedSignal<string>('podcast-filter', 'all');
+
+export function setPodcastFilter(filter: string): void {
+  podcastFilter.set(filter);
+}
+
+/**
  * Global search query
  */
 export const searchQuery = signal('');

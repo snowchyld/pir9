@@ -34,6 +34,27 @@ interface SyncDataset {
   errorMessage: string | null;
 }
 
+interface MbStats {
+  artistCount: number;
+  releaseGroupCount: number;
+  releaseCount: number;
+  coverArtCount: number;
+  lastSync: string | null;
+  dbSizeBytes: number;
+}
+
+interface MbSyncStatus {
+  lastSync: {
+    datasetName: string;
+    rowsProcessed: number;
+    rowsInserted: number;
+    status: string;
+    startedAt: string;
+    completedAt: string | null;
+    errorMessage: string | null;
+  } | null;
+}
+
 interface ImdbSeries {
   imdbId: number;
   imdbIdFormatted: string;
@@ -111,6 +132,61 @@ export class ImdbSettings extends BaseComponent {
     },
   });
 
+  // MusicBrainz queries and mutations
+  private mbStatsQuery = createQuery({
+    queryKey: ['/musicbrainz/stats'],
+    queryFn: () => http.get<MbStats>('/musicbrainz/stats'),
+  });
+
+  private mbSyncMutation = createMutation({
+    mutationFn: () => http.post('/musicbrainz/sync', {}),
+    onSuccess: () => {
+      showSuccess('MusicBrainz sync started in background');
+      this.startMbAutoRefresh();
+      setTimeout(() => {
+        invalidateQueries(['/musicbrainz/stats']);
+        invalidateQueries(['/musicbrainz/sync/status']);
+      }, 1000);
+    },
+    onError: () => {
+      showError('Failed to start MusicBrainz sync');
+    },
+  });
+
+  private mbSyncStatusQuery = createQuery({
+    queryKey: ['/musicbrainz/sync/status'],
+    queryFn: () => http.get<MbSyncStatus>('/musicbrainz/sync/status'),
+  });
+
+  private mbCancelMutation = createMutation({
+    mutationFn: () => http.post('/musicbrainz/sync/cancel', {}),
+    onSuccess: () => {
+      this.stopMbAutoRefresh();
+      invalidateQueries(['/musicbrainz/sync/status']);
+      showSuccess('MusicBrainz sync cancelled');
+    },
+    onError: () => {
+      showError('Failed to cancel MusicBrainz sync');
+    },
+  });
+
+  private mbRefreshInterval: number | null = null;
+
+  private startMbAutoRefresh(): void {
+    if (this.mbRefreshInterval) return;
+    this.mbRefreshInterval = window.setInterval(() => {
+      invalidateQueries(['/musicbrainz/stats']);
+      invalidateQueries(['/musicbrainz/sync/status']);
+    }, 3000);
+  }
+
+  private stopMbAutoRefresh(): void {
+    if (this.mbRefreshInterval) {
+      clearInterval(this.mbRefreshInterval);
+      this.mbRefreshInterval = null;
+    }
+  }
+
   protected onInit(): void {
     this.watch(this.statsQuery.data);
     this.watch(this.statsQuery.isLoading);
@@ -118,14 +194,25 @@ export class ImdbSettings extends BaseComponent {
     this.watch(this.searchResults);
     this.watch(this.isSearching);
     this.watch(this.searchTerm);
+    this.watch(this.mbStatsQuery.data);
+    this.watch(this.mbSyncStatusQuery.data);
 
     // Check if a sync is already running and start auto-refresh
     this.checkAndStartAutoRefresh();
+    this.checkMbAutoRefresh();
   }
 
   disconnectedCallback(): void {
     super.disconnectedCallback?.();
     this.stopAutoRefresh();
+    this.stopMbAutoRefresh();
+  }
+
+  private checkMbAutoRefresh(): void {
+    const status = this.mbSyncStatusQuery.data.value;
+    if (status?.lastSync?.status === 'running') {
+      this.startMbAutoRefresh();
+    }
   }
 
   private checkAndStartAutoRefresh(): void {
@@ -275,6 +362,18 @@ export class ImdbSettings extends BaseComponent {
             ${this.backfillMutation.isLoading.value ? 'Starting...' : 'Backfill Air Dates (100 series)'}
           </button>
         </div>
+      </div>
+
+      <div class="settings-section">
+        <h2 class="section-title">MusicBrainz</h2>
+
+        <p class="section-description">
+          MusicBrainz provides artist, album, and track metadata for the Music library.
+          Sync downloads JSON dumps (~3 GB) and imports into the local database for offline querying.
+        </p>
+
+        ${this.renderMbStats()}
+        ${this.renderMbSyncControls()}
       </div>
 
       <div class="settings-section">
@@ -835,5 +934,117 @@ export class ImdbSettings extends BaseComponent {
     } finally {
       this.isSearching.set(false);
     }
+  }
+
+  // MusicBrainz handlers
+  handleStartMbSync(): void {
+    this.mbSyncMutation.mutate(undefined);
+  }
+
+  handleCancelMbSync(): void {
+    this.mbCancelMutation.mutate(undefined);
+  }
+
+  handleRefreshMbStatus(): void {
+    invalidateQueries(['/musicbrainz/stats']);
+    invalidateQueries(['/musicbrainz/sync/status']);
+    showSuccess('MusicBrainz status refreshed');
+  }
+
+  private renderMbStats(): string {
+    const stats = this.mbStatsQuery.data.value;
+    if (!stats) {
+      return '<div class="stats-loading">Loading MusicBrainz stats...</div>';
+    }
+
+    return html`
+      <div class="sync-info">
+        <h3 class="subsection-title">Database Statistics</h3>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <span class="stat-value">${(stats.artistCount ?? 0).toLocaleString()}</span>
+            <span class="stat-label">Artists</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-value">${(stats.releaseGroupCount ?? 0).toLocaleString()}</span>
+            <span class="stat-label">Albums</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-value">${(stats.releaseCount ?? 0).toLocaleString()}</span>
+            <span class="stat-label">Releases</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-value">${(stats.coverArtCount ?? 0).toLocaleString()}</span>
+            <span class="stat-label">Cover Art</span>
+          </div>
+        </div>
+        ${
+          stats.lastSync
+            ? html`
+          <div class="sync-times" style="margin-top: 0.5rem;">
+            <div class="sync-time">
+              <span class="sync-label">Last Sync:</span>
+              <span class="sync-value">${this.formatDate(stats.lastSync)}</span>
+            </div>
+          </div>
+        `
+            : ''
+        }
+      </div>
+    `;
+  }
+
+  private renderMbSyncControls(): string {
+    const syncStatus = this.mbSyncStatusQuery.data.value;
+    const isRunning = syncStatus?.lastSync?.status === 'running';
+
+    return html`
+      <div class="button-group" style="margin-top: 1rem;">
+        <button
+          class="primary-btn"
+          onclick="this.closest('imdb-settings').handleStartMbSync()"
+          ${this.mbSyncMutation.isLoading.value || isRunning ? 'disabled' : ''}
+        >
+          ${this.mbSyncMutation.isLoading.value ? 'Starting...' : isRunning ? 'Sync Running...' : 'Start MusicBrainz Sync'}
+        </button>
+
+        <button
+          class="secondary-btn"
+          onclick="this.closest('imdb-settings').handleRefreshMbStatus()"
+        >
+          Refresh Status
+        </button>
+
+        ${
+          isRunning
+            ? html`
+          <button
+            class="danger-btn"
+            onclick="this.closest('imdb-settings').handleCancelMbSync()"
+            ${this.mbCancelMutation.isLoading.value ? 'disabled' : ''}
+          >
+            ${this.mbCancelMutation.isLoading.value ? 'Cancelling...' : 'Cancel Sync'}
+          </button>
+        `
+            : ''
+        }
+      </div>
+
+      ${
+        isRunning && syncStatus?.lastSync
+          ? html`
+        <div class="sync-progress" style="margin-top: 1rem;">
+          <div class="dataset-status">
+            <span class="dataset-name">${escapeHtml(syncStatus.lastSync.datasetName ?? 'Syncing')}</span>
+            <span class="dataset-detail">
+              ${(syncStatus.lastSync.rowsProcessed ?? 0).toLocaleString()} rows processed,
+              ${(syncStatus.lastSync.rowsInserted ?? 0).toLocaleString()} inserted
+            </span>
+          </div>
+        </div>
+      `
+          : ''
+      }
+    `;
   }
 }

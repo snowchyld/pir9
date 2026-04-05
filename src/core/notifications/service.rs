@@ -192,7 +192,19 @@ impl NotificationService {
             | Message::HashFileRequest { .. }
             | Message::HashFileResult { .. }
             | Message::RenameFilesRequest { .. }
-            | Message::RenameFilesResult { .. } => None,
+            | Message::RenameFilesResult { .. }
+            // Podcast events (no notifications yet)
+            | Message::PodcastAdded { .. }
+            | Message::PodcastUpdated { .. }
+            | Message::PodcastDeleted { .. }
+            | Message::PodcastRefreshed { .. }
+            // Music/artist events (no notifications yet)
+            | Message::ArtistAdded { .. }
+            | Message::ArtistUpdated { .. }
+            | Message::ArtistDeleted { .. }
+            | Message::ArtistRefreshed { .. }
+            | Message::TrackFileImported { .. }
+            | Message::TrackFileDeleted { .. } => None,
         }
     }
 
