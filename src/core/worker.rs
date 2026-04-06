@@ -78,6 +78,9 @@ fn message_type_name(message: &Message) -> &'static str {
         Message::ArtistRefreshed { .. } => "ArtistRefreshed",
         Message::TrackFileImported { .. } => "TrackFileImported",
         Message::TrackFileDeleted { .. } => "TrackFileDeleted",
+        Message::AudiobookAdded { .. } => "AudiobookAdded",
+        Message::AudiobookUpdated { .. } => "AudiobookUpdated",
+        Message::AudiobookDeleted { .. } => "AudiobookDeleted",
     }
 }
 

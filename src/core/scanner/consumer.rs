@@ -502,6 +502,10 @@ impl ScanResultConsumer {
                                     info!("Received music scan result for job {} — not yet implemented", job_id);
                                     self.mark_job_result_received(&job_id).await;
                                 }
+                                Some(ScanType::RescanAudiobook) => {
+                                    info!("Received audiobook scan result for job {} — not yet implemented", job_id);
+                                    self.mark_job_result_received(&job_id).await;
+                                }
                                 _ => {
                                     self.handle_scan_result(
                                         &job_id,
@@ -2729,6 +2733,24 @@ pub fn create_music_scan_request(music_ids: Vec<i64>, paths: Vec<String>) -> (St
         job_id: job_id.clone(),
         scan_type: ScanType::RescanMusic,
         series_ids: music_ids,
+        paths,
+        known_files: HashMap::new(),
+    };
+
+    (job_id, message)
+}
+
+/// Create a scan request for audiobook libraries (stub — not yet implemented)
+pub fn create_audiobook_scan_request(
+    audiobook_ids: Vec<i64>,
+    paths: Vec<String>,
+) -> (String, Message) {
+    let job_id = uuid::Uuid::new_v4().to_string();
+
+    let message = Message::ScanRequest {
+        job_id: job_id.clone(),
+        scan_type: ScanType::RescanAudiobook,
+        series_ids: audiobook_ids,
         paths,
         known_files: HashMap::new(),
     };

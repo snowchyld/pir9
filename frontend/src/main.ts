@@ -68,6 +68,13 @@ import './features/podcasts/podcast-detail-page';
 // Add Podcast
 import './features/add-podcast/add-podcast-page';
 
+// Audiobooks
+import './features/audiobooks/audiobooks-index-page';
+import './features/audiobooks/audiobook-detail-page';
+
+// Add Audiobook
+import './features/add-audiobook/add-audiobook-page';
+
 // Calendar
 import './features/calendar/calendar-page';
 

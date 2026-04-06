@@ -551,12 +551,20 @@ export interface Album {
 }
 
 export interface ArtistLookupResult {
-  title: string;
-  sortTitle: string;
+  name: string;
+  sortName: string;
+  musicbrainzId?: string;
   overview?: string;
+  disambiguation?: string;
+  artistType: string;
+  gender?: string;
+  area?: string;
+  beginDate?: string;
+  endDate?: string;
+  rating?: number;
   images: SeriesImage[];
   genres: string[];
-  statistics?: { albumCount: number };
+  tags: string[];
 }
 
 export interface Podcast {
@@ -606,6 +614,58 @@ export interface PodcastLookupResult {
   images: SeriesImage[];
   genres: string[];
   statistics?: { episodeCount: number };
+}
+
+export interface Audiobook {
+  id: number;
+  title: string;
+  titleSlug: string;
+  sortTitle: string;
+  overview?: string;
+  author?: string;
+  narrator?: string;
+  publisher?: string;
+  isbn?: string;
+  asin?: string;
+  durationMs?: number;
+  path: string;
+  rootFolderPath: string;
+  qualityProfileId: number;
+  monitored: boolean;
+  hasFile: boolean;
+  genres: string[];
+  tags: number[];
+  added: string;
+  images: SeriesImage[];
+  statistics?: AudiobookStatistics;
+}
+
+export interface AudiobookStatistics {
+  chapterCount: number;
+  chapterFileCount: number;
+  percentOfChapters: number;
+  sizeOnDisk: number;
+}
+
+export interface AudiobookChapter {
+  id: number;
+  audiobookId: number;
+  title: string;
+  chapterNumber: number;
+  durationMs?: number;
+  hasFile: boolean;
+  monitored: boolean;
+}
+
+export interface AudiobookLookupResult {
+  title: string;
+  overview?: string;
+  author?: string;
+  narrator?: string;
+  isbn?: string;
+  publisher?: string;
+  imageUrl?: string;
+  genres: string[];
 }
 
 /**

@@ -75,6 +75,7 @@ services:
       - ./backups:/backups
       - ./cache:/app/cache
       - /volume1/Movies:/volume1/Movies
+      - /volume1/Music:/volume1/Music
       - /volume1/Shows:/volume1/Shows
       - /volume1/downloads:/volume1/downloads
     environment:
@@ -194,6 +195,8 @@ services:
       - no-new-privileges:true
     tmpfs:
       - /tmp
+    volumes:
+      - ./tmp/imdb_data:/data/cache
     environment:
       - RUST_LOG=info,pir9_imdb=debug
       - PIR9_IMDB_PORT=8990
@@ -249,7 +252,11 @@ services:
       - no-new-privileges:true
     tmpfs:
       - /tmp
+    volumes:
+      - ./tmp/musicbrainz_data:/data/cache
     environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
       - RUST_LOG=info,pir9_musicbrainz=debug
       - PIR9_MB_PORT=8991
       - PIR9_MB_DB_URL=postgresql://${POSTGRES_USER:-pir9}:${POSTGRES_PASSWORD:-pir9}@postgres-musicbrainz:5432/pir9_musicbrainz

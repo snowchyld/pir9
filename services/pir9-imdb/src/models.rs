@@ -127,6 +127,35 @@ pub struct DatasetSyncStatus {
     pub error_message: Option<String>,
     #[serde(default)]
     pub is_running: bool,
+    /// Download progress: 0.0 to 100.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_progress: Option<f64>,
+    /// Total file size in bytes
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_size_bytes: Option<u64>,
+    /// Bytes downloaded so far
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_bytes_done: Option<u64>,
+    /// Current phase: "downloading", "parsing", "idle"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_phase: Option<String>,
+}
+
+/// Live download progress state shared between sync task and status API
+#[derive(Debug, Clone, Default)]
+pub struct DownloadProgress {
+    /// Which file is currently being downloaded (e.g. "title.basics.tsv.gz")
+    pub current_file: String,
+    /// Current phase: "downloading", "parsing", "idle"
+    pub phase: String,
+    /// Download percentage: 0.0 to 100.0
+    pub percentage: f64,
+    /// Bytes downloaded so far
+    pub bytes_done: u64,
+    /// Total bytes expected
+    pub total_bytes: u64,
+    /// When true, skip downloads and use cached files as-is
+    pub process_only: bool,
 }
 
 /// Sync report
@@ -321,6 +350,31 @@ pub struct ImdbPerson {
     pub death_year: Option<i16>,
     pub professions: Vec<String>,
     pub known_for: Vec<String>,
+}
+
+/// Request body for selective sync/download/process
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncRequest {
+    /// Which datasets to operate on. Empty = all.
+    #[serde(default)]
+    pub datasets: Vec<String>,
+}
+
+/// Metadata about a single dataset file (for GET /api/datasets)
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatasetInfo {
+    /// Filename (e.g. "title.basics.tsv.gz")
+    pub name: String,
+    /// Remote file size in bytes (from HTTP HEAD)
+    pub remote_size: Option<u64>,
+    /// Local cached file size in bytes (None if not cached)
+    pub local_size: Option<u64>,
+    /// Human-readable age of local cache (e.g. "2h 15m")
+    pub local_age: Option<String>,
+    /// Whether a usable cached copy exists
+    pub cached: bool,
 }
 
 /// Parse IMDB ID string to numeric (e.g., "tt10234724" -> 10234724)

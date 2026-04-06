@@ -1,6 +1,7 @@
 //! Core business logic module
 //! Contains all domain-specific implementations
 
+pub mod audiobooks;
 pub mod configuration;
 pub mod datastore;
 pub mod delay;

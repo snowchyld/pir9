@@ -155,6 +155,10 @@ impl ImdbClient {
     }
 
     pub async fn start_sync(&self) -> anyhow::Result<ImdbProxyResponse> {
+        self.start_sync_selective(&[]).await
+    }
+
+    pub async fn start_sync_selective(&self, datasets: &[String]) -> anyhow::Result<ImdbProxyResponse> {
         if !self.config.enabled {
             return Ok(ImdbProxyResponse {
                 status: 503,
@@ -162,7 +166,13 @@ impl ImdbClient {
             });
         }
         let url = format!("{}/api/sync", self.config.base_url);
-        match self.client.post(&url).send().await {
+        match self
+            .client
+            .post(&url)
+            .json(&serde_json::json!({ "datasets": datasets }))
+            .send()
+            .await
+        {
             Ok(response) => {
                 let status = response.status().as_u16();
                 let body: serde_json::Value = response
@@ -249,6 +259,93 @@ impl ImdbClient {
                 warn!("Failed to connect to IMDB service for credits: {}", e);
                 Ok(None)
             }
+        }
+    }
+
+    /// Get dataset metadata (sizes, cache status) from the IMDB service
+    pub async fn get_datasets(&self) -> anyhow::Result<ImdbProxyResponse> {
+        if !self.config.enabled {
+            return Ok(ImdbProxyResponse {
+                status: 503,
+                body: serde_json::json!({ "error": "IMDB service is not enabled" }),
+            });
+        }
+        let url = format!("{}/api/datasets", self.config.base_url);
+        match self.client.get(&url).send().await {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                let body: serde_json::Value = response
+                    .json()
+                    .await
+                    .unwrap_or_else(|_| serde_json::json!({ "error": "Failed to parse response" }));
+                Ok(ImdbProxyResponse { status, body })
+            }
+            Err(e) => Ok(ImdbProxyResponse {
+                status: 502,
+                body: serde_json::json!({ "error": format!("IMDB service unavailable: {}", e) }),
+            }),
+        }
+    }
+
+    /// Download datasets to cache without processing
+    pub async fn start_download(&self, datasets: &[String]) -> anyhow::Result<ImdbProxyResponse> {
+        if !self.config.enabled {
+            return Ok(ImdbProxyResponse {
+                status: 503,
+                body: serde_json::json!({ "error": "IMDB service is not enabled" }),
+            });
+        }
+        let url = format!("{}/api/download", self.config.base_url);
+        match self
+            .client
+            .post(&url)
+            .json(&serde_json::json!({ "datasets": datasets }))
+            .send()
+            .await
+        {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                let body: serde_json::Value = response
+                    .json()
+                    .await
+                    .unwrap_or_else(|_| serde_json::json!({ "error": "Failed to parse response" }));
+                Ok(ImdbProxyResponse { status, body })
+            }
+            Err(e) => Ok(ImdbProxyResponse {
+                status: 502,
+                body: serde_json::json!({ "error": format!("IMDB service unavailable: {}", e) }),
+            }),
+        }
+    }
+
+    /// Process cached datasets without re-downloading
+    pub async fn start_process(&self, datasets: &[String]) -> anyhow::Result<ImdbProxyResponse> {
+        if !self.config.enabled {
+            return Ok(ImdbProxyResponse {
+                status: 503,
+                body: serde_json::json!({ "error": "IMDB service is not enabled" }),
+            });
+        }
+        let url = format!("{}/api/process", self.config.base_url);
+        match self
+            .client
+            .post(&url)
+            .json(&serde_json::json!({ "datasets": datasets }))
+            .send()
+            .await
+        {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                let body: serde_json::Value = response
+                    .json()
+                    .await
+                    .unwrap_or_else(|_| serde_json::json!({ "error": "Failed to parse response" }));
+                Ok(ImdbProxyResponse { status, body })
+            }
+            Err(e) => Ok(ImdbProxyResponse {
+                status: 502,
+                body: serde_json::json!({ "error": format!("IMDB service unavailable: {}", e) }),
+            }),
         }
     }
 
@@ -339,9 +436,15 @@ pub struct ImdbMovie {
 pub struct ImdbStats {
     pub series_count: i64,
     pub episode_count: i64,
-    pub movie_count: Option<i64>,
+    #[serde(default)]
+    pub movie_count: i64,
+    #[serde(default)]
+    pub people_count: i64,
+    #[serde(default)]
+    pub credits_count: i64,
     pub last_sync: Option<String>,
-    pub db_size_bytes: Option<i64>,
+    #[serde(default)]
+    pub db_size_bytes: i64,
 }
 
 /// A single credit entry (cast/crew member) for a title

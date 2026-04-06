@@ -204,7 +204,11 @@ impl NotificationService {
             | Message::ArtistDeleted { .. }
             | Message::ArtistRefreshed { .. }
             | Message::TrackFileImported { .. }
-            | Message::TrackFileDeleted { .. } => None,
+            | Message::TrackFileDeleted { .. }
+            // Audiobook events (no notifications yet)
+            | Message::AudiobookAdded { .. }
+            | Message::AudiobookUpdated { .. }
+            | Message::AudiobookDeleted { .. } => None,
         }
     }
 

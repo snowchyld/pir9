@@ -4190,3 +4190,341 @@ impl PodcastFileRepository {
         Ok(())
     }
 }
+
+/// Repository for audiobooks
+pub struct AudiobookRepository {
+    db: Database,
+}
+
+impl AudiobookRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_all(&self) -> Result<Vec<super::models::AudiobookDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::AudiobookDbModel>(
+            "SELECT * FROM audiobooks ORDER BY sort_title",
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::AudiobookDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::AudiobookDbModel>(
+            "SELECT * FROM audiobooks WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_by_isbn(
+        &self,
+        isbn: &str,
+    ) -> Result<Option<super::models::AudiobookDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::AudiobookDbModel>(
+            "SELECT * FROM audiobooks WHERE isbn = $1",
+        )
+        .bind(isbn)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_by_asin(
+        &self,
+        asin: &str,
+    ) -> Result<Option<super::models::AudiobookDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::AudiobookDbModel>(
+            "SELECT * FROM audiobooks WHERE asin = $1",
+        )
+        .bind(asin)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn insert(&self, audiobook: &super::models::AudiobookDbModel) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO audiobooks (
+                title, clean_title, sort_title, author, narrator,
+                overview, publisher, isbn, asin, duration_ms,
+                release_date, genres, images, tags, path,
+                root_folder_path, quality_profile_id, monitored,
+                has_file, audiobook_file_id, added, last_info_sync,
+                title_slug
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                $11, $12, $13, $14, $15, $16, $17, $18,
+                $19, $20, $21, $22, $23
+            ) RETURNING id
+            "#,
+        )
+        .bind(&audiobook.title)
+        .bind(&audiobook.clean_title)
+        .bind(&audiobook.sort_title)
+        .bind(&audiobook.author)
+        .bind(&audiobook.narrator)
+        .bind(&audiobook.overview)
+        .bind(&audiobook.publisher)
+        .bind(&audiobook.isbn)
+        .bind(&audiobook.asin)
+        .bind(audiobook.duration_ms)
+        .bind(audiobook.release_date)
+        .bind(&audiobook.genres)
+        .bind(&audiobook.images)
+        .bind(&audiobook.tags)
+        .bind(&audiobook.path)
+        .bind(&audiobook.root_folder_path)
+        .bind(audiobook.quality_profile_id)
+        .bind(audiobook.monitored)
+        .bind(audiobook.has_file)
+        .bind(audiobook.audiobook_file_id)
+        .bind(audiobook.added)
+        .bind(audiobook.last_info_sync)
+        .bind(&audiobook.title_slug)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn update(&self, audiobook: &super::models::AudiobookDbModel) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            r#"
+            UPDATE audiobooks SET
+                title = $1, clean_title = $2, sort_title = $3, author = $4,
+                narrator = $5, overview = $6, publisher = $7, isbn = $8,
+                asin = $9, duration_ms = $10, release_date = $11, genres = $12,
+                images = $13, tags = $14, path = $15, root_folder_path = $16,
+                quality_profile_id = $17, monitored = $18, has_file = $19,
+                audiobook_file_id = $20, last_info_sync = $21, title_slug = $22
+            WHERE id = $23
+            "#,
+        )
+        .bind(&audiobook.title)
+        .bind(&audiobook.clean_title)
+        .bind(&audiobook.sort_title)
+        .bind(&audiobook.author)
+        .bind(&audiobook.narrator)
+        .bind(&audiobook.overview)
+        .bind(&audiobook.publisher)
+        .bind(&audiobook.isbn)
+        .bind(&audiobook.asin)
+        .bind(audiobook.duration_ms)
+        .bind(audiobook.release_date)
+        .bind(&audiobook.genres)
+        .bind(&audiobook.images)
+        .bind(&audiobook.tags)
+        .bind(&audiobook.path)
+        .bind(&audiobook.root_folder_path)
+        .bind(audiobook.quality_profile_id)
+        .bind(audiobook.monitored)
+        .bind(audiobook.has_file)
+        .bind(audiobook.audiobook_file_id)
+        .bind(audiobook.last_info_sync)
+        .bind(&audiobook.title_slug)
+        .bind(audiobook.id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM audiobook_chapters WHERE audiobook_id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        sqlx::query("DELETE FROM audiobook_files WHERE audiobook_id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        sqlx::query("DELETE FROM audiobooks WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for audiobook chapters
+pub struct AudiobookChapterRepository {
+    db: Database,
+}
+
+impl AudiobookChapterRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_by_audiobook_id(
+        &self,
+        audiobook_id: i64,
+    ) -> Result<Vec<super::models::AudiobookChapterDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::AudiobookChapterDbModel>(
+            "SELECT * FROM audiobook_chapters WHERE audiobook_id = $1 ORDER BY chapter_number",
+        )
+        .bind(audiobook_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_by_id(
+        &self,
+        id: i64,
+    ) -> Result<Option<super::models::AudiobookChapterDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::AudiobookChapterDbModel>(
+            "SELECT * FROM audiobook_chapters WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn insert(
+        &self,
+        chapter: &super::models::AudiobookChapterDbModel,
+    ) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO audiobook_chapters (
+                audiobook_id, title, chapter_number, duration_ms,
+                has_file, monitored
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6
+            ) RETURNING id
+            "#,
+        )
+        .bind(chapter.audiobook_id)
+        .bind(&chapter.title)
+        .bind(chapter.chapter_number)
+        .bind(chapter.duration_ms)
+        .bind(chapter.has_file)
+        .bind(chapter.monitored)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn update(
+        &self,
+        chapter: &super::models::AudiobookChapterDbModel,
+    ) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            r#"
+            UPDATE audiobook_chapters SET
+                title = $1, chapter_number = $2, duration_ms = $3,
+                has_file = $4, monitored = $5
+            WHERE id = $6
+            "#,
+        )
+        .bind(&chapter.title)
+        .bind(chapter.chapter_number)
+        .bind(chapter.duration_ms)
+        .bind(chapter.has_file)
+        .bind(chapter.monitored)
+        .bind(chapter.id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM audiobook_chapters WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Repository for audiobook files
+pub struct AudiobookFileRepository {
+    db: Database,
+}
+
+impl AudiobookFileRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    pub async fn get_by_id(
+        &self,
+        id: i64,
+    ) -> Result<Option<super::models::AudiobookFileDbModel>> {
+        let pool = self.db.pool();
+        let row = sqlx::query_as::<_, super::models::AudiobookFileDbModel>(
+            "SELECT * FROM audiobook_files WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_by_audiobook_id(
+        &self,
+        audiobook_id: i64,
+    ) -> Result<Vec<super::models::AudiobookFileDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::AudiobookFileDbModel>(
+            "SELECT * FROM audiobook_files WHERE audiobook_id = $1 ORDER BY date_added DESC",
+        )
+        .bind(audiobook_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn insert(
+        &self,
+        file: &super::models::AudiobookFileDbModel,
+    ) -> Result<i64> {
+        let pool = self.db.pool();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO audiobook_files (
+                audiobook_id, relative_path, path, size, quality,
+                media_info, date_added
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7
+            ) RETURNING id
+            "#,
+        )
+        .bind(file.audiobook_id)
+        .bind(&file.relative_path)
+        .bind(&file.path)
+        .bind(file.size)
+        .bind(&file.quality)
+        .bind(&file.media_info)
+        .bind(file.date_added)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn delete(&self, id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query("DELETE FROM audiobook_files WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+}

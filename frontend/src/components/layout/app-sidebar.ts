@@ -20,6 +20,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/movies', label: 'Movies', icon: 'film' },
   { path: '/music', label: 'Music', icon: 'music' },
   { path: '/podcasts', label: 'Podcasts', icon: 'podcast' },
+  { path: '/audiobooks', label: 'Audiobooks', icon: 'book' },
   { path: '/calendar', label: 'Calendar', icon: 'calendar' },
   { path: '/activity/queue', label: 'Activity', icon: 'download' },
   { path: '/wanted', label: 'Wanted', icon: 'alert-circle' },
@@ -301,6 +302,7 @@ export class AppSidebar extends BaseComponent {
         '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>',
       podcast:
         '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18v-6a9 9 0 0 1 18 0v6"></path><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path></svg>',
+      book: '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>',
       laptop:
         '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="2" y1="20" x2="22" y2="20"></line></svg>',
     };

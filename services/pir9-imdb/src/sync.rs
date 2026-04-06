@@ -3,14 +3,20 @@
 //! Downloads and parses IMDB non-commercial datasets from https://datasets.imdbws.com/
 
 use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Result;
 use chrono::Utc;
 use flate2::read::GzDecoder;
+use futures_util::StreamExt;
+use tokio::io::AsyncWriteExt;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::db::{DbRepository, ResumeInfo};
 use crate::models::*;
@@ -36,12 +42,92 @@ const TV_TITLE_TYPES: &[&str] = &["tvSeries", "tvMiniSeries"];
 /// Movie title types we care about (includes TV movies and direct-to-video)
 const MOVIE_TITLE_TYPES: &[&str] = &["movie", "tvMovie", "video"];
 
-/// Download a dataset file, racing against the cancellation token.
-/// Returns the raw bytes on success, or DatasetResult::Cancelled if the token fires.
+/// Cache directory for downloaded dataset files
+const CACHE_DIR: &str = "/data/cache";
+
+thread_local! {
+    /// When true, download_dataset skips downloading and uses cached file as-is
+    static PROCESS_ONLY_FLAG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Check if a cached file exists and is recent enough to skip re-downloading.
+fn cached_file_is_recent(path: &Path, max_age_hours: i64) -> bool {
+    if let Ok(metadata) = std::fs::metadata(path) {
+        if let Ok(modified) = metadata.modified() {
+            let age = modified.elapsed().unwrap_or(Duration::MAX);
+            return age < Duration::from_secs(max_age_hours as u64 * 3600);
+        }
+    }
+    false
+}
+
+/// Download a dataset file to a persistent cache directory with progress tracking.
+/// If the file already exists and is recent, skips the download.
+/// If PROCESS_ONLY_FLAG is set, uses cached file regardless of age (no download).
+/// Returns the cache file path on success, or DatasetResult::Cancelled if the token fires.
 async fn download_dataset(
     url: &str,
+    dataset: &str,
     token: &CancellationToken,
-) -> Result<std::result::Result<Vec<u8>, DatasetResult>> {
+    progress: &Arc<RwLock<DownloadProgress>>,
+) -> Result<std::result::Result<PathBuf, DatasetResult>> {
+    // Ensure cache directory exists
+    tokio::fs::create_dir_all(CACHE_DIR).await?;
+
+    let cache_path = PathBuf::from(CACHE_DIR).join(dataset);
+
+    // Process-only mode: use cached file regardless of age, fail if not cached
+    // Check if another task is already downloading this dataset
+    let lock_path = PathBuf::from(CACHE_DIR).join(format!("{}.downloading", dataset));
+    let process_only = progress.read().await.process_only;
+    if !process_only && lock_path.exists() {
+        info!("{}: already being downloaded, skipping duplicate", dataset);
+        return Ok(Ok(cache_path));
+    }
+
+    if process_only {
+        if cache_path.exists() {
+            info!("Process-only: using cached {:?}", cache_path);
+            {
+                let mut p = progress.write().await;
+                p.current_file = dataset.to_string();
+                p.phase = "parsing".to_string();
+                p.percentage = 100.0;
+            }
+            return Ok(Ok(cache_path));
+        }
+        anyhow::bail!("{}: not in cache, download first", dataset);
+    }
+
+    // Check if cached file exists and is recent enough
+    if cached_file_is_recent(&cache_path, SKIP_IF_RECENT_HOURS) {
+        info!(
+            "Using cached file: {:?} (less than {}h old)",
+            cache_path, SKIP_IF_RECENT_HOURS
+        );
+        // Set progress to indicate we skipped downloading
+        {
+            let mut p = progress.write().await;
+            p.current_file = dataset.to_string();
+            p.phase = "parsing".to_string();
+            p.percentage = 100.0;
+        }
+        return Ok(Ok(cache_path));
+    }
+
+    // Create lock file to prevent duplicate downloads
+    let _ = tokio::fs::write(&lock_path, "").await;
+
+    // Update progress: starting download
+    {
+        let mut p = progress.write().await;
+        p.current_file = dataset.to_string();
+        p.phase = "downloading".to_string();
+        p.percentage = 0.0;
+        p.bytes_done = 0;
+        p.total_bytes = 0;
+    }
+
     let client = reqwest::Client::builder()
         .user_agent("pir9-IMDB/0.1.0")
         .timeout(std::time::Duration::from_secs(3600))
@@ -52,17 +138,67 @@ async fn download_dataset(
         anyhow::bail!("Failed to download: {}", response.status());
     }
 
-    // Race the download against cancellation
-    tokio::select! {
-        biased;
-        _ = token.cancelled() => {
+    let total_size = response.content_length();
+    if let Some(total) = total_size {
+        let mut p = progress.write().await;
+        p.total_bytes = total;
+    }
+
+    info!(
+        "Downloading {} → {:?} (size: {})",
+        url,
+        cache_path,
+        total_size.map_or("unknown".to_string(), |s| format!("{} bytes", s))
+    );
+
+    // Stream to a temporary file, then rename atomically
+    let tmp_path = cache_path.with_extension("tmp");
+    let mut file = tokio::fs::File::create(&tmp_path).await?;
+    let mut stream = response.bytes_stream();
+    let mut downloaded: u64 = 0;
+
+    while let Some(chunk_result) = stream.next().await {
+        if token.is_cancelled() {
             info!("Download of {} cancelled", url);
-            Ok(Err(DatasetResult::Cancelled))
+            // Clean up temp file
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Ok(Err(DatasetResult::Cancelled));
         }
-        result = response.bytes() => {
-            Ok(Ok(result?.to_vec()))
+
+        let chunk = chunk_result?;
+        file.write_all(&chunk).await?;
+        downloaded += chunk.len() as u64;
+
+        // Update progress
+        if let Some(total) = total_size {
+            let pct = (downloaded as f64 / total as f64) * 100.0;
+            let mut p = progress.write().await;
+            p.bytes_done = downloaded;
+            p.total_bytes = total;
+            p.percentage = pct;
         }
     }
+
+    file.flush().await?;
+    drop(file);
+
+    // Rename tmp → final atomically
+    tokio::fs::rename(&tmp_path, &cache_path).await?;
+
+    // Remove download lock
+    let _ = tokio::fs::remove_file(&lock_path).await;
+
+    info!("Download complete: {} ({} bytes)", dataset, downloaded);
+
+    // Update progress: switching to parsing
+    {
+        let mut p = progress.write().await;
+        p.phase = "parsing".to_string();
+        p.percentage = 100.0;
+        p.bytes_done = downloaded;
+    }
+
+    Ok(Ok(cache_path))
 }
 
 /// Result of a dataset sync attempt
@@ -75,146 +211,305 @@ pub enum DatasetResult {
     Cancelled,
 }
 
-/// Run a full sync of all IMDB datasets
-pub async fn run_full_sync(db: &DbRepository, token: CancellationToken) -> Result<SyncReport> {
+/// All IMDB dataset filenames, in processing order
+pub const ALL_DATASETS: &[&str] = &[
+    "title.basics.tsv.gz",
+    "title.episode.tsv.gz",
+    "title.ratings.tsv.gz",
+    "name.basics.tsv.gz",
+    "title.principals.tsv.gz",
+];
+
+/// Check whether a dataset name (from the user request) matches a dataset filename.
+/// Accepts both exact match ("title.basics.tsv.gz") and short name ("title.basics").
+fn dataset_matches(filename: &str, requested: &str) -> bool {
+    filename == requested || filename.starts_with(&format!("{}.", requested))
+        || filename.trim_end_matches(".tsv.gz") == requested
+}
+
+/// Determine which datasets to operate on, given a user-supplied list.
+/// Empty list = all datasets.
+fn resolve_datasets(requested: &[String]) -> Vec<&'static str> {
+    if requested.is_empty() {
+        return ALL_DATASETS.to_vec();
+    }
+    ALL_DATASETS
+        .iter()
+        .filter(|ds| requested.iter().any(|r| dataset_matches(ds, r)))
+        .copied()
+        .collect()
+}
+
+/// Format a Duration as a human-readable age string (e.g. "2h 15m", "3d 1h")
+fn format_age(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        return format!("{}s", secs);
+    }
+    let mins = secs / 60;
+    if mins < 60 {
+        return format!("{}m", mins);
+    }
+    let hours = mins / 60;
+    let remaining_mins = mins % 60;
+    if hours < 24 {
+        return format!("{}h {}m", hours, remaining_mins);
+    }
+    let days = hours / 24;
+    let remaining_hours = hours % 24;
+    format!("{}d {}h", days, remaining_hours)
+}
+
+/// How often to re-fetch remote sizes (hours)
+const REMOTE_SIZE_CACHE_HOURS: i64 = 6;
+
+/// Query dataset file sizes — uses a local JSON cache for remote sizes to avoid
+/// hitting upstream servers on every request. Cache refreshes every 6 hours.
+pub async fn get_dataset_infos() -> Result<Vec<crate::models::DatasetInfo>> {
+    let size_cache_path = PathBuf::from(CACHE_DIR).join(".remote_sizes.json");
+
+    // Load cached remote sizes if fresh enough
+    let cached_sizes: std::collections::HashMap<String, u64> =
+        if cached_file_is_recent(&size_cache_path, REMOTE_SIZE_CACHE_HOURS) {
+            match std::fs::read_to_string(&size_cache_path) {
+                Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+                Err(_) => std::collections::HashMap::new(),
+            }
+        } else {
+            std::collections::HashMap::new()
+        };
+
+    // Refresh if cache is empty OR doesn't have all datasets
+    let need_refresh = cached_sizes.is_empty()
+        || cached_sizes.len() < ALL_DATASETS.len();
+
+    // Only make HEAD requests if cache is stale
+    let remote_sizes = if need_refresh {
+        info!("Remote size cache stale, fetching from upstream...");
+        let client = reqwest::Client::builder()
+            .user_agent("pir9-IMDB/0.1.0")
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
+
+        let mut sizes = std::collections::HashMap::new();
+        for &dataset in ALL_DATASETS {
+            let url = format!("{}/{}", IMDB_BASE_URL, dataset);
+            if let Ok(resp) = client.head(&url).send().await {
+                if resp.status().is_success() {
+                    if let Some(size) = resp
+                        .headers()
+                        .get("content-length")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| v.parse::<u64>().ok())
+                    {
+                        sizes.insert(dataset.to_string(), size);
+                    }
+                }
+            }
+        }
+
+        // Persist to cache file
+        tokio::fs::create_dir_all(CACHE_DIR).await?;
+        if let Ok(json) = serde_json::to_string(&sizes) {
+            let _ = tokio::fs::write(&size_cache_path, json).await;
+        }
+
+        sizes
+    } else {
+        cached_sizes
+    };
+
+    let mut infos = Vec::with_capacity(ALL_DATASETS.len());
+
+    for &dataset in ALL_DATASETS {
+        let remote_size = remote_sizes.get(dataset).copied();
+
+        // Check local cache
+        let cache_path = PathBuf::from(CACHE_DIR).join(dataset);
+        let (local_size, local_age, cached) = match std::fs::metadata(&cache_path) {
+            Ok(meta) => {
+                let size = meta.len();
+                let age = meta
+                    .modified()
+                    .ok()
+                    .and_then(|m| m.elapsed().ok());
+                let age_str = age.map(|a| format_age(a));
+                (Some(size), age_str, true)
+            }
+            Err(_) => (None, None, false),
+        };
+
+        infos.push(crate::models::DatasetInfo {
+            name: dataset.to_string(),
+            remote_size,
+            local_size,
+            local_age,
+            cached,
+        });
+    }
+
+    Ok(infos)
+}
+
+/// Download datasets to cache without processing them.
+pub async fn run_download_only(
+    requested: &[String],
+    token: &CancellationToken,
+    progress: &Arc<RwLock<DownloadProgress>>,
+) -> Result<Vec<String>> {
+    let datasets = resolve_datasets(requested);
+    let mut downloaded = Vec::new();
+
+    for dataset in datasets {
+        if token.is_cancelled() {
+            break;
+        }
+        let url = format!("{}/{}", IMDB_BASE_URL, dataset);
+        match download_dataset(&url, dataset, token, progress).await? {
+            Ok(_path) => {
+                info!("Downloaded {} to cache", dataset);
+                downloaded.push(dataset.to_string());
+            }
+            Err(DatasetResult::Cancelled) => {
+                info!("Download cancelled at {}", dataset);
+                break;
+            }
+            Err(_) => {}
+        }
+    }
+
+    Ok(downloaded)
+}
+
+/// Process already-cached datasets without re-downloading.
+/// If a dataset is not in cache, it is skipped with an error.
+pub async fn run_process_only(
+    db: &DbRepository,
+    requested: &[String],
+    token: CancellationToken,
+    progress: Arc<RwLock<DownloadProgress>>,
+) -> Result<SyncReport> {
+    let datasets = resolve_datasets(requested);
     let mut report = SyncReport::default();
 
-    // Sync title.basics (series)
-    info!("Syncing title.basics...");
-    match sync_title_basics(db, &token).await {
-        Ok(DatasetResult::Completed(stats)) => {
-            info!(
-                "title.basics completed: {} processed, {} inserted",
-                stats.rows_processed, stats.rows_inserted
-            );
-            report.title_basics = Some(stats);
-        }
-        Ok(DatasetResult::Skipped) => {
-            info!("title.basics skipped (recently synced)");
-        }
-        Ok(DatasetResult::Cancelled) => {
-            info!("title.basics cancelled");
-            return Ok(report);
-        }
-        Err(e) => {
-            error!("title.basics failed: {}", e);
-            report.errors.push(format!("title.basics: {}", e));
-        }
+    // Set process_only flag on shared state so download_dataset + should_skip read it
+    {
+        let mut p = progress.write().await;
+        p.process_only = true;
     }
 
-    if token.is_cancelled() {
-        return Ok(report);
+    for &dataset in &datasets {
+        if token.is_cancelled() {
+            break;
+        }
+
+        let cache_path = PathBuf::from(CACHE_DIR).join(dataset);
+        if !cache_path.exists() {
+            report.errors.push(format!("{}: not in cache, download first", dataset));
+            continue;
+        }
+
+        run_single_dataset(db, dataset, &token, &progress, &mut report).await;
     }
 
-    // Sync title.episode (episodes) - only if we have series
-    info!("Syncing title.episode...");
-    match sync_title_episodes(db, &token).await {
-        Ok(DatasetResult::Completed(stats)) => {
-            info!(
-                "title.episode completed: {} processed, {} inserted",
-                stats.rows_processed, stats.rows_inserted
-            );
-            report.title_episodes = Some(stats);
-        }
-        Ok(DatasetResult::Skipped) => {
-            info!("title.episode skipped (recently synced)");
-        }
-        Ok(DatasetResult::Cancelled) => {
-            info!("title.episode cancelled");
-            return Ok(report);
-        }
-        Err(e) => {
-            error!("title.episode failed: {}", e);
-            report.errors.push(format!("title.episode: {}", e));
-        }
-    }
-
-    if token.is_cancelled() {
-        return Ok(report);
-    }
-
-    // Sync title.ratings
-    info!("Syncing title.ratings...");
-    match sync_title_ratings(db, &token).await {
-        Ok(DatasetResult::Completed(stats)) => {
-            info!(
-                "title.ratings completed: {} processed, {} updated",
-                stats.rows_processed, stats.rows_updated
-            );
-            report.title_ratings = Some(stats);
-        }
-        Ok(DatasetResult::Skipped) => {
-            info!("title.ratings skipped (recently synced)");
-        }
-        Ok(DatasetResult::Cancelled) => {
-            info!("title.ratings cancelled");
-            return Ok(report);
-        }
-        Err(e) => {
-            error!("title.ratings failed: {}", e);
-            report.errors.push(format!("title.ratings: {}", e));
-        }
-    }
-
-    if token.is_cancelled() {
-        return Ok(report);
-    }
-
-    // Sync name.basics (people) — must run before title.principals
-    info!("Syncing name.basics...");
-    match sync_name_basics(db, &token).await {
-        Ok(DatasetResult::Completed(stats)) => {
-            info!(
-                "name.basics completed: {} processed, {} inserted",
-                stats.rows_processed, stats.rows_inserted
-            );
-            report.name_basics = Some(stats);
-        }
-        Ok(DatasetResult::Skipped) => {
-            info!("name.basics skipped (recently synced)");
-        }
-        Ok(DatasetResult::Cancelled) => {
-            info!("name.basics cancelled");
-            return Ok(report);
-        }
-        Err(e) => {
-            error!("name.basics failed: {}", e);
-            report.errors.push(format!("name.basics: {}", e));
-        }
-    }
-
-    if token.is_cancelled() {
-        return Ok(report);
-    }
-
-    // Sync title.principals (credits) — requires name.basics to have run first
-    info!("Syncing title.principals...");
-    match sync_title_principals(db, &token).await {
-        Ok(DatasetResult::Completed(stats)) => {
-            info!(
-                "title.principals completed: {} processed, {} inserted",
-                stats.rows_processed, stats.rows_inserted
-            );
-            report.title_principals = Some(stats);
-        }
-        Ok(DatasetResult::Skipped) => {
-            info!("title.principals skipped (recently synced)");
-        }
-        Ok(DatasetResult::Cancelled) => {
-            info!("title.principals cancelled");
-            return Ok(report);
-        }
-        Err(e) => {
-            error!("title.principals failed: {}", e);
-            report.errors.push(format!("title.principals: {}", e));
-        }
+    // Reset flag
+    {
+        let mut p = progress.write().await;
+        p.process_only = false;
     }
 
     Ok(report)
 }
 
+/// Run a full sync of all IMDB datasets (or a subset if requested)
+pub async fn run_full_sync(
+    db: &DbRepository,
+    token: CancellationToken,
+    progress: Arc<RwLock<DownloadProgress>>,
+) -> Result<SyncReport> {
+    run_full_sync_selective(db, &[], token, progress).await
+}
+
+/// Run a selective sync of the requested IMDB datasets (empty = all)
+pub async fn run_full_sync_selective(
+    db: &DbRepository,
+    requested: &[String],
+    token: CancellationToken,
+    progress: Arc<RwLock<DownloadProgress>>,
+) -> Result<SyncReport> {
+    let datasets = resolve_datasets(requested);
+    let mut report = SyncReport::default();
+
+    for &dataset in &datasets {
+        if token.is_cancelled() {
+            return Ok(report);
+        }
+        run_single_dataset(db, dataset, &token, &progress, &mut report).await;
+    }
+
+    Ok(report)
+}
+
+/// Run sync for a single named dataset, updating the report
+async fn run_single_dataset(
+    db: &DbRepository,
+    dataset: &str,
+    token: &CancellationToken,
+    progress: &Arc<RwLock<DownloadProgress>>,
+    report: &mut SyncReport,
+) {
+    info!("Syncing {}...", dataset);
+
+    let result = match dataset {
+        "title.basics.tsv.gz" => sync_title_basics(db, token, progress).await,
+        "title.episode.tsv.gz" => sync_title_episodes(db, token, progress).await,
+        "title.ratings.tsv.gz" => sync_title_ratings(db, token, progress).await,
+        "name.basics.tsv.gz" => sync_name_basics(db, token, progress).await,
+        "title.principals.tsv.gz" => sync_title_principals(db, token, progress).await,
+        _ => {
+            report.errors.push(format!("{}: unknown dataset", dataset));
+            return;
+        }
+    };
+
+    match result {
+        Ok(DatasetResult::Completed(stats)) => {
+            info!(
+                "{} completed: {} processed, {} inserted, {} updated",
+                dataset, stats.rows_processed, stats.rows_inserted, stats.rows_updated
+            );
+            match dataset {
+                "title.basics.tsv.gz" => report.title_basics = Some(stats),
+                "title.episode.tsv.gz" => report.title_episodes = Some(stats),
+                "title.ratings.tsv.gz" => report.title_ratings = Some(stats),
+                "name.basics.tsv.gz" => report.name_basics = Some(stats),
+                "title.principals.tsv.gz" => report.title_principals = Some(stats),
+                _ => {}
+            }
+        }
+        Ok(DatasetResult::Skipped) => {
+            info!("{} skipped (recently synced)", dataset);
+        }
+        Ok(DatasetResult::Cancelled) => {
+            info!("{} cancelled", dataset);
+        }
+        Err(e) => {
+            error!("{} failed: {}", dataset, e);
+            report.errors.push(format!("{}: {}", dataset, e));
+        }
+    }
+}
+
 /// Check if a dataset was completed recently enough to skip
-async fn should_skip_dataset(db: &DbRepository, dataset: &str) -> bool {
+async fn should_skip_dataset(
+    db: &DbRepository,
+    dataset: &str,
+    progress: &Arc<RwLock<DownloadProgress>>,
+) -> bool {
+    // Process-only mode: never skip — user explicitly requested processing
+    if progress.read().await.process_only {
+        return false;
+    }
     match db.last_completed_sync_time(dataset).await {
         Ok(Some(completed_at)) => {
             let hours_ago = (Utc::now() - completed_at).num_hours();
@@ -257,10 +552,14 @@ async fn get_or_resume_sync(db: &DbRepository, dataset: &str) -> Result<(i64, Re
 }
 
 /// Sync title.basics.tsv.gz (TV series)
-async fn sync_title_basics(db: &DbRepository, token: &CancellationToken) -> Result<DatasetResult> {
+async fn sync_title_basics(
+    db: &DbRepository,
+    token: &CancellationToken,
+    progress: &Arc<RwLock<DownloadProgress>>,
+) -> Result<DatasetResult> {
     let dataset = "title.basics.tsv.gz";
 
-    if should_skip_dataset(db, dataset).await {
+    if should_skip_dataset(db, dataset, progress).await {
         return Ok(DatasetResult::Skipped);
     }
 
@@ -269,7 +568,7 @@ async fn sync_title_basics(db: &DbRepository, token: &CancellationToken) -> Resu
 
     let (sync_id, resume) = get_or_resume_sync(db, dataset).await?;
 
-    let result = sync_title_basics_inner(db, &url, sync_id, &resume, token).await;
+    let result = sync_title_basics_inner(db, &url, sync_id, &resume, token, progress).await;
 
     match result {
         Ok(DatasetResult::Completed(stats)) => {
@@ -299,7 +598,9 @@ async fn sync_title_basics_inner(
     sync_id: i64,
     resume: &ResumeInfo,
     token: &CancellationToken,
+    progress: &Arc<RwLock<DownloadProgress>>,
 ) -> Result<DatasetResult> {
+    let dataset = "title.basics.tsv.gz";
     let resume_from = resume.last_processed_id;
     if resume_from > 0 {
         info!("Downloading {} (resuming from id {})", url, resume_from);
@@ -307,12 +608,13 @@ async fn sync_title_basics_inner(
         info!("Downloading {}", url);
     }
 
-    let bytes = match download_dataset(url, token).await? {
-        Ok(b) => b,
+    let cache_path = match download_dataset(url, dataset, token, progress).await? {
+        Ok(p) => p,
         Err(cancelled) => return Ok(cancelled),
     };
 
-    let decoder = GzDecoder::new(&bytes[..]);
+    let file = std::fs::File::open(&cache_path)?;
+    let decoder = GzDecoder::new(file);
     let reader = BufReader::new(decoder);
 
     // Start counters from previous values when resuming
@@ -472,10 +774,11 @@ async fn sync_title_basics_inner(
 async fn sync_title_episodes(
     db: &DbRepository,
     token: &CancellationToken,
+    progress: &Arc<RwLock<DownloadProgress>>,
 ) -> Result<DatasetResult> {
     let dataset = "title.episode.tsv.gz";
 
-    if should_skip_dataset(db, dataset).await {
+    if should_skip_dataset(db, dataset, progress).await {
         return Ok(DatasetResult::Skipped);
     }
 
@@ -484,7 +787,7 @@ async fn sync_title_episodes(
 
     let (sync_id, resume) = get_or_resume_sync(db, dataset).await?;
 
-    let result = sync_title_episodes_inner(db, &url, sync_id, &resume, token).await;
+    let result = sync_title_episodes_inner(db, &url, sync_id, &resume, token, progress).await;
 
     match result {
         Ok(DatasetResult::Completed(stats)) => {
@@ -514,7 +817,9 @@ async fn sync_title_episodes_inner(
     sync_id: i64,
     resume: &ResumeInfo,
     token: &CancellationToken,
+    progress: &Arc<RwLock<DownloadProgress>>,
 ) -> Result<DatasetResult> {
+    let dataset = "title.episode.tsv.gz";
     let resume_from = resume.last_processed_id;
     if resume_from > 0 {
         info!("Downloading {} (resuming from id {})", url, resume_from);
@@ -532,12 +837,13 @@ async fn sync_title_episodes_inner(
 
     info!("Filtering episodes for {} series", series_ids.len());
 
-    let bytes = match download_dataset(url, token).await? {
-        Ok(b) => b,
+    let cache_path = match download_dataset(url, dataset, token, progress).await? {
+        Ok(p) => p,
         Err(cancelled) => return Ok(cancelled),
     };
 
-    let decoder = GzDecoder::new(&bytes[..]);
+    let file = std::fs::File::open(&cache_path)?;
+    let decoder = GzDecoder::new(file);
     let reader = BufReader::new(decoder);
 
     // Start counters from previous values when resuming
@@ -652,10 +958,11 @@ async fn sync_title_episodes_inner(
 async fn sync_title_ratings(
     db: &DbRepository,
     token: &CancellationToken,
+    progress: &Arc<RwLock<DownloadProgress>>,
 ) -> Result<DatasetResult> {
     let dataset = "title.ratings.tsv.gz";
 
-    if should_skip_dataset(db, dataset).await {
+    if should_skip_dataset(db, dataset, progress).await {
         return Ok(DatasetResult::Skipped);
     }
 
@@ -664,7 +971,7 @@ async fn sync_title_ratings(
 
     let (sync_id, resume) = get_or_resume_sync(db, dataset).await?;
 
-    let result = sync_title_ratings_inner(db, &url, sync_id, &resume, token).await;
+    let result = sync_title_ratings_inner(db, &url, sync_id, &resume, token, progress).await;
 
     match result {
         Ok(DatasetResult::Completed(stats)) => {
@@ -694,7 +1001,9 @@ async fn sync_title_ratings_inner(
     sync_id: i64,
     resume: &ResumeInfo,
     token: &CancellationToken,
+    progress: &Arc<RwLock<DownloadProgress>>,
 ) -> Result<DatasetResult> {
+    let dataset = "title.ratings.tsv.gz";
     let resume_from = resume.last_processed_id;
     if resume_from > 0 {
         info!("Downloading {} (resuming from id {})", url, resume_from);
@@ -702,12 +1011,13 @@ async fn sync_title_ratings_inner(
         info!("Downloading {}", url);
     }
 
-    let bytes = match download_dataset(url, token).await? {
-        Ok(b) => b,
+    let cache_path = match download_dataset(url, dataset, token, progress).await? {
+        Ok(p) => p,
         Err(cancelled) => return Ok(cancelled),
     };
 
-    let decoder = GzDecoder::new(&bytes[..]);
+    let file = std::fs::File::open(&cache_path)?;
+    let decoder = GzDecoder::new(file);
     let reader = BufReader::new(decoder);
 
     // Start counters from previous values when resuming
@@ -815,10 +1125,14 @@ async fn sync_title_ratings_inner(
 // ── name.basics sync ────────────────────────────────────────────────
 
 /// Sync name.basics.tsv.gz (people, pre-filtered by known titles)
-async fn sync_name_basics(db: &DbRepository, token: &CancellationToken) -> Result<DatasetResult> {
+async fn sync_name_basics(
+    db: &DbRepository,
+    token: &CancellationToken,
+    progress: &Arc<RwLock<DownloadProgress>>,
+) -> Result<DatasetResult> {
     let dataset = "name.basics.tsv.gz";
 
-    if should_skip_dataset(db, dataset).await {
+    if should_skip_dataset(db, dataset, progress).await {
         return Ok(DatasetResult::Skipped);
     }
 
@@ -827,7 +1141,7 @@ async fn sync_name_basics(db: &DbRepository, token: &CancellationToken) -> Resul
 
     let (sync_id, resume) = get_or_resume_sync(db, dataset).await?;
 
-    let result = sync_name_basics_inner(db, &url, sync_id, &resume, token).await;
+    let result = sync_name_basics_inner(db, &url, sync_id, &resume, token, progress).await;
 
     match result {
         Ok(DatasetResult::Completed(stats)) => {
@@ -857,7 +1171,9 @@ async fn sync_name_basics_inner(
     sync_id: i64,
     resume: &ResumeInfo,
     token: &CancellationToken,
+    progress: &Arc<RwLock<DownloadProgress>>,
 ) -> Result<DatasetResult> {
+    let dataset = "name.basics.tsv.gz";
     let resume_from = resume.last_processed_id;
     if resume_from > 0 {
         info!("Downloading {} (resuming from id {})", url, resume_from);
@@ -888,12 +1204,13 @@ async fn sync_name_basics_inner(
         movie_ids.len()
     );
 
-    let bytes = match download_dataset(url, token).await? {
-        Ok(b) => b,
+    let cache_path = match download_dataset(url, dataset, token, progress).await? {
+        Ok(p) => p,
         Err(cancelled) => return Ok(cancelled),
     };
 
-    let decoder = GzDecoder::new(&bytes[..]);
+    let file = std::fs::File::open(&cache_path)?;
+    let decoder = GzDecoder::new(file);
     let reader = BufReader::new(decoder);
 
     let mut rows_processed = resume.rows_processed;
@@ -1019,10 +1336,14 @@ async fn sync_name_basics_inner(
 // ── title.principals sync ───────────────────────────────────────────
 
 /// Sync title.principals.tsv.gz (credits, dual pre-filtered by titles + people)
-async fn sync_title_principals(db: &DbRepository, token: &CancellationToken) -> Result<DatasetResult> {
+async fn sync_title_principals(
+    db: &DbRepository,
+    token: &CancellationToken,
+    progress: &Arc<RwLock<DownloadProgress>>,
+) -> Result<DatasetResult> {
     let dataset = "title.principals.tsv.gz";
 
-    if should_skip_dataset(db, dataset).await {
+    if should_skip_dataset(db, dataset, progress).await {
         return Ok(DatasetResult::Skipped);
     }
 
@@ -1031,7 +1352,7 @@ async fn sync_title_principals(db: &DbRepository, token: &CancellationToken) -> 
 
     let (sync_id, resume) = get_or_resume_sync(db, dataset).await?;
 
-    let result = sync_title_principals_inner(db, &url, sync_id, &resume, token).await;
+    let result = sync_title_principals_inner(db, &url, sync_id, &resume, token, progress).await;
 
     match result {
         Ok(DatasetResult::Completed(stats)) => {
@@ -1061,7 +1382,9 @@ async fn sync_title_principals_inner(
     sync_id: i64,
     resume: &ResumeInfo,
     token: &CancellationToken,
+    progress: &Arc<RwLock<DownloadProgress>>,
 ) -> Result<DatasetResult> {
+    let dataset = "title.principals.tsv.gz";
     let resume_from = resume.last_processed_id;
     if resume_from > 0 {
         info!("Downloading {} (resuming from id {})", url, resume_from);
@@ -1099,12 +1422,13 @@ async fn sync_title_principals_inner(
         person_ids.len()
     );
 
-    let bytes = match download_dataset(url, token).await? {
-        Ok(b) => b,
+    let cache_path = match download_dataset(url, dataset, token, progress).await? {
+        Ok(p) => p,
         Err(cancelled) => return Ok(cancelled),
     };
 
-    let decoder = GzDecoder::new(&bytes[..]);
+    let file = std::fs::File::open(&cache_path)?;
+    let decoder = GzDecoder::new(file);
     let reader = BufReader::new(decoder);
 
     let mut rows_processed = resume.rows_processed;

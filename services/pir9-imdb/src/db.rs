@@ -375,6 +375,10 @@ impl DbRepository {
                 status: r.get("status"),
                 error_message: r.get("error_message"),
                 is_running: false,
+                download_progress: None,
+                download_size_bytes: None,
+                download_bytes_done: None,
+                current_phase: None,
             }))
         }
 

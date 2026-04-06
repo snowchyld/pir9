@@ -5,7 +5,17 @@
 import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
 import { http } from '../../core/http';
 import { createMutation, createQuery, invalidateQueries } from '../../core/query';
+import { signal } from '../../core/reactive';
 import { showError, showSuccess } from '../../stores/app.store';
+
+interface RootFolder {
+  id: number;
+  path: string;
+  contentType: string;
+  freeSpace?: number;
+  totalSpace?: number;
+  accessible?: boolean;
+}
 
 interface NamingConfig {
   renameEpisodes: boolean;
@@ -74,11 +84,46 @@ export class MediaManagementSettings extends BaseComponent {
     },
   });
 
+  // Root folder management
+  private rootFoldersQuery = createQuery({
+    queryKey: ['/rootfolder'],
+    queryFn: () => http.get<RootFolder[]>('/rootfolder'),
+  });
+
+  private newFolderPath = signal('');
+  private newFolderType = signal('series');
+
+  private addFolderMutation = createMutation({
+    mutationFn: (data: { path: string; contentType: string }) => http.post('/rootfolder', data),
+    onSuccess: () => {
+      invalidateQueries(['/rootfolder']);
+      this.newFolderPath.set('');
+      showSuccess('Root folder added');
+    },
+    onError: () => {
+      showError('Failed to add root folder — check that the path exists and is accessible');
+    },
+  });
+
+  private deleteFolderMutation = createMutation({
+    mutationFn: (id: number) => http.delete(`/rootfolder/${id}`),
+    onSuccess: () => {
+      invalidateQueries(['/rootfolder']);
+      showSuccess('Root folder removed');
+    },
+    onError: () => {
+      showError('Failed to remove root folder');
+    },
+  });
+
   protected onInit(): void {
     this.watch(this.namingQuery.data);
     this.watch(this.namingQuery.isLoading);
     this.watch(this.mediaManagementQuery.data);
     this.watch(this.mediaManagementQuery.isLoading);
+    this.watch(this.rootFoldersQuery.data);
+    this.watch(this.newFolderPath);
+    this.watch(this.newFolderType);
   }
 
   protected template(): string {
@@ -95,6 +140,8 @@ export class MediaManagementSettings extends BaseComponent {
     }
 
     return html`
+      ${this.renderRootFolders()}
+
       <div class="settings-section">
         <h2 class="section-title">Episode Naming</h2>
 
@@ -545,5 +592,128 @@ export class MediaManagementSettings extends BaseComponent {
 
     this.pendingNamingChanges = {};
     this.pendingMediaManagementChanges = {};
+  }
+
+  // ── Root Folders ──────────────────────────────────────────────────
+
+  private renderRootFolders(): string {
+    const folders = this.rootFoldersQuery.data.value ?? [];
+    const contentTypes = ['series', 'anime', 'movie', 'music', 'podcast', 'audiobook'];
+
+    // Group by content type
+    const grouped: Record<string, RootFolder[]> = {};
+    for (const ct of contentTypes) {
+      grouped[ct] = folders.filter((f) => f.contentType === ct);
+    }
+    // Also include any with unknown content type
+    const knownTypes = new Set(contentTypes);
+    const other = folders.filter((f) => !knownTypes.has(f.contentType));
+    if (other.length > 0) grouped['other'] = other;
+
+    return html`
+      <div class="settings-section">
+        <h2 class="section-title">Root Folders</h2>
+        <p class="section-description">
+          Root folders are where pir9 looks for your media library. Each folder has a content type
+          that determines which library it belongs to.
+        </p>
+
+        ${contentTypes
+          .map((ct) => {
+            const ctFolders = grouped[ct] ?? [];
+            const label = ct.charAt(0).toUpperCase() + ct.slice(1);
+            return html`
+            <div class="root-folder-group" style="margin-bottom: 1rem;">
+              <h3 class="subsection-title" style="font-size: 0.95em; margin-bottom: 0.5rem;">${label}</h3>
+              ${
+                ctFolders.length > 0
+                  ? html`
+                <div class="root-folder-list">
+                  ${ctFolders
+                    .map(
+                      (f) => html`
+                    <div class="root-folder-item" style="display: flex; align-items: center; justify-content: space-between; padding: 0.4rem 0.75rem; background: var(--bg-secondary); border-radius: 4px; margin-bottom: 0.25rem;">
+                      <span style="font-family: monospace; font-size: 0.9em;">${escapeHtml(f.path)}</span>
+                      <button
+                        class="danger-btn"
+                        style="padding: 0.2rem 0.5rem; font-size: 0.8em;"
+                        onclick="this.closest('media-management-settings').handleDeleteFolder(${f.id})"
+                      >Remove</button>
+                    </div>
+                  `,
+                    )
+                    .join('')}
+                </div>
+              `
+                  : html`<div style="color: var(--text-muted); font-size: 0.85em; padding: 0.3rem 0;">No ${label.toLowerCase()} root folders configured</div>`
+              }
+            </div>
+          `;
+          })
+          .join('')}
+
+        <div class="add-folder-form" style="margin-top: 1rem; padding: 1rem; background: var(--bg-secondary); border-radius: 6px;">
+          <h3 class="subsection-title" style="margin-bottom: 0.75rem;">Add Root Folder</h3>
+          <div style="display: flex; gap: 0.5rem; align-items: end; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 250px;">
+              <label class="form-label" style="font-size: 0.85em;">Path</label>
+              <input
+                type="text"
+                class="form-input"
+                placeholder="/volume1/Music"
+                value="${escapeHtml(this.newFolderPath.value)}"
+                oninput="this.closest('media-management-settings').handleNewFolderPathChange(this.value)"
+              />
+            </div>
+            <div style="min-width: 150px;">
+              <label class="form-label" style="font-size: 0.85em;">Content Type</label>
+              <select
+                class="form-select"
+                onchange="this.closest('media-management-settings').handleNewFolderTypeChange(this.value)"
+              >
+                ${contentTypes
+                  .map(
+                    (ct) => html`
+                  <option value="${ct}" ${this.newFolderType.value === ct ? 'selected' : ''}>${ct.charAt(0).toUpperCase() + ct.slice(1)}</option>
+                `,
+                  )
+                  .join('')}
+              </select>
+            </div>
+            <button
+              class="primary-btn"
+              style="height: 38px;"
+              onclick="this.closest('media-management-settings').handleAddFolder()"
+              ${this.addFolderMutation.isLoading.value ? 'disabled' : ''}
+            >
+              ${this.addFolderMutation.isLoading.value ? 'Adding...' : 'Add Folder'}
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  handleNewFolderPathChange(value: string): void {
+    this.newFolderPath.set(value);
+  }
+
+  handleNewFolderTypeChange(value: string): void {
+    this.newFolderType.set(value);
+  }
+
+  handleAddFolder(): void {
+    const path = this.newFolderPath.value.trim();
+    if (!path) {
+      showError('Path is required');
+      return;
+    }
+    this.addFolderMutation.mutate({ path, contentType: this.newFolderType.value });
+  }
+
+  handleDeleteFolder(id: number): void {
+    if (window.confirm('Remove this root folder? (Files will not be deleted)')) {
+      this.deleteFolderMutation.mutate(id);
+    }
   }
 }

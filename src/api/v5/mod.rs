@@ -5,6 +5,7 @@ use crate::web::AppState;
 use axum::{http::StatusCode, response::IntoResponse, routing::get, Json, Router};
 use std::sync::Arc;
 
+pub mod audiobook;
 pub mod blocklist;
 pub mod calendar;
 pub mod command;
@@ -55,6 +56,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .nest("/album", music::album_routes())
         .nest("/track", music::track_routes())
         .nest("/podcast", podcast::routes())
+        .nest("/audiobook", audiobook::routes())
         .nest("/episode", episodes::routes())
         .nest("/episodeFile", episodefile::routes())
         .nest("/episodefile", episodefile::routes()) // lowercase alias

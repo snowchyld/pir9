@@ -557,3 +557,57 @@ pub struct PodcastFileDbModel {
     pub media_info: Option<String>, // JSON serialized
     pub date_added: DateTime<Utc>,
 }
+
+/// Audiobook database model
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct AudiobookDbModel {
+    pub id: i64,
+    pub title: String,
+    pub clean_title: String,
+    pub sort_title: String,
+    pub author: Option<String>,
+    pub narrator: Option<String>,
+    pub overview: Option<String>,
+    pub publisher: Option<String>,
+    pub isbn: Option<String>,
+    pub asin: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub release_date: Option<NaiveDate>,
+    pub genres: String,  // JSON serialized
+    pub images: String,  // JSON serialized
+    pub tags: String,    // JSON serialized
+    pub path: String,
+    pub root_folder_path: String,
+    pub quality_profile_id: i64,
+    pub monitored: bool,
+    pub has_file: bool,
+    pub audiobook_file_id: Option<i64>,
+    pub added: DateTime<Utc>,
+    pub last_info_sync: Option<DateTime<Utc>>,
+    pub title_slug: String,
+}
+
+/// Audiobook chapter database model
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct AudiobookChapterDbModel {
+    pub id: i64,
+    pub audiobook_id: i64,
+    pub title: String,
+    pub chapter_number: i32,
+    pub duration_ms: Option<i64>,
+    pub has_file: bool,
+    pub monitored: bool,
+}
+
+/// Audiobook file database model
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct AudiobookFileDbModel {
+    pub id: i64,
+    pub audiobook_id: i64,
+    pub relative_path: String,
+    pub path: String,
+    pub size: i64,
+    pub quality: String,            // JSON serialized
+    pub media_info: Option<String>, // JSON serialized
+    pub date_added: DateTime<Utc>,
+}

@@ -30,6 +30,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/sync/cancel-stale", post(cancel_stale_syncs))
         .route("/backfill-air-dates", post(backfill_air_dates))
         .route("/stats", get(get_stats))
+        // Granular dataset controls
+        .route("/datasets", get(get_datasets))
+        .route("/download", post(start_download))
+        .route("/process", post(start_process))
         // Link to local series
         .route("/link/{imdb_id}", post(link_to_series))
         .route("/lookup-local/{imdb_id}", get(lookup_local_series))
@@ -114,9 +118,22 @@ async fn get_episodes(
 
 // ========== Sync Controls (proxied to pir9-imdb service) ==========
 
+/// Request body for selective sync/download/process
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncRequest {
+    #[serde(default)]
+    datasets: Vec<String>,
+}
+
 /// Start an IMDB sync - proxied to pir9-imdb service's POST /api/sync
-async fn start_sync(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.imdb_client.start_sync().await {
+async fn start_sync(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<SyncRequest>>,
+) -> impl IntoResponse {
+    let datasets = body.map(|b| b.datasets.clone()).unwrap_or_default();
+
+    match state.imdb_client.start_sync_selective(&datasets).await {
         Ok(resp) => {
             let status =
                 StatusCode::from_u16(resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
@@ -205,14 +222,85 @@ fn default_backfill_limit() -> u32 {
     100
 }
 
+/// Get dataset metadata - proxied to pir9-imdb service's GET /api/datasets
+async fn get_datasets(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.imdb_client.get_datasets().await {
+        Ok(resp) => {
+            let status =
+                StatusCode::from_u16(resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            (status, Json(resp.body)).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to get IMDB datasets: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Download datasets to cache - proxied to pir9-imdb service's POST /api/download
+async fn start_download(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<SyncRequest>>,
+) -> impl IntoResponse {
+    let datasets = body.map(|b| b.datasets.clone()).unwrap_or_default();
+
+    match state.imdb_client.start_download(&datasets).await {
+        Ok(resp) => {
+            let status =
+                StatusCode::from_u16(resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            (status, Json(resp.body)).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to start IMDB download: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Process cached datasets - proxied to pir9-imdb service's POST /api/process
+async fn start_process(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<SyncRequest>>,
+) -> impl IntoResponse {
+    let datasets = body.map(|b| b.datasets.clone()).unwrap_or_default();
+
+    match state.imdb_client.start_process(&datasets).await {
+        Ok(resp) => {
+            let status =
+                StatusCode::from_u16(resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            (status, Json(resp.body)).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to start IMDB process: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// Get IMDB stats - proxied to pir9-imdb service
 async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.imdb_client.get_stats().await {
         Ok(Some(stats)) => {
-            // Transform to match what the frontend expects
             Json(serde_json::json!({
                 "seriesCount": stats.series_count,
                 "episodeCount": stats.episode_count,
+                "movieCount": stats.movie_count,
+                "peopleCount": stats.people_count,
+                "creditsCount": stats.credits_count,
+                "dbSizeBytes": stats.db_size_bytes,
+                "lastSync": stats.last_sync,
                 "lastBasicsSync": stats.last_sync,
                 "lastEpisodesSync": stats.last_sync,
                 "lastRatingsSync": stats.last_sync,
@@ -222,6 +310,11 @@ async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         Ok(None) => Json(serde_json::json!({
             "seriesCount": 0,
             "episodeCount": 0,
+            "movieCount": 0,
+            "peopleCount": 0,
+            "creditsCount": 0,
+            "dbSizeBytes": 0,
+            "lastSync": null,
             "lastBasicsSync": null,
             "lastEpisodesSync": null,
             "lastRatingsSync": null,

@@ -100,6 +100,8 @@ pub enum ScanType {
     RescanPodcast,
     /// Placeholder for music library scanning (not yet implemented)
     RescanMusic,
+    /// Placeholder for audiobook library scanning (not yet implemented)
+    RescanAudiobook,
 }
 
 /// Known file metadata sent from server to worker for skip-enrichment optimization.
@@ -321,6 +323,20 @@ pub enum Message {
     TrackFileDeleted {
         track_file_id: i64,
         artist_id: i64,
+    },
+
+    // Audiobook events
+    AudiobookAdded {
+        audiobook_id: i64,
+        title: String,
+    },
+    AudiobookUpdated {
+        audiobook_id: i64,
+        title: String,
+    },
+    AudiobookDeleted {
+        audiobook_id: i64,
+        title: String,
     },
 
     // Episode events

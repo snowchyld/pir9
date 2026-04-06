@@ -312,6 +312,52 @@ export function setPodcastFilter(filter: string): void {
 }
 
 /**
+ * Audiobook view mode
+ */
+export const audiobookViewMode = persistedSignal<ViewMode>('audiobook-view-mode', 'posters');
+
+export function setAudiobookViewMode(mode: ViewMode): void {
+  audiobookViewMode.set(mode);
+}
+
+/**
+ * Audiobook sort key
+ */
+export type AudiobookSortKey = 'sortTitle' | 'author' | 'added' | 'sizeOnDisk';
+
+export const audiobookSortKey = persistedSignal<AudiobookSortKey>(
+  'audiobook-sort-key',
+  'sortTitle',
+);
+export const audiobookSortDirection = persistedSignal<'ascending' | 'descending'>(
+  'audiobook-sort-direction',
+  'ascending',
+);
+
+export function setAudiobookSort(
+  key: AudiobookSortKey,
+  direction?: 'ascending' | 'descending',
+): void {
+  if (key === audiobookSortKey.value && !direction) {
+    audiobookSortDirection.update((d) => (d === 'ascending' ? 'descending' : 'ascending'));
+  } else {
+    audiobookSortKey.set(key);
+    if (direction) {
+      audiobookSortDirection.set(direction);
+    }
+  }
+}
+
+/**
+ * Audiobook filter
+ */
+export const audiobookFilter = persistedSignal<string>('audiobook-filter', 'all');
+
+export function setAudiobookFilter(filter: string): void {
+  audiobookFilter.set(filter);
+}
+
+/**
  * Global search query
  */
 export const searchQuery = signal('');

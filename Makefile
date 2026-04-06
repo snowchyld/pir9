@@ -241,6 +241,7 @@ release: docker-build push
 release-restart: dev-frontend release
 	@echo ""
 	@echo "Restarting local containers..."
+	@mkdir -p tmp/imdb_data tmp/musicbrainz_data && chmod 777 tmp/imdb_data tmp/musicbrainz_data
 #	docker compose down
 	docker compose build
 	docker compose up -d

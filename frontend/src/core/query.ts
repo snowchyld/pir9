@@ -242,6 +242,16 @@ export function usePodcastsQuery() {
 }
 
 /**
+ * Create a query for fetching audiobooks list
+ */
+export function useAudiobooksQuery() {
+  return createQuery({
+    queryKey: ['/audiobook'],
+    queryFn: () => http.get<import('./http').Audiobook[]>('/audiobook'),
+  });
+}
+
+/**
  * Create a query for fetching episodes
  */
 export function useEpisodesQuery(seriesId: number) {

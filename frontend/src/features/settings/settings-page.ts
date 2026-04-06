@@ -86,10 +86,10 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>',
   },
   {
-    id: 'imdb',
-    label: 'IMDB',
-    path: '/settings/imdb',
-    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M7 8v8"></path><path d="M10 8l2 4 2-4v8"></path><path d="M17 8c1 0 2 .5 2 2s-1 2-2 2 2 .5 2 2-1 2-2 2"></path></svg>',
+    id: 'data',
+    label: 'Data Sources',
+    path: '/settings/data',
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>',
   },
   {
     id: 'history',

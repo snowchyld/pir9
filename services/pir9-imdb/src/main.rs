@@ -20,15 +20,16 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
-use serde::Serialize;
 use tracing::{error, info, warn};
+
+use models::DownloadProgress;
 
 mod db;
 mod models;
@@ -50,6 +51,7 @@ pub struct AppState {
     pub db: DbRepository,
     pub tmdb_client: Option<Arc<tmdb::TmdbClient>>,
     sync_handle: Arc<Mutex<Option<SyncHandle>>>,
+    pub download_progress: Arc<RwLock<DownloadProgress>>,
 }
 
 #[tokio::main]
@@ -99,6 +101,7 @@ async fn main() -> anyhow::Result<()> {
         db,
         tmdb_client,
         sync_handle: Arc::new(Mutex::new(None)),
+        download_progress: Arc::new(RwLock::new(DownloadProgress::default())),
     };
 
     // Build router
@@ -124,6 +127,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/sync/status", get(get_sync_status))
         .route("/api/sync/cancel", post(cancel_sync))
         .route("/api/backfill-air-dates", post(backfill_air_dates))
+        // Granular dataset endpoints
+        .route("/api/datasets", get(get_datasets))
+        .route("/api/download", post(start_download))
+        .route("/api/process", post(start_process))
         // Middleware
         .layer(TraceLayer::new_for_http())
         .layer(
@@ -381,7 +388,12 @@ async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }
 }
 
-async fn start_sync(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn start_sync(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<models::SyncRequest>>,
+) -> impl IntoResponse {
+    let datasets = body.map(|b| b.datasets.clone()).unwrap_or_default();
+
     let mut handle_guard = state.sync_handle.lock().await;
 
     // Check if a sync is actually running (in-memory truth, not DB)
@@ -406,15 +418,31 @@ async fn start_sync(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let token = CancellationToken::new();
     let db = state.db.clone();
     let task_token = token.clone();
+    let progress = state.download_progress.clone();
+
+    // Reset download progress
+    {
+        let mut p = progress.write().await;
+        *p = DownloadProgress::default();
+    }
 
     let join_handle = tokio::spawn(async move {
-        info!("Starting IMDB sync...");
-        match sync::run_full_sync(&db, task_token).await {
+        info!("Starting IMDB sync (datasets: {:?})...", datasets);
+        match sync::run_full_sync_selective(&db, &datasets, task_token, progress.clone()).await {
             Ok(report) => {
                 info!("IMDB sync completed: {:?}", report);
+                // Reset progress to idle
+                let mut p = progress.write().await;
+                p.phase = "idle".to_string();
+                p.current_file.clear();
+                p.percentage = 0.0;
+                p.bytes_done = 0;
+                p.total_bytes = 0;
             }
             Err(e) => {
                 error!("IMDB sync failed: {}", e);
+                let mut p = progress.write().await;
+                p.phase = "idle".to_string();
             }
         }
     });
@@ -447,21 +475,37 @@ async fn get_sync_status(State(state): State<Arc<AppState>>) -> impl IntoRespons
             // Set top-level is_running
             status.is_running = is_running;
 
-            // Set per-dataset is_running on whichever has status="running"
-            if let Some(ref mut ds) = status.title_basics {
-                ds.is_running = is_running && ds.status == "running";
-            }
-            if let Some(ref mut ds) = status.title_episodes {
-                ds.is_running = is_running && ds.status == "running";
-            }
-            if let Some(ref mut ds) = status.title_ratings {
-                ds.is_running = is_running && ds.status == "running";
-            }
-            if let Some(ref mut ds) = status.name_basics {
-                ds.is_running = is_running && ds.status == "running";
-            }
-            if let Some(ref mut ds) = status.title_principals {
-                ds.is_running = is_running && ds.status == "running";
+            // Read live download progress
+            let dl_progress = state.download_progress.read().await;
+            let dl_file = dl_progress.current_file.clone();
+            let dl_phase = dl_progress.phase.clone();
+            let dl_pct = dl_progress.percentage;
+            let dl_bytes_done = dl_progress.bytes_done;
+            let dl_total = dl_progress.total_bytes;
+            drop(dl_progress);
+
+            // Set per-dataset is_running + download progress on whichever has status="running"
+            for ds_opt in [
+                &mut status.title_basics,
+                &mut status.title_episodes,
+                &mut status.title_ratings,
+                &mut status.name_basics,
+                &mut status.title_principals,
+            ] {
+                if let Some(ref mut ds) = ds_opt {
+                    ds.is_running = is_running && ds.status == "running";
+                    // Attach download progress to the currently-active dataset
+                    if ds.is_running && ds.dataset_name == dl_file {
+                        ds.current_phase = Some(dl_phase.clone());
+                        if dl_phase == "downloading" {
+                            ds.download_progress = Some(dl_pct);
+                            ds.download_size_bytes = if dl_total > 0 { Some(dl_total) } else { None };
+                            ds.download_bytes_done = if dl_bytes_done > 0 { Some(dl_bytes_done) } else { None };
+                        }
+                    } else if ds.is_running {
+                        ds.current_phase = Some("parsing".to_string());
+                    }
+                }
             }
 
             (StatusCode::OK, Json(status)).into_response()
@@ -504,6 +548,137 @@ async fn cancel_sync(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         )
             .into_response(),
     }
+}
+
+// ============================================================================
+// Granular Dataset Endpoints
+// ============================================================================
+
+/// GET /api/datasets — return metadata (sizes, cache status) for each dataset
+async fn get_datasets(_state: State<Arc<AppState>>) -> impl IntoResponse {
+    match sync::get_dataset_infos().await {
+        Ok(infos) => (StatusCode::OK, Json(infos)).into_response(),
+        Err(e) => {
+            error!("Failed to get dataset infos: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// POST /api/download — download datasets to cache without processing
+async fn start_download(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<models::SyncRequest>>,
+) -> impl IntoResponse {
+    let datasets = body.map(|b| b.datasets.clone()).unwrap_or_default();
+
+    // Downloads run independently — no sync_handle lock
+    let token = CancellationToken::new();
+    let task_token = token.clone();
+    let progress = state.download_progress.clone();
+
+    {
+        let mut p = progress.write().await;
+        p.phase = "downloading".to_string();
+        p.process_only = false;
+    }
+
+    let join_handle = tokio::spawn(async move {
+        info!("Starting download-only (datasets: {:?})...", datasets);
+        match sync::run_download_only(&datasets, &task_token, &progress).await {
+            Ok(downloaded) => {
+                info!("Download complete: {:?}", downloaded);
+                let mut p = progress.write().await;
+                p.phase = "idle".to_string();
+                p.current_file.clear();
+            }
+            Err(e) => {
+                error!("Download failed: {}", e);
+                let mut p = progress.write().await;
+                p.phase = "idle".to_string();
+            }
+        }
+    });
+
+    drop(join_handle); // Fire and forget
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "message": "Download started",
+            "status": "running"
+        })),
+    )
+        .into_response()
+}
+
+/// POST /api/process — process already-cached datasets without re-downloading
+async fn start_process(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<models::SyncRequest>>,
+) -> impl IntoResponse {
+    let datasets = body.map(|b| b.datasets.clone()).unwrap_or_default();
+
+    // Process runs independently — only check if full sync is running
+    let handle_guard = state.sync_handle.lock().await;
+    if let Some(ref handle) = *handle_guard {
+        if !handle.join_handle.is_finished() {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "A full sync is already running — wait for it to complete",
+                    "status": "running"
+                })),
+            )
+                .into_response();
+        }
+    }
+    drop(handle_guard);
+
+    let token = CancellationToken::new();
+    let db = state.db.clone();
+    let task_token = token.clone();
+    let progress = state.download_progress.clone();
+
+    {
+        let mut p = progress.write().await;
+        p.process_only = true;
+        p.phase = "parsing".to_string();
+    }
+
+    let join_handle = tokio::spawn(async move {
+        info!("Starting process-only (datasets: {:?})...", datasets);
+        match sync::run_process_only(&db, &datasets, task_token, progress.clone()).await {
+            Ok(report) => {
+                info!("Process complete: {:?}", report);
+                let mut p = progress.write().await;
+                p.phase = "idle".to_string();
+                p.current_file.clear();
+                p.process_only = false;
+            }
+            Err(e) => {
+                error!("Process failed: {}", e);
+                let mut p = progress.write().await;
+                p.phase = "idle".to_string();
+                p.process_only = false;
+            }
+        }
+    });
+
+    drop(join_handle); // Fire and forget
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "message": "Process started",
+            "status": "running"
+        })),
+    )
+        .into_response()
 }
 
 // ============================================================================

@@ -122,6 +122,7 @@ async fn get_running_tasks(
                 }
                 crate::core::messaging::ScanType::RescanPodcast => "Scan Podcasts".to_string(),
                 crate::core::messaging::ScanType::RescanMusic => "Scan Music".to_string(),
+                crate::core::messaging::ScanType::RescanAudiobook => "Scan Audiobooks".to_string(),
             };
             let total = job.entity_ids.len();
             let has_worker = job.worker_id.is_some();

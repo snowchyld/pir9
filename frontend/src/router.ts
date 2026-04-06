@@ -62,6 +62,13 @@ export const routes: Route[] = [
   // Add Podcast
   { path: '/add-podcast', component: 'add-podcast-page', title: 'Add Podcast' },
 
+  // Audiobooks
+  { path: '/audiobooks', component: 'audiobooks-index-page', title: 'Audiobooks' },
+  { path: '/audiobooks/:titleSlug', component: 'audiobook-detail-page', title: 'Audiobook' },
+
+  // Add Audiobook
+  { path: '/add-audiobook', component: 'add-audiobook-page', title: 'Add Audiobook' },
+
   // Calendar
   { path: '/calendar', component: 'calendar-page', title: 'Calendar' },
 
@@ -102,7 +109,8 @@ export const routes: Route[] = [
   { path: '/settings/tags', component: 'tags-settings', title: 'Tags' },
   { path: '/settings/general', component: 'general-settings', title: 'General' },
   { path: '/settings/ui', component: 'ui-settings', title: 'UI' },
-  { path: '/settings/imdb', component: 'imdb-settings', title: 'IMDB' },
+  { path: '/settings/data', component: 'imdb-settings', title: 'Data Sources' },
+  { path: '/settings/imdb', component: 'imdb-settings', title: 'Data Sources' },
   {
     path: '/settings/history',
     component: 'history-settings',
