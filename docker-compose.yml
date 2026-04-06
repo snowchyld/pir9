@@ -77,6 +77,7 @@ services:
       - /volume1/Movies:/volume1/Movies
       - /volume1/Music:/volume1/Music
       - /volume1/Shows:/volume1/Shows
+      - /volume1/Audiobooks:/volume1/Audiobooks
       - /volume1/downloads:/volume1/downloads
     environment:
       - PUID=${PUID:-1000}
@@ -221,6 +222,11 @@ services:
     image: postgres:16-alpine
     container_name: pir9-postgres-musicbrainz
     restart: unless-stopped
+    command: >
+      postgres
+      -c max_wal_size=4GB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=64MB
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-pir9}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pir9}
@@ -272,11 +278,61 @@ services:
       start_period: 10s
       retries: 3
 
+  # ============================================================================
+  # Cover Art Cache - Caching proxy for MusicBrainz Cover Art Archive
+  # ============================================================================
+  coverart:
+    build:
+      context: ./services/cover-art-cache
+      dockerfile: Dockerfile
+    image: pir9-coverart:latest
+    container_name: pir9-coverart
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    volumes:
+      - coverart-cache:/cover-art-cache
+    networks:
+      - pir9-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ============================================================================
+  # Cover Art Cleaner - Manages cover art cache size
+  # ============================================================================
+  coverart-cleaner:
+    build:
+      context: ./services/cover-art-cache
+      dockerfile: Dockerfile.cleaner
+    image: pir9-coverart-cleaner:latest
+    container_name: pir9-coverart-cleaner
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - PYTHONUNBUFFERED=1
+      - COVER_ART_CACHE_MAX_SIZE_MB=10240
+      - COVER_ART_CACHE_CLEAN_TO_MB=8192
+      - COVER_ART_CACHE_CLEANUP_INTERVAL=300
+    volumes:
+      - coverart-cache:/cover-art-cache
+    networks:
+      - pir9-network
+
 volumes:
   postgres-data:
   postgres-imdb-data:
   postgres-musicbrainz-data:
   redis-data:
+  coverart-cache:
 
 networks:
   pir9-network:

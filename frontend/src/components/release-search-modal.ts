@@ -54,6 +54,9 @@ interface SearchParams {
   episodeTitle?: string;
   movieId?: number;
   movieTitle?: string;
+  /** Free-text query for music/general search */
+  query?: string;
+  queryTitle?: string;
 }
 
 @customElement('release-search-modal')
@@ -99,7 +102,9 @@ export class ReleaseSearchModal extends BaseComponent {
     try {
       const queryParams: Record<string, string | number> = {};
 
-      if (params.movieId) {
+      if (params.query) {
+        queryParams.query = params.query;
+      } else if (params.movieId) {
         queryParams.movieId = params.movieId;
       } else if (params.seriesId) {
         queryParams.seriesId = params.seriesId;
@@ -189,13 +194,15 @@ export class ReleaseSearchModal extends BaseComponent {
     const releases = this.getSortedReleases();
     const grabbing = this.isGrabbing.value;
 
-    const title = params?.movieTitle
-      ? params.movieTitle
-      : params?.episodeNumber !== undefined
-        ? `${params?.seriesTitle} - S${String(params?.seasonNumber ?? 0).padStart(2, '0')}E${String(params.episodeNumber).padStart(2, '0')} - ${params?.episodeTitle ?? ''}`
-        : params?.seasonNumber !== undefined
-          ? `${params?.seriesTitle} - Season ${params.seasonNumber}`
-          : (params?.seriesTitle ?? 'Search');
+    const title = params?.queryTitle
+      ? params.queryTitle
+      : params?.movieTitle
+        ? params.movieTitle
+        : params?.episodeNumber !== undefined
+          ? `${params?.seriesTitle} - S${String(params?.seasonNumber ?? 0).padStart(2, '0')}E${String(params.episodeNumber).padStart(2, '0')} - ${params?.episodeTitle ?? ''}`
+          : params?.seasonNumber !== undefined
+            ? `${params?.seriesTitle} - Season ${params.seasonNumber}`
+            : (params?.seriesTitle ?? 'Search');
 
     return html`
       <div class="modal-overlay" onclick="if(event.target === this) this.closest('release-search-modal').close()">
@@ -294,8 +301,8 @@ export class ReleaseSearchModal extends BaseComponent {
           border: 1px solid var(--border-color);
           border-radius: 0.5rem;
           width: 100%;
-          max-width: 1000px;
-          max-height: 80vh;
+          max-width: 1200px;
+          max-height: 85vh;
           display: flex;
           flex-direction: column;
           overflow: hidden;
@@ -394,6 +401,7 @@ export class ReleaseSearchModal extends BaseComponent {
           width: 100%;
           border-collapse: collapse;
           font-size: 0.875rem;
+          table-layout: fixed;
         }
 
         .releases-table th {
@@ -435,12 +443,14 @@ export class ReleaseSearchModal extends BaseComponent {
         }
 
         .col-title {
-          min-width: 300px;
+          width: auto;
         }
 
         .release-title {
           font-weight: 500;
-          word-break: break-word;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .release-rejected {
@@ -459,11 +469,11 @@ export class ReleaseSearchModal extends BaseComponent {
         }
 
         .col-indexer {
-          width: 100px;
+          width: 110px;
         }
 
         .col-quality {
-          width: 120px;
+          width: 100px;
         }
 
         .quality-badge {
@@ -524,7 +534,7 @@ export class ReleaseSearchModal extends BaseComponent {
         }
 
         .col-actions {
-          width: 80px;
+          width: 72px;
           text-align: center;
         }
 
@@ -593,7 +603,7 @@ export class ReleaseSearchModal extends BaseComponent {
     return html`
       <tr class="${isRejected ? 'release-rejected' : ''}">
         <td class="col-title">
-          <div class="release-title">${escapeHtml(release.title)}</div>
+          <div class="release-title" title="${escapeHtml(release.title)}">${escapeHtml(release.title)}</div>
           ${
             release.releaseGroup
               ? html`

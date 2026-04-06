@@ -3,6 +3,7 @@
  */
 
 import type { ReleaseSearchModal } from '../../components/release-search-modal';
+import '../../components/release-search-modal';
 import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { type Episode, http, type QueueItem, type Series } from '../../core/http';
 import { createMutation, createQuery, invalidateQueries, useQueueQuery } from '../../core/query';

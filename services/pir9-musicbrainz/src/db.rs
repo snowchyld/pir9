@@ -293,6 +293,7 @@ impl DbRepository {
 
     /// Upsert a batch of release tracks using UNNEST for bulk efficiency.
     /// Accepts tracks from multiple releases in one call.
+    /// Chunks into 10K-row inserts to limit per-query WAL pressure.
     pub async fn upsert_release_tracks_bulk(&self, tracks: &[DbReleaseTrack]) -> Result<u64> {
         if tracks.is_empty() {
             return Ok(0);
@@ -311,45 +312,52 @@ impl DbRepository {
             .execute(&self.pool)
             .await?;
 
-        // Bulk insert all tracks via UNNEST
-        let mut t_release_mbids = Vec::with_capacity(tracks.len());
-        let mut t_disc_numbers = Vec::with_capacity(tracks.len());
-        let mut t_positions = Vec::with_capacity(tracks.len());
-        let mut t_titles = Vec::with_capacity(tracks.len());
-        let mut t_recording_mbids = Vec::with_capacity(tracks.len());
-        let mut t_length_ms = Vec::with_capacity(tracks.len());
+        // Insert in chunks to avoid massive single-query WAL writes
+        const CHUNK_SIZE: usize = 10_000;
+        let mut total_affected = 0u64;
 
-        for track in tracks {
-            t_release_mbids.push(track.release_mbid.as_str());
-            t_disc_numbers.push(track.disc_number);
-            t_positions.push(track.position);
-            t_titles.push(track.title.as_str());
-            t_recording_mbids.push(track.recording_mbid.as_deref());
-            t_length_ms.push(track.length_ms);
+        for chunk in tracks.chunks(CHUNK_SIZE) {
+            let mut t_release_mbids = Vec::with_capacity(chunk.len());
+            let mut t_disc_numbers = Vec::with_capacity(chunk.len());
+            let mut t_positions = Vec::with_capacity(chunk.len());
+            let mut t_titles = Vec::with_capacity(chunk.len());
+            let mut t_recording_mbids = Vec::with_capacity(chunk.len());
+            let mut t_length_ms = Vec::with_capacity(chunk.len());
+
+            for track in chunk {
+                t_release_mbids.push(track.release_mbid.as_str());
+                t_disc_numbers.push(track.disc_number);
+                t_positions.push(track.position);
+                t_titles.push(track.title.as_str());
+                t_recording_mbids.push(track.recording_mbid.as_deref());
+                t_length_ms.push(track.length_ms);
+            }
+
+            let result = sqlx::query(
+                r#"
+                INSERT INTO mb_release_tracks (release_mbid, disc_number, position, title, recording_mbid, length_ms)
+                SELECT * FROM UNNEST(
+                    $1::text[], $2::int[], $3::int[], $4::text[], $5::text[], $6::int[]
+                )
+                ON CONFLICT (release_mbid, disc_number, position) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    recording_mbid = EXCLUDED.recording_mbid,
+                    length_ms = EXCLUDED.length_ms
+                "#,
+            )
+            .bind(&t_release_mbids)
+            .bind(&t_disc_numbers)
+            .bind(&t_positions)
+            .bind(&t_titles)
+            .bind(&t_recording_mbids)
+            .bind(&t_length_ms)
+            .execute(&self.pool)
+            .await?;
+
+            total_affected += result.rows_affected();
         }
 
-        let result = sqlx::query(
-            r#"
-            INSERT INTO mb_release_tracks (release_mbid, disc_number, position, title, recording_mbid, length_ms)
-            SELECT * FROM UNNEST(
-                $1::text[], $2::int[], $3::int[], $4::text[], $5::text[], $6::int[]
-            )
-            ON CONFLICT (release_mbid, disc_number, position) DO UPDATE SET
-                title = EXCLUDED.title,
-                recording_mbid = EXCLUDED.recording_mbid,
-                length_ms = EXCLUDED.length_ms
-            "#,
-        )
-        .bind(&t_release_mbids)
-        .bind(&t_disc_numbers)
-        .bind(&t_positions)
-        .bind(&t_titles)
-        .bind(&t_recording_mbids)
-        .bind(&t_length_ms)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected())
+        Ok(total_affected)
     }
 
     // ── Statistics ───────────────────────────────────────────────────
