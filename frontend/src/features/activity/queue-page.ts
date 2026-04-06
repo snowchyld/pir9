@@ -19,7 +19,15 @@ type QueueSortKey =
   | 'protocol'
   | 'progress'
   | 'timeleft';
-type ContentTab = 'all' | 'shows' | 'movies' | 'anime' | 'completed';
+type ContentTab =
+  | 'all'
+  | 'shows'
+  | 'movies'
+  | 'anime'
+  | 'music'
+  | 'audiobooks'
+  | 'podcasts'
+  | 'completed';
 
 // Module-level state survives component destruction/recreation (SPA navigation)
 let savedSortKey: QueueSortKey = 'timeleft';
@@ -97,6 +105,9 @@ export class QueuePage extends BaseComponent {
     const showsCount = allItems.filter((i) => this.isShow(i)).length;
     const moviesCount = allItems.filter((i) => this.isMovie(i)).length;
     const animeCount = allItems.filter((i) => i.contentType === 'anime').length;
+    const musicCount = allItems.filter((i) => i.contentType === 'music').length;
+    const audiobooksCount = allItems.filter((i) => i.contentType === 'audiobook').length;
+    const podcastsCount = allItems.filter((i) => i.contentType === 'podcast').length;
     const completedCount = completedItems.length;
 
     // Filter by active tab
@@ -139,9 +150,12 @@ export class QueuePage extends BaseComponent {
         <!-- Content type tabs -->
         <div class="content-tabs">
           ${safeHtml(this.renderTab('all', 'All', allItems.length))}
-          ${safeHtml(this.renderTab('shows', 'Shows', showsCount))}
-          ${safeHtml(this.renderTab('movies', 'Movies', moviesCount))}
-          ${safeHtml(this.renderTab('anime', 'Anime', animeCount))}
+          ${showsCount > 0 ? safeHtml(this.renderTab('shows', 'Shows', showsCount)) : ''}
+          ${moviesCount > 0 ? safeHtml(this.renderTab('movies', 'Movies', moviesCount)) : ''}
+          ${animeCount > 0 ? safeHtml(this.renderTab('anime', 'Anime', animeCount)) : ''}
+          ${musicCount > 0 ? safeHtml(this.renderTab('music', 'Music', musicCount)) : ''}
+          ${audiobooksCount > 0 ? safeHtml(this.renderTab('audiobooks', 'Audiobooks', audiobooksCount)) : ''}
+          ${podcastsCount > 0 ? safeHtml(this.renderTab('podcasts', 'Podcasts', podcastsCount)) : ''}
           ${safeHtml(this.renderTab('completed', 'Completed', completedCount))}
         </div>
 
@@ -589,24 +603,43 @@ export class QueuePage extends BaseComponent {
     const statusIcon = item.importProgress
       ? '<svg class="status-icon importing animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>'
       : this.getStatusIcon(item.status);
-    const isMovie = item.contentType === 'movie' || (item.movieId != null && item.movieId > 0);
+    const ct = item.contentType ?? 'series';
+    const isMovie = ct === 'movie' || (item.movieId != null && item.movieId > 0);
+    const isMusic = ct === 'music';
+    const isAudiobook = ct === 'audiobook';
+    const isPodcast = ct === 'podcast';
+
+    // Title: prefer matched entity name, fall back to release title
     const displayTitle = isMovie
       ? (item.movie?.title ?? item.title)
       : (item.series?.title ?? item.title);
-    const hasDbLink = isMovie
-      ? item.movie?.titleSlug != null
-      : item.seriesId != null && item.seriesId > 0 && item.series?.titleSlug != null;
-    const linkPath = isMovie
-      ? `/movies/${item.movie?.titleSlug ?? ''}`
-      : `/series/${item.series?.titleSlug ?? ''}`;
-    const linkSlug = isMovie ? (item.movie?.titleSlug ?? '') : (item.series?.titleSlug ?? '');
+
+    // Link: route to correct content section
+    let linkPath = '';
+    let linkSlug = '';
+    let hasDbLink = false;
+    let clickHandler = 'handleSeriesClick';
+    if (isMovie && item.movie?.titleSlug) {
+      linkPath = `/movies/${item.movie.titleSlug}`;
+      linkSlug = item.movie.titleSlug;
+      hasDbLink = true;
+      clickHandler = 'handleMovieClick';
+    } else if (item.seriesId != null && item.seriesId > 0 && item.series?.titleSlug) {
+      linkPath = `/series/${item.series.titleSlug}`;
+      linkSlug = item.series.titleSlug;
+      hasDbLink = true;
+    }
+
+    // Episode / detail column
     const episodeLabel = isMovie
       ? item.outputPath
         ? (item.outputPath.split('/').pop() ?? item.title)
         : item.title
-      : item.episode
-        ? `S${String(item.episode.seasonNumber).padStart(2, '0')}E${String(item.episode.episodeNumber).padStart(2, '0')}${item.episode.title ? ` - ${item.episode.title}` : ''}`
-        : '-';
+      : isMusic || isAudiobook || isPodcast
+        ? item.title
+        : item.episode
+          ? `S${String(item.episode.seasonNumber).padStart(2, '0')}E${String(item.episode.episodeNumber).padStart(2, '0')}${item.episode.title ? ` - ${item.episode.title}` : ''}`
+          : '-';
     const importable = this.isImportable(item);
     const isCompleted = this.activeTab === 'completed';
 
@@ -621,7 +654,7 @@ export class QueuePage extends BaseComponent {
         <td class="title-cell">
           ${
             hasDbLink
-              ? `<a class="title-link" href="${escapeHtml(linkPath)}" onclick="event.preventDefault(); this.closest('queue-page').${isMovie ? 'handleMovieClick' : 'handleSeriesClick'}('${escapeHtml(linkSlug)}')" title="${escapeHtml(displayTitle)}">${escapeHtml(this.truncate(displayTitle, 32))}</a>`
+              ? `<a class="title-link" href="${escapeHtml(linkPath)}" onclick="event.preventDefault(); this.closest('queue-page').${clickHandler}('${escapeHtml(linkSlug)}')" title="${escapeHtml(displayTitle)}">${escapeHtml(this.truncate(displayTitle, 32))}</a>`
               : `<span title="${escapeHtml(displayTitle)}">${escapeHtml(this.truncate(displayTitle, 32))}</span>`
           }
         </td>
@@ -945,8 +978,17 @@ export class QueuePage extends BaseComponent {
   }
 
   private isShow(item: QueueItem): boolean {
-    if (item.contentType === 'anime') return false;
-    if (item.contentType === 'series') return true;
+    const ct = item.contentType;
+    if (
+      ct === 'anime' ||
+      ct === 'movie' ||
+      ct === 'music' ||
+      ct === 'audiobook' ||
+      ct === 'podcast'
+    )
+      return false;
+    if (ct === 'series') return true;
+    // Legacy fallback: if no content type, check for series match
     return item.seriesId != null && item.seriesId > 0;
   }
 
@@ -958,6 +1000,12 @@ export class QueuePage extends BaseComponent {
         return items.filter((i) => this.isMovie(i));
       case 'anime':
         return items.filter((i) => i.contentType === 'anime');
+      case 'music':
+        return items.filter((i) => i.contentType === 'music');
+      case 'audiobooks':
+        return items.filter((i) => i.contentType === 'audiobook');
+      case 'podcasts':
+        return items.filter((i) => i.contentType === 'podcast');
       default:
         return items;
     }

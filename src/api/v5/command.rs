@@ -399,6 +399,7 @@ pub async fn execute_command_with_options(
         "SeasonSearch" => execute_season_search(body, db, event_bus).await,
         "SeriesSearch" => execute_series_search(body, db, event_bus).await,
         "MovieSearch" => execute_movie_search(body, db).await,
+        "AlbumSearch" => execute_album_search(body, db).await,
         "MissingEpisodeSearch" => {
             tracing::info!("MissingEpisodeSearch: searching for missing episodes");
             // This would search indexers for all missing episodes
@@ -2095,7 +2096,7 @@ async fn execute_episode_search(
                             );
 
                             match tracked_service
-                                .grab_release(&release, vec![*episode_id], None)
+                                .grab_release(&release, vec![*episode_id], None, "series")
                                 .await
                             {
                                 Ok(tracked_id) => {
@@ -2365,7 +2366,7 @@ async fn execute_season_search(
             );
 
             match tracked_service
-                .grab_release(&release, missing_episode_ids.clone(), None)
+                .grab_release(&release, missing_episode_ids.clone(), None, "series")
                 .await
             {
                 Ok(tracked_id) => {
@@ -2654,7 +2655,7 @@ async fn execute_movie_search(
                             );
 
                             match tracked_service
-                                .grab_release(&release, vec![], Some(movie.id))
+                                .grab_release(&release, vec![], Some(movie.id), "movie")
                                 .await
                             {
                                 Ok(tracked_id) => {
@@ -2923,13 +2924,22 @@ async fn execute_rescan_movie(
             .await
             .map_err(|e| format!("Failed to fetch movie files: {}", e))?;
 
-        let already_tracked = existing_files.iter().any(|f| f.path == movie_file.path);
-        if already_tracked {
-            tracing::info!(
-                "RescanMovie: '{}' — file already tracked: {}",
-                movie.title,
-                movie_file.path
-            );
+        if let Some(existing) = existing_files.iter().find(|f| f.path == movie_file.path) {
+            // File already tracked — ensure movie record is linked
+            if !movie.has_file || movie.movie_file_id != Some(existing.id) {
+                let pool = db.pool();
+                let _ = sqlx::query(
+                    "UPDATE movies SET has_file = true, movie_file_id = $1 WHERE id = $2",
+                )
+                .bind(existing.id)
+                .bind(movie_id)
+                .execute(pool)
+                .await;
+                tracing::info!(
+                    "RescanMovie: '{}' — file already tracked, linked has_file",
+                    movie.title,
+                );
+            }
             return Ok(format!("Movie file already tracked for '{}'", movie.title));
         }
 
@@ -2995,4 +3005,115 @@ async fn execute_rescan_movie(
         }
         Ok(format!("No video files found for '{}'", movie.title))
     }
+}
+
+/// Execute AlbumSearch command — search indexers for an album and auto-grab best match
+async fn execute_album_search(
+    body: &serde_json::Value,
+    db: &crate::core::datastore::Database,
+) -> Result<String, String> {
+    use crate::core::datastore::repositories::{
+        ArtistRepository, AlbumRepository, IndexerRepository,
+    };
+    use crate::core::indexers::search::IndexerSearchService;
+    use crate::core::queue::TrackedDownloadService;
+
+    let artist_id = body
+        .get("artistId")
+        .or_else(|| body.get("body").and_then(|b| b.get("artistId")))
+        .and_then(|v| v.as_i64())
+        .ok_or("artistId is required")?;
+
+    let album_ids: Vec<i64> = body
+        .get("albumIds")
+        .or_else(|| body.get("body").and_then(|b| b.get("albumIds")))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+        .unwrap_or_default();
+
+    if album_ids.is_empty() {
+        return Ok("No albums to search".to_string());
+    }
+
+    let artist_repo = ArtistRepository::new(db.clone());
+    let album_repo = AlbumRepository::new(db.clone());
+    let indexer_repo = IndexerRepository::new(db.clone());
+
+    let artist = artist_repo
+        .get_by_id(artist_id)
+        .await
+        .map_err(|e| format!("Failed to fetch artist: {}", e))?
+        .ok_or("Artist not found")?;
+
+    let indexers = indexer_repo
+        .get_all()
+        .await
+        .map_err(|e| format!("Failed to fetch indexers: {}", e))?;
+
+    let search_service = IndexerSearchService::new(indexers);
+    let tracked_service = TrackedDownloadService::new(db.clone());
+    let mut grabbed = 0;
+
+    for album_id in &album_ids {
+        let album = match album_repo.get_by_id(*album_id).await {
+            Ok(Some(a)) => a,
+            _ => continue,
+        };
+
+        let query = format!("{} {}", artist.name, album.title);
+        tracing::info!("AlbumSearch: searching for '{}'", query);
+
+        // Use query-based search with music categories (3000 range)
+        let music_cats = crate::core::indexers::search::get_music_categories();
+        match search_service.search_by_query_with_categories(&query, None, None, Some(music_cats)).await {
+            Ok(releases) => {
+                tracing::info!(
+                    "AlbumSearch: found {} releases for '{}'",
+                    releases.len(),
+                    query
+                );
+
+                // Grab the first result that looks like a match
+                for mut release in releases {
+                    tracing::info!(
+                        "AlbumSearch auto-grab: '{}' for album '{}'",
+                        release.title,
+                        album.title
+                    );
+                    // Tag as music for category selection
+                    release.indexer = "music".to_string();
+
+                    match tracked_service
+                        .grab_release(&release, vec![], None, "music")
+                        .await
+                    {
+                        Ok(tracked_id) => {
+                            grabbed += 1;
+                            tracing::info!(
+                                "AlbumSearch: grabbed successfully (tracked_id={})",
+                                tracked_id
+                            );
+                            break; // One grab per album
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "AlbumSearch: failed to grab '{}': {}",
+                                release.title,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("AlbumSearch: search failed for '{}': {}", query, e);
+            }
+        }
+    }
+
+    Ok(format!(
+        "Album search completed for {} albums, grabbed {}",
+        album_ids.len(),
+        grabbed
+    ))
 }

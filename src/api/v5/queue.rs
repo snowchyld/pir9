@@ -89,6 +89,10 @@ pub struct QueueResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub movie_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub artist_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub seeds: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub leechers: Option<i32>,
@@ -160,13 +164,16 @@ pub struct QueueMovieResource {
 struct ClientCategories {
     movie: Vec<String>,
     anime: Vec<String>,
+    music: Vec<String>,
+    audiobook: Vec<String>,
+    podcast: Vec<String>,
     /// Union of all categories — used for download filtering.
     all: Vec<String>,
 }
 
 impl ClientCategories {
     /// Parse category fields from download client settings JSON.
-    /// Supports both the new split format (category/movieCategory/animeCategory)
+    /// Supports both the new split format (category/movieCategory/animeCategory/musicCategory/etc.)
     /// and the legacy comma-separated format in the `category` field.
     fn from_settings(settings: &serde_json::Value) -> Self {
         let get_cats = |key: &str| -> Vec<String> {
@@ -185,37 +192,43 @@ impl ClientCategories {
         let has_new_format = settings.get("movieCategory").is_some();
 
         if has_new_format {
-            // New split format: each key has its own categories
             let series = get_cats("category");
             let movie = get_cats("movieCategory");
             let anime = get_cats("animeCategory");
+            let music = get_cats("musicCategory");
+            let audiobook = get_cats("audiobookCategory");
+            let podcast = get_cats("podcastCategory");
 
             let mut all = Vec::new();
-            all.extend(series.iter().cloned());
-            all.extend(movie.iter().cloned());
-            all.extend(anime.iter().cloned());
+            for cats in [&series, &movie, &anime, &music, &audiobook, &podcast] {
+                all.extend(cats.iter().cloned());
+            }
             all.sort();
             all.dedup();
 
-            Self { movie, anime, all }
+            Self { movie, anime, music, audiobook, podcast, all }
         } else {
-            // Legacy format: single comma-separated `category` field.
-            // Infer content type from well-known category names.
+            // Legacy format: infer content type from well-known category names.
             let all_cats = get_cats("category");
             let mut movie = Vec::new();
             let mut anime = Vec::new();
+            let mut music = Vec::new();
+            let mut audiobook = Vec::new();
+            let mut podcast = Vec::new();
 
             for cat in &all_cats {
                 match cat.as_str() {
                     "radarr" | "movies" | "movie" => movie.push(cat.clone()),
                     "anime" | "sonarr-anime" | "anime-sonarr" => anime.push(cat.clone()),
+                    "music" | "lidarr" => music.push(cat.clone()),
+                    "audiobook" | "audiobooks" | "readarr" => audiobook.push(cat.clone()),
+                    "podcast" | "podcasts" => podcast.push(cat.clone()),
                     _ => {} // series (default)
                 }
             }
 
             Self {
-                movie,
-                anime,
+                movie, anime, music, audiobook, podcast,
                 all: all_cats,
             }
         }
@@ -229,6 +242,15 @@ impl ClientCategories {
         }
         if self.anime.iter().any(|c| c == &cat) {
             return "anime";
+        }
+        if self.music.iter().any(|c| c == &cat) {
+            return "music";
+        }
+        if self.audiobook.iter().any(|c| c == &cat) {
+            return "audiobook";
+        }
+        if self.podcast.iter().any(|c| c == &cat) {
+            return "podcast";
         }
         "series"
     }
@@ -375,8 +397,8 @@ fn queue_item_to_resource(item: &crate::core::queue::QueueItem) -> QueueResource
         })
         .collect();
 
-    // Derive content type from movie_id presence
-    let content_type = if item.movie_id > 0 { "movie" } else { "series" };
+    // Use stored content type from tracked download
+    let content_type = &item.content_type;
 
     QueueResource {
         id: item.id,
@@ -421,6 +443,8 @@ fn queue_item_to_resource(item: &crate::core::queue::QueueItem) -> QueueResource
         } else {
             None
         },
+        artist_id: None,
+        album_id: None,
         seeds: item.seeds,
         leechers: item.leechers,
         seed_count: item.seed_count,
@@ -909,6 +933,8 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                     episode_has_file: media_has_file,
                     content_type: effective_content_type,
                     movie_id: matched_movie_id,
+                    artist_id: None,
+                    album_id: None,
                     seeds: dl.seeds,
                     leechers: dl.leechers,
                     seed_count: dl.seed_count,
@@ -977,11 +1003,7 @@ async fn list_queue(
             }];
             let episode_ids: Vec<i64> =
                 serde_json::from_str(&td.episode_ids).unwrap_or_default();
-            let content_type = if td.movie_id.is_some() {
-                "movie".to_string()
-            } else {
-                "series".to_string()
-            };
+            let content_type = td.content_type.clone();
 
             QueueResource {
                 id: td.id,
@@ -1017,6 +1039,8 @@ async fn list_queue(
                 episode_has_file: true,
                 content_type,
                 movie_id: td.movie_id,
+                artist_id: None,
+                album_id: None,
                 seeds: None,
                 leechers: None,
                 seed_count: None,
@@ -1276,6 +1300,7 @@ async fn remove_queue_item(
                 is_upgrade: false,
                 added: chrono::Utc::now(),
                 movie_id: download.movie_id,
+                content_type: download.content_type.clone(),
             };
 
             if let Err(e) = td_repo.insert(&model).await {
@@ -1402,7 +1427,7 @@ async fn grab_release(
 
     // Grab the best release (first in quality-sorted list)
     let best = &releases[0];
-    match service.grab_release(best, episode_ids, tracked.movie_id).await {
+    match service.grab_release(best, episode_ids, tracked.movie_id, &tracked.content_type).await {
         Ok(new_id) => {
             tracing::info!(
                 "Re-grab succeeded: {} → tracked download {}",
@@ -2155,6 +2180,7 @@ async fn update_match(
                     is_upgrade: false,
                     added: chrono::Utc::now(),
                     movie_id: Some(movie_id),
+                    content_type: "movie".to_string(),
                 };
                 match td_repo.insert(&model).await {
                     Ok(new_id) => {
@@ -2292,6 +2318,7 @@ async fn update_match(
                     is_upgrade: false,
                     added: chrono::Utc::now(),
                     movie_id: None,
+                    content_type: "series".to_string(),
                 };
 
                 match td_repo.insert(&model).await {

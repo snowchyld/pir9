@@ -93,6 +93,8 @@ pub struct ReleaseQuery {
     pub episode_id: Option<i64>,
     pub season_number: Option<i32>,
     pub movie_id: Option<i64>,
+    /// Free-text query for music/general search
+    pub query: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -277,6 +279,11 @@ pub async fn get_releases(
     State(state): State<Arc<AppState>>,
     query: Query<ReleaseQuery>,
 ) -> Json<Vec<ReleaseResource>> {
+    // Free-text query search (for music, audiobooks, general)
+    if let Some(ref search_query) = query.query {
+        return get_query_releases(state, search_query).await;
+    }
+
     // Movie search path
     if let Some(movie_id) = query.movie_id {
         return get_movie_releases(state, movie_id).await;
@@ -541,7 +548,8 @@ pub async fn create_release(
 
     // Grab the release using TrackedDownloadService
     let service = TrackedDownloadService::new(state.db.clone());
-    match service.grab_release(&release, episode_ids.clone(), movie_id).await {
+    let content_type = if movie_id.is_some() { "movie" } else { "series" };
+    match service.grab_release(&release, episode_ids.clone(), movie_id, content_type).await {
         Ok(tracked_id) => {
             tracing::info!("Release grabbed and tracked: id={}", tracked_id);
 
@@ -672,6 +680,79 @@ pub async fn push_release(
     // This would parse the release title and match it to a series/episode
     // For now, return empty
     Json(vec![])
+}
+
+/// Free-text query search for releases (used by music interactive search)
+async fn get_query_releases(
+    state: Arc<AppState>,
+    search_query: &str,
+) -> Json<Vec<ReleaseResource>> {
+    use crate::core::datastore::repositories::IndexerRepository;
+    use crate::core::indexers::search::IndexerSearchService;
+
+    tracing::info!("Interactive search: query='{}'", search_query);
+
+    let indexer_repo = IndexerRepository::new(state.db.clone());
+    let indexers = match indexer_repo.get_all().await {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::error!("Failed to fetch indexers: {}", e);
+            return Json(vec![]);
+        }
+    };
+
+    // Detect content type from query prefix or use music categories by default for free-text
+    let categories = if search_query.starts_with("audiobook:") || search_query.starts_with("ab:") {
+        Some(crate::core::indexers::search::get_audiobook_categories())
+    } else if search_query.starts_with("podcast:") {
+        Some(crate::core::indexers::search::get_podcast_categories())
+    } else if search_query.starts_with("tv:") || search_query.starts_with("series:") {
+        None // Default TV categories
+    } else {
+        // Default to music categories for free-text queries (music interactive search)
+        Some(crate::core::indexers::search::get_music_categories())
+    };
+
+    // Strip prefix if present
+    let clean_query = search_query
+        .strip_prefix("audiobook:")
+        .or_else(|| search_query.strip_prefix("ab:"))
+        .or_else(|| search_query.strip_prefix("podcast:"))
+        .or_else(|| search_query.strip_prefix("tv:"))
+        .or_else(|| search_query.strip_prefix("series:"))
+        .unwrap_or(search_query)
+        .trim();
+
+    let search_service = IndexerSearchService::new(indexers);
+    let releases = match search_service
+        .search_by_query_with_categories(clean_query, None, None, categories)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("Search failed: {}", e);
+            return Json(vec![]);
+        }
+    };
+
+    tracing::info!(
+        "Interactive search: found {} releases for '{}'",
+        releases.len(),
+        search_query
+    );
+
+    // Cache all releases so they can be grabbed later
+    {
+        let mut cache = RELEASE_CACHE.write().await;
+        cache.insert_many(&releases);
+    }
+
+    let results: Vec<ReleaseResource> = releases
+        .iter()
+        .map(release_to_resource)
+        .collect();
+
+    Json(results)
 }
 
 pub fn routes() -> Router<Arc<AppState>> {

@@ -2282,8 +2282,8 @@ impl TrackedDownloadRepository {
                 download_id, download_client_id, series_id, episode_ids, title,
                 indexer, size, protocol, quality, languages, status,
                 status_messages, error_message, output_path, is_upgrade, added,
-                movie_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                movie_id, content_type
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
             RETURNING id
             "#,
         )
@@ -2304,6 +2304,7 @@ impl TrackedDownloadRepository {
         .bind(download.is_upgrade)
         .bind(download.added)
         .bind(download.movie_id)
+        .bind(&download.content_type)
         .fetch_one(pool)
         .await?;
         Ok(row.0)
@@ -3594,9 +3595,9 @@ impl AlbumRepository {
             r#"
             INSERT INTO albums (
                 artist_id, musicbrainz_id, title, clean_title, album_type,
-                release_date, genres, images, monitored, added, last_info_sync
+                secondary_types, release_date, genres, images, monitored, added, last_info_sync
             ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
             ) RETURNING id
             "#,
         )
@@ -3605,6 +3606,7 @@ impl AlbumRepository {
         .bind(&album.title)
         .bind(&album.clean_title)
         .bind(&album.album_type)
+        .bind(&album.secondary_types)
         .bind(album.release_date)
         .bind(&album.genres)
         .bind(&album.images)
@@ -3622,9 +3624,9 @@ impl AlbumRepository {
             r#"
             UPDATE albums SET
                 artist_id = $1, musicbrainz_id = $2, title = $3, clean_title = $4,
-                album_type = $5, release_date = $6, genres = $7, images = $8,
-                monitored = $9, last_info_sync = $10
-            WHERE id = $11
+                album_type = $5, secondary_types = $6, release_date = $7, genres = $8,
+                images = $9, monitored = $10, last_info_sync = $11
+            WHERE id = $12
             "#,
         )
         .bind(album.artist_id)
@@ -3632,6 +3634,7 @@ impl AlbumRepository {
         .bind(&album.title)
         .bind(&album.clean_title)
         .bind(&album.album_type)
+        .bind(&album.secondary_types)
         .bind(album.release_date)
         .bind(&album.genres)
         .bind(&album.images)

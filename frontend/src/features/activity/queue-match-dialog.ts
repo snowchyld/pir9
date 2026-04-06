@@ -28,7 +28,7 @@ export class QueueMatchDialog extends BaseComponent {
   private showFiles = signal(false);
 
   // Movie matching
-  private contentType = signal<'series' | 'movie' | 'anime'>('series');
+  private contentType = signal<string>('series');
   private allMovies = signal<Movie[]>([]);
   private isLoadingMovies = signal(false);
   private movieFilter = signal('');
@@ -106,6 +106,8 @@ export class QueueMatchDialog extends BaseComponent {
 
     if (ct === 'movie') {
       this.loadMovies();
+    } else if (ct === 'music' || ct === 'audiobook' || ct === 'podcast') {
+      // Non-matchable content types — dialog shows info only
     } else {
       this.loadSeries();
     }
@@ -234,11 +236,13 @@ export class QueueMatchDialog extends BaseComponent {
     const title = this.queueTitle.value;
     const seriesId = this.selectedSeriesId.value;
     const isSubmitting = this.matchMutation.isLoading.value;
-    const isMovie = this.contentType.value === 'movie';
+    const ct = this.contentType.value;
+    const isMovie = ct === 'movie';
+    const isNonMatchable = ct === 'music' || ct === 'audiobook' || ct === 'podcast';
     const movieId = this.selectedMovieId.value;
 
     // Determine confirm button state and handler
-    const canConfirm = isMovie ? movieId !== null : seriesId !== null;
+    const canConfirm = isNonMatchable ? false : isMovie ? movieId !== null : seriesId !== null;
     const confirmHandler = isMovie ? 'confirmMovieMatch' : 'confirmMatch';
 
     return html`
@@ -259,7 +263,7 @@ export class QueueMatchDialog extends BaseComponent {
 
             ${this.renderFilesPanel()}
 
-            ${isMovie ? this.renderMovieSelector() : this.renderSeriesSelector()}
+            ${isNonMatchable ? `<div class="loading-text">Manual matching is not available for ${ct} downloads. Use the remove button to clear this item.</div>` : isMovie ? this.renderMovieSelector() : this.renderSeriesSelector()}
           </div>
 
           <div class="dialog-footer">

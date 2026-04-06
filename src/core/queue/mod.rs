@@ -82,6 +82,8 @@ pub struct QueueItem {
     pub seed_count: Option<i32>,
     /// Total leechers in the swarm
     pub leech_count: Option<i32>,
+    /// Content type: series, movie, anime, music, audiobook, podcast
+    pub content_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

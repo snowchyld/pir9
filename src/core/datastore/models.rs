@@ -383,6 +383,7 @@ pub struct TrackedDownloadDbModel {
     pub is_upgrade: bool,              // Whether this is an upgrade
     pub added: DateTime<Utc>,
     pub movie_id: Option<i64>, // FK to movies (for movie downloads)
+    pub content_type: String,  // series, movie, anime, music, audiobook, podcast
 }
 
 /// Import exclusion database model
@@ -465,6 +466,7 @@ pub struct AlbumDbModel {
     pub title: String,
     pub clean_title: String,
     pub album_type: String,
+    pub secondary_types: String,  // JSON serialized array of secondary types
     pub release_date: Option<NaiveDate>,
     pub genres: String,  // JSON serialized
     pub images: String,  // JSON serialized

@@ -154,6 +154,7 @@ impl TrackedDownloadService {
         episode_ids: Vec<i64>,
         is_upgrade: bool,
         movie_id: Option<i64>,
+        content_type: &str,
     ) -> Result<i64> {
         let repo = TrackedDownloadRepository::new(self.db.clone());
 
@@ -191,12 +192,13 @@ impl TrackedDownloadService {
             is_upgrade,
             added: Utc::now(),
             movie_id,
+            content_type: content_type.to_string(),
         };
 
         let id = repo.insert(&tracked).await?;
         info!(
-            "Tracked download created: id={}, title={}",
-            id, tracked.title
+            "Tracked download created: id={}, title={}, content_type={}",
+            id, tracked.title, content_type
         );
 
         Ok(id)
@@ -466,6 +468,7 @@ impl TrackedDownloadService {
                 leechers,
                 seed_count,
                 leech_count,
+                content_type: td.content_type,
             });
         }
 
@@ -903,6 +906,7 @@ impl TrackedDownloadService {
         release: &ReleaseInfo,
         episode_ids: Vec<i64>,
         movie_id: Option<i64>,
+        content_type: &str,
     ) -> Result<i64> {
         let client_repo = DownloadClientRepository::new(self.db.clone());
 
@@ -926,12 +930,15 @@ impl TrackedDownloadService {
         let client = create_client_from_model(client_model)?;
 
         // Read the category from client settings based on content type.
-        // Movies use "movieCategory", series use "category". Falls back to "sonarr".
+        // Each content type has its own category key. Falls back to "category", then "sonarr".
         let settings = serde_json::from_str::<serde_json::Value>(&client_model.settings)
             .unwrap_or(serde_json::json!({}));
 
+        // Determine category key from content_type hint in release, or movie_id presence
         let category_key = if movie_id.is_some() {
             "movieCategory"
+        } else if release.indexer == "music" {
+            "musicCategory"
         } else {
             "category"
         };
@@ -1022,6 +1029,7 @@ impl TrackedDownloadService {
                 episode_ids,
                 false, // TODO: Determine if upgrade
                 movie_id,
+                content_type,
             )
             .await?;
 
@@ -1161,6 +1169,7 @@ impl TrackedDownloadService {
                         is_upgrade: false,
                         added: Utc::now(),
                         movie_id: None,
+                        content_type: if series.series_type == 2 { "anime".to_string() } else { "series".to_string() },
                     };
 
                     match repo.insert(&tracked).await {
@@ -1224,6 +1233,7 @@ impl TrackedDownloadService {
                                 is_upgrade: false,
                                 added: Utc::now(),
                                 movie_id: Some(movie.id),
+                                content_type: "movie".to_string(),
                             };
 
                             match repo.insert(&tracked).await {
