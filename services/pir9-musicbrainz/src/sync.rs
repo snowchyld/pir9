@@ -49,6 +49,9 @@ const SKIP_IF_RECENT_HOURS: i64 = 24;
 /// Cache directory for downloaded dataset files
 const CACHE_DIR: &str = "/data/cache";
 
+/// Extracted JSONL directory (decompressed from tar.xz, reused on resume)
+const EXTRACTED_DIR: &str = "/data/cache/extracted";
+
 thread_local! {
     /// When true, download_dataset skips downloading and uses cached file as-is
     static PROCESS_ONLY_FLAG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -63,6 +66,70 @@ fn cached_file_is_recent(path: &Path, max_age_hours: i64) -> bool {
         }
     }
     false
+}
+
+/// Extract the JSONL data from a .tar.xz file to a plain .jsonl on disk.
+/// Returns the path to the extracted .jsonl file.
+/// If the .jsonl already exists (and is newer than the .tar.xz), skips extraction.
+fn ensure_jsonl_extracted(tar_xz_path: &Path, dataset: &str) -> Result<PathBuf> {
+    std::fs::create_dir_all(EXTRACTED_DIR)?;
+
+    // e.g. "release.tar.xz" → "release.jsonl"
+    let jsonl_name = dataset.replace(".tar.xz", ".jsonl");
+    let jsonl_path = PathBuf::from(EXTRACTED_DIR).join(&jsonl_name);
+
+    // If JSONL exists and is newer than the tar.xz, reuse it
+    if jsonl_path.exists() {
+        let jsonl_modified = std::fs::metadata(&jsonl_path)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let tar_modified = std::fs::metadata(tar_xz_path)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+        if jsonl_modified >= tar_modified {
+            info!("Using extracted JSONL: {:?} (up-to-date)", jsonl_path);
+            return Ok(jsonl_path);
+        }
+        info!("Extracted JSONL is stale, re-extracting from {:?}", tar_xz_path);
+    }
+
+    info!("Extracting JSONL from {:?} → {:?} (one-time, may take a few minutes)...", tar_xz_path, jsonl_path);
+
+    let file = std::fs::File::open(tar_xz_path)?;
+    let xz_decoder = XzDecoder::new(std::io::BufReader::new(file));
+    let mut archive = Archive::new(xz_decoder);
+
+    let mut data_entry = None;
+    for entry_result in archive.entries()? {
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let path = entry.path()?.to_string_lossy().to_string();
+        if path.starts_with("mbdump/") {
+            data_entry = Some(entry);
+            break;
+        }
+    }
+
+    let data_entry = match data_entry {
+        Some(e) => e,
+        None => anyhow::bail!("No mbdump/ data entry found in {}", dataset),
+    };
+
+    // Stream the JSONL data to disk
+    let tmp_path = jsonl_path.with_extension("jsonl.tmp");
+    let mut out_file = std::io::BufWriter::new(std::fs::File::create(&tmp_path)?);
+    let mut reader = std::io::BufReader::new(data_entry);
+    std::io::copy(&mut reader, &mut out_file)?;
+    drop(out_file);
+
+    std::fs::rename(&tmp_path, &jsonl_path)?;
+    let size = std::fs::metadata(&jsonl_path).map(|m| m.len()).unwrap_or(0);
+    info!("Extraction complete: {:?} ({} bytes)", jsonl_path, size);
+
+    Ok(jsonl_path)
 }
 
 /// Download a dataset file to a persistent cache directory with progress tracking.
@@ -738,17 +805,20 @@ async fn sync_artists_inner(
         Err(cancelled) => return Ok(cancelled),
     };
 
-    let bytes = std::fs::read(&cache_path)?;
-    info!("Read {} bytes from cache, decompressing...", bytes.len());
+    let jsonl_path = tokio::task::spawn_blocking({
+        let cp = cache_path.clone();
+        move || ensure_jsonl_extracted(&cp, "artist.tar.xz")
+    })
+    .await??;
 
     let initial_rows = resume.rows_processed;
     let cancel_token = token.clone();
 
-    // Parse tar entries in a blocking task, send batches through channel
+    // Parse extracted JSONL in a blocking task, send batches through channel
     let (tx, mut rx) = mpsc::channel::<ParsedBatch<DbArtist>>(4);
 
     let parse_handle = tokio::task::spawn_blocking(move || {
-        parse_artist_tar(&bytes, &resume_from, initial_rows, &cancel_token, &tx)
+        parse_jsonl_file(&jsonl_path, &resume_from, initial_rows, &cancel_token, &tx, parse_artist_json)
     });
 
     // Receive batches and flush to DB
@@ -813,42 +883,23 @@ async fn sync_artists_inner(
 
 /// Parse artist tar entries synchronously, sending batches through the channel
 #[allow(unused_assignments)]
-fn parse_artist_tar(
-    bytes: &[u8],
+/// Generic JSONL file parser — reads lines from an extracted .jsonl file,
+/// resumes from `resume_from`, and sends parsed batches through a channel.
+/// Used for artists, release groups, and other simple datasets.
+fn parse_jsonl_file<T: Send + 'static>(
+    jsonl_path: &Path,
     resume_from: &str,
     initial_rows: i64,
     token: &CancellationToken,
-    tx: &mpsc::Sender<ParsedBatch<DbArtist>>,
+    tx: &mpsc::Sender<ParsedBatch<T>>,
+    parse_fn: impl Fn(&serde_json::Value, String) -> T,
 ) -> Result<()> {
-    let xz_decoder = XzDecoder::new(bytes);
-    let mut archive = Archive::new(xz_decoder);
-
-    // MusicBrainz tar contains: TIMESTAMP, COPYING, README, REPLICATION_SEQUENCE,
-    // SCHEMA_SEQUENCE, JSON_DUMPS_SCHEMA_NUMBER, and mbdump/artist (the actual JSONL data)
-    // Find the mbdump/* entry and read it line-by-line
-    let mut data_entry = None;
-    for entry_result in archive.entries()? {
-        let entry = match entry_result {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let path = entry.path()?.to_string_lossy().to_string();
-        if path.starts_with("mbdump/") {
-            data_entry = Some(entry);
-            break;
-        }
-    }
-
-    let data_entry = match data_entry {
-        Some(e) => e,
-        None => anyhow::bail!("No mbdump/ data entry found in artist tar"),
-    };
-
-    let reader = std::io::BufReader::new(data_entry);
+    let file = std::fs::File::open(jsonl_path)?;
+    let reader = std::io::BufReader::new(file);
 
     let mut rows_processed = initial_rows;
     let mut last_id = resume_from.to_string();
-    let mut batch: Vec<DbArtist> = Vec::with_capacity(BATCH_SIZE);
+    let mut batch: Vec<T> = Vec::with_capacity(BATCH_SIZE);
 
     for line_result in reader.lines() {
         let line = match line_result {
@@ -870,12 +921,11 @@ fn parse_artist_tar(
             None => continue,
         };
 
-        // Skip rows we've already processed (resume support)
         if !resume_from.is_empty() && mbid.as_str() <= resume_from {
             continue;
         }
 
-        batch.push(parse_artist_json(&json, mbid.clone()));
+        batch.push(parse_fn(&json, mbid.clone()));
 
         rows_processed += 1;
         last_id = mbid;
@@ -883,19 +933,17 @@ fn parse_artist_tar(
         if batch.len() >= BATCH_SIZE {
             let send_batch = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
             if tx.blocking_send(ParsedBatch::Batch(send_batch)).is_err() {
-                return Ok(()); // Receiver dropped
+                return Ok(());
             }
         }
 
         if rows_processed % PROGRESS_INTERVAL == 0 {
-            // Send remaining batch before progress checkpoint
             if !batch.is_empty() {
                 let send_batch = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
                 if tx.blocking_send(ParsedBatch::Batch(send_batch)).is_err() {
                     return Ok(());
                 }
             }
-
             if tx
                 .blocking_send(ParsedBatch::Progress(rows_processed, last_id.clone()))
                 .is_err()
@@ -904,7 +952,6 @@ fn parse_artist_tar(
             }
         }
 
-        // Cooperative cancellation check
         if rows_processed % PROGRESS_INTERVAL == 0 && token.is_cancelled() {
             if !batch.is_empty() {
                 let send_batch = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
@@ -915,7 +962,6 @@ fn parse_artist_tar(
         }
     }
 
-    // Send remaining batch
     if !batch.is_empty() {
         let _ = tx.blocking_send(ParsedBatch::Batch(batch));
     }
@@ -1054,8 +1100,11 @@ async fn sync_release_groups_inner(
         Err(cancelled) => return Ok(cancelled),
     };
 
-    let bytes = std::fs::read(&cache_path)?;
-    info!("Read {} bytes from cache, decompressing...", bytes.len());
+    let jsonl_path = tokio::task::spawn_blocking({
+        let cp = cache_path.clone();
+        move || ensure_jsonl_extracted(&cp, "release-group.tar.xz")
+    })
+    .await??;
 
     let initial_rows = resume.rows_processed;
     let cancel_token = token.clone();
@@ -1063,7 +1112,7 @@ async fn sync_release_groups_inner(
     let (tx, mut rx) = mpsc::channel::<ParsedBatch<DbReleaseGroup>>(4);
 
     let parse_handle = tokio::task::spawn_blocking(move || {
-        parse_release_group_tar(&bytes, &resume_from, initial_rows, &cancel_token, &tx)
+        parse_jsonl_file(&jsonl_path, &resume_from, initial_rows, &cancel_token, &tx, parse_release_group_json)
     });
 
     let mut rows_processed = resume.rows_processed;
@@ -1122,111 +1171,6 @@ async fn sync_release_groups_inner(
         rows_updated: 0,
         duration_seconds: 0,
     }))
-}
-
-#[allow(unused_assignments)]
-fn parse_release_group_tar(
-    bytes: &[u8],
-    resume_from: &str,
-    initial_rows: i64,
-    token: &CancellationToken,
-    tx: &mpsc::Sender<ParsedBatch<DbReleaseGroup>>,
-) -> Result<()> {
-    let xz_decoder = XzDecoder::new(bytes);
-    let mut archive = Archive::new(xz_decoder);
-
-    // Find the mbdump/* JSONL data entry
-    let mut data_entry = None;
-    for entry_result in archive.entries()? {
-        let entry = match entry_result {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let path = entry.path()?.to_string_lossy().to_string();
-        if path.starts_with("mbdump/") {
-            data_entry = Some(entry);
-            break;
-        }
-    }
-
-    let data_entry = match data_entry {
-        Some(e) => e,
-        None => anyhow::bail!("No mbdump/ data entry found in release-group tar"),
-    };
-
-    let reader = std::io::BufReader::new(data_entry);
-
-    let mut rows_processed = initial_rows;
-    let mut last_id = resume_from.to_string();
-    let mut batch: Vec<DbReleaseGroup> = Vec::with_capacity(BATCH_SIZE);
-
-    for line_result in reader.lines() {
-        let line = match line_result {
-            Ok(l) => l,
-            Err(_) => continue,
-        };
-
-        if line.is_empty() {
-            continue;
-        }
-
-        let json: serde_json::Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        let mbid = match json.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => continue,
-        };
-
-        if !resume_from.is_empty() && mbid.as_str() <= resume_from {
-            continue;
-        }
-
-        batch.push(parse_release_group_json(&json, mbid.clone()));
-
-        rows_processed += 1;
-        last_id = mbid;
-
-        if batch.len() >= BATCH_SIZE {
-            let send_batch = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
-            if tx.blocking_send(ParsedBatch::Batch(send_batch)).is_err() {
-                return Ok(());
-            }
-        }
-
-        if rows_processed % PROGRESS_INTERVAL == 0 {
-            if !batch.is_empty() {
-                let send_batch = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
-                if tx.blocking_send(ParsedBatch::Batch(send_batch)).is_err() {
-                    return Ok(());
-                }
-            }
-            if tx
-                .blocking_send(ParsedBatch::Progress(rows_processed, last_id.clone()))
-                .is_err()
-            {
-                return Ok(());
-            }
-        }
-
-        if rows_processed % PROGRESS_INTERVAL == 0 && token.is_cancelled() {
-            if !batch.is_empty() {
-                let send_batch = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
-                let _ = tx.blocking_send(ParsedBatch::Batch(send_batch));
-            }
-            let _ = tx.blocking_send(ParsedBatch::Cancelled(rows_processed, last_id));
-            return Ok(());
-        }
-    }
-
-    if !batch.is_empty() {
-        let _ = tx.blocking_send(ParsedBatch::Batch(batch));
-    }
-    let _ = tx.blocking_send(ParsedBatch::Done(rows_processed));
-
-    Ok(())
 }
 
 fn parse_release_group_json(json: &serde_json::Value, mbid: String) -> DbReleaseGroup {
@@ -1358,8 +1302,11 @@ async fn sync_releases_inner(
         Err(cancelled) => return Ok(cancelled),
     };
 
-    let bytes = std::fs::read(&cache_path)?;
-    info!("Read {} bytes from cache, decompressing...", bytes.len());
+    let jsonl_path = tokio::task::spawn_blocking({
+        let cp = cache_path.clone();
+        move || ensure_jsonl_extracted(&cp, "release.tar.xz")
+    })
+    .await??;
 
     let initial_rows = resume.rows_processed;
     let cancel_token = token.clone();
@@ -1367,8 +1314,8 @@ async fn sync_releases_inner(
     let (tx, mut rx) = mpsc::channel::<ParsedBatch<ParsedRelease>>(4);
 
     let parse_handle = tokio::task::spawn_blocking(move || {
-        parse_release_tar(
-            &bytes,
+        parse_release_jsonl(
+            &jsonl_path,
             &resume_from,
             initial_rows,
             &known_release_groups,
@@ -1449,37 +1396,16 @@ async fn sync_releases_inner(
 }
 
 #[allow(unused_assignments)]
-fn parse_release_tar(
-    bytes: &[u8],
+fn parse_release_jsonl(
+    jsonl_path: &Path,
     resume_from: &str,
     initial_rows: i64,
     known_release_groups: &HashSet<String>,
     token: &CancellationToken,
     tx: &mpsc::Sender<ParsedBatch<ParsedRelease>>,
 ) -> Result<()> {
-    let xz_decoder = XzDecoder::new(bytes);
-    let mut archive = Archive::new(xz_decoder);
-
-    // Find the mbdump/* JSONL data entry
-    let mut data_entry = None;
-    for entry_result in archive.entries()? {
-        let entry = match entry_result {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let path = entry.path()?.to_string_lossy().to_string();
-        if path.starts_with("mbdump/") {
-            data_entry = Some(entry);
-            break;
-        }
-    }
-
-    let data_entry = match data_entry {
-        Some(e) => e,
-        None => anyhow::bail!("No mbdump/ data entry found in release tar"),
-    };
-
-    let reader = std::io::BufReader::new(data_entry);
+    let file = std::fs::File::open(jsonl_path)?;
+    let reader = std::io::BufReader::new(file);
 
     let mut rows_processed = initial_rows;
     let mut last_id = resume_from.to_string();
@@ -1797,113 +1723,6 @@ fn extract_string_array(json: &serde_json::Value, field: &str) -> String {
 // ============================================================================
 
 /// Generic JSONL-in-tar parser. Finds the `mbdump/*` entry, reads line by line,
-/// parses each JSON line with the provided closure, and sends batches through the channel.
-#[allow(unused_assignments)]
-fn parse_generic_tar<T: Send + 'static>(
-    bytes: &[u8],
-    resume_from: &str,
-    initial_rows: i64,
-    token: &CancellationToken,
-    tx: &mpsc::Sender<ParsedBatch<T>>,
-    dataset_name: &str,
-    parse_fn: impl Fn(&serde_json::Value, String) -> T,
-) -> Result<()> {
-    let xz_decoder = XzDecoder::new(bytes);
-    let mut archive = Archive::new(xz_decoder);
-
-    let mut data_entry = None;
-    for entry_result in archive.entries()? {
-        let entry = match entry_result {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let path = entry.path()?.to_string_lossy().to_string();
-        if path.starts_with("mbdump/") {
-            data_entry = Some(entry);
-            break;
-        }
-    }
-
-    let data_entry = match data_entry {
-        Some(e) => e,
-        None => anyhow::bail!("No mbdump/ data entry found in {} tar", dataset_name),
-    };
-
-    let reader = std::io::BufReader::new(data_entry);
-
-    let mut rows_processed = initial_rows;
-    let mut last_id = resume_from.to_string();
-    let mut batch: Vec<T> = Vec::with_capacity(BATCH_SIZE);
-
-    for line_result in reader.lines() {
-        let line = match line_result {
-            Ok(l) => l,
-            Err(_) => continue,
-        };
-
-        if line.is_empty() {
-            continue;
-        }
-
-        let json: serde_json::Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        let mbid = match json.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => continue,
-        };
-
-        if !resume_from.is_empty() && mbid.as_str() <= resume_from {
-            continue;
-        }
-
-        batch.push(parse_fn(&json, mbid.clone()));
-
-        rows_processed += 1;
-        last_id = mbid;
-
-        if batch.len() >= BATCH_SIZE {
-            let send_batch = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
-            if tx.blocking_send(ParsedBatch::Batch(send_batch)).is_err() {
-                return Ok(());
-            }
-        }
-
-        if rows_processed % PROGRESS_INTERVAL == 0 {
-            if !batch.is_empty() {
-                let send_batch = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
-                if tx.blocking_send(ParsedBatch::Batch(send_batch)).is_err() {
-                    return Ok(());
-                }
-            }
-            if tx
-                .blocking_send(ParsedBatch::Progress(rows_processed, last_id.clone()))
-                .is_err()
-            {
-                return Ok(());
-            }
-        }
-
-        if rows_processed % PROGRESS_INTERVAL == 0 && token.is_cancelled() {
-            if !batch.is_empty() {
-                let send_batch = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
-                let _ = tx.blocking_send(ParsedBatch::Batch(send_batch));
-            }
-            let _ = tx.blocking_send(ParsedBatch::Cancelled(rows_processed, last_id));
-            return Ok(());
-        }
-    }
-
-    if !batch.is_empty() {
-        let _ = tx.blocking_send(ParsedBatch::Batch(batch));
-    }
-    let _ = tx.blocking_send(ParsedBatch::Done(rows_processed));
-
-    Ok(())
-}
-
 /// Generic sync wrapper — handles download, channel setup, DB upsert loop, and progress tracking.
 /// `upsert_fn` receives a batch and returns rows affected.
 async fn sync_generic<T: Send + 'static>(
@@ -2005,23 +1824,26 @@ async fn sync_generic_inner<T: Send + 'static>(
         Err(cancelled) => return Ok(cancelled),
     };
 
-    let bytes = std::fs::read(&cache_path)?;
-    info!("Read {} bytes from cache, decompressing...", bytes.len());
+    let dataset_owned = dataset.to_string();
+    let jsonl_path = tokio::task::spawn_blocking({
+        let cp = cache_path.clone();
+        let ds = dataset_owned.clone();
+        move || ensure_jsonl_extracted(&cp, &ds)
+    })
+    .await??;
 
     let initial_rows = resume.rows_processed;
     let cancel_token = token.clone();
-    let dataset_name = dataset.to_string();
 
     let (tx, mut rx) = mpsc::channel::<ParsedBatch<T>>(4);
 
     let parse_handle = tokio::task::spawn_blocking(move || {
-        parse_generic_tar(
-            &bytes,
+        parse_jsonl_file(
+            &jsonl_path,
             &resume_from,
             initial_rows,
             &cancel_token,
             &tx,
-            &dataset_name,
             parse_fn,
         )
     });
