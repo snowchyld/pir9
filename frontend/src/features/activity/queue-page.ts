@@ -7,6 +7,7 @@ import { http, type QueueItem, type QueueResponse } from '../../core/http';
 import {
   createMutation,
   invalidateQueries,
+  useCompletedQueueQuery,
   useContentQueueQuery,
   useQueueQuery,
 } from '../../core/query';
@@ -49,6 +50,7 @@ export class QueuePage extends BaseComponent {
   private musicQuery = useContentQueueQuery('music');
   private audiobooksQuery = useContentQueueQuery('audiobooks');
   private podcastsQuery = useContentQueueQuery('podcasts');
+  private completedQuery = useCompletedQueueQuery();
   private sortKey: QueueSortKey = savedSortKey;
   private sortDirection: 'asc' | 'desc' = savedSortDirection;
   private activeTab: ContentTab = savedActiveTab;
@@ -104,6 +106,7 @@ export class QueuePage extends BaseComponent {
     this.watch(this.musicQuery.data);
     this.watch(this.audiobooksQuery.data);
     this.watch(this.podcastsQuery.data);
+    this.watch(this.completedQuery.data);
   }
 
   // Suppress re-renders while the match dialog is open so the 5s poll
@@ -127,7 +130,8 @@ export class QueuePage extends BaseComponent {
     const musicCount = (this.musicQuery.data.value as QueueResponse | undefined)?.totalRecords ?? allItems.filter((i) => i.contentType === 'music').length;
     const audiobooksCount = (this.audiobooksQuery.data.value as QueueResponse | undefined)?.totalRecords ?? allItems.filter((i) => i.contentType === 'audiobook').length;
     const podcastsCount = (this.podcastsQuery.data.value as QueueResponse | undefined)?.totalRecords ?? allItems.filter((i) => i.contentType === 'podcast').length;
-    const completedCount = completedItems.length;
+    const historyCompleted = this.completedQuery.data.value as QueueItem[] | undefined;
+    const completedCount = historyCompleted?.length ?? completedItems.length;
 
     // Use per-content endpoint data when a specific tab is active
     const items = this.getTabItems(allItems, completedItems);
@@ -1054,8 +1058,11 @@ export class QueuePage extends BaseComponent {
   /** Get items for the active tab — uses per-content endpoint data when available */
   private getTabItems(allItems: QueueItem[], completedItems: QueueItem[]): QueueItem[] {
     switch (this.activeTab) {
-      case 'completed':
-        return completedItems;
+      case 'completed': {
+        // Prefer history-based completed data; fall back to legacy completedRecords
+        const historyCompleted = this.completedQuery.data.value as QueueItem[] | undefined;
+        return historyCompleted ?? completedItems;
+      }
       case 'shows': {
         const r = this.seriesQuery.data.value as QueueResponse | undefined;
         return r?.records ?? allItems.filter((i) => this.isShow(i));

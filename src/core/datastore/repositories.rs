@@ -430,6 +430,31 @@ impl HistoryRepository {
             .await?;
         Ok(result.rows_affected())
     }
+
+    /// Get recent completed downloads for the queue "Completed" tab.
+    /// Returns the latest history entry per download_id for Grabbed (1)
+    /// and DownloadFolderImported (3) events.
+    pub async fn get_recent_completed(
+        &self,
+        limit: i32,
+    ) -> Result<Vec<super::models::HistoryDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::HistoryDbModel>(
+            r#"
+            SELECT DISTINCT ON (download_id) *
+            FROM history
+            WHERE event_type IN (1, 3)
+              AND download_id IS NOT NULL
+              AND download_id != ''
+            ORDER BY download_id, date DESC
+            LIMIT $1
+            "#,
+        )
+        .bind(limit as i64)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
 }
 
 /// Repository for root folders
@@ -444,10 +469,11 @@ impl RootFolderRepository {
 
     pub async fn get_all(&self) -> Result<Vec<super::models::RootFolderDbModel>> {
         let pool = self.db.pool();
-        let rows =
-            sqlx::query_as::<_, super::models::RootFolderDbModel>("SELECT * FROM root_folders ORDER BY path")
-                .fetch_all(pool)
-                .await?;
+        let rows = sqlx::query_as::<_, super::models::RootFolderDbModel>(
+            "SELECT * FROM root_folders ORDER BY path",
+        )
+        .fetch_all(pool)
+        .await?;
         Ok(rows)
     }
 
@@ -475,7 +501,10 @@ impl RootFolderRepository {
         Ok(row.0)
     }
 
-    pub async fn get_by_content_types(&self, types: &[String]) -> Result<Vec<super::models::RootFolderDbModel>> {
+    pub async fn get_by_content_types(
+        &self,
+        types: &[String],
+    ) -> Result<Vec<super::models::RootFolderDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::RootFolderDbModel>(
             "SELECT * FROM root_folders WHERE content_type = ANY($1) ORDER BY path",
@@ -624,12 +653,10 @@ impl SeriesRepository {
                         "Series update: tvdb_id {} conflicts with series id={} '{}', clearing conflicting tvdb_id",
                         series.tvdb_id, existing.id, existing.title
                     );
-                    let _ = sqlx::query(
-                        "UPDATE series SET tvdb_id = 0 WHERE id = $1",
-                    )
-                    .bind(existing.id)
-                    .execute(pool)
-                    .await;
+                    let _ = sqlx::query("UPDATE series SET tvdb_id = 0 WHERE id = $1")
+                        .bind(existing.id)
+                        .execute(pool)
+                        .await;
                 }
             }
         }
@@ -1351,7 +1378,11 @@ impl EpisodeRepository {
         // Filter by series type via subquery (values are i32 literals, safe to inline)
         if let Some(types) = series_types {
             if !types.is_empty() {
-                let type_list = types.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(",");
+                let type_list = types
+                    .iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
                 base_where.push_str(&format!(
                     " AND series_id IN (SELECT id FROM series WHERE series_type IN ({}))",
                     type_list
@@ -1492,10 +1523,8 @@ impl EpisodeRepository {
             .collect();
 
         // Build series_type set for filtering (if requested)
-        let series_type_map: HashMap<i64, i32> = series_rows
-            .iter()
-            .map(|s| (s.id, s.series_type))
-            .collect();
+        let series_type_map: HashMap<i64, i32> =
+            series_rows.iter().map(|s| (s.id, s.series_type)).collect();
 
         // Step 4: Fetch all monitored episodes with files
         let episodes = sqlx::query_as::<_, super::models::EpisodeDbModel>(
@@ -2406,10 +2435,9 @@ impl TrackedDownloadRepository {
     /// Used to suppress duplicates in the untracked downloads section.
     pub async fn get_all_download_ids(&self) -> Result<Vec<String>> {
         let pool = self.db.pool();
-        let rows: Vec<(String,)> =
-            sqlx::query_as("SELECT download_id FROM tracked_downloads")
-                .fetch_all(pool)
-                .await?;
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT download_id FROM tracked_downloads")
+            .fetch_all(pool)
+            .await?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
@@ -2475,9 +2503,7 @@ impl TrackedDownloadRepository {
     }
 
     /// Get all completed tracked downloads (Imported=4, Ignored=7).
-    pub async fn get_completed(
-        &self,
-    ) -> Result<Vec<super::models::TrackedDownloadDbModel>> {
+    pub async fn get_completed(&self) -> Result<Vec<super::models::TrackedDownloadDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::TrackedDownloadDbModel>(
             "SELECT * FROM tracked_downloads WHERE status IN (4, 7) ORDER BY added DESC",
@@ -3264,10 +3290,7 @@ impl ImportListRepository {
         Ok(rows)
     }
 
-    pub async fn get_by_id(
-        &self,
-        id: i64,
-    ) -> Result<Option<super::models::ImportListDbModel>> {
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::ImportListDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::ImportListDbModel>(
             "SELECT * FROM import_lists WHERE id = $1",
@@ -3443,11 +3466,12 @@ impl ArtistRepository {
 
     pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::ArtistDbModel>> {
         let pool = self.db.pool();
-        let row =
-            sqlx::query_as::<_, super::models::ArtistDbModel>("SELECT * FROM artists WHERE id = $1")
-                .bind(id)
-                .fetch_optional(pool)
-                .await?;
+        let row = sqlx::query_as::<_, super::models::ArtistDbModel>(
+            "SELECT * FROM artists WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
         Ok(row)
     }
 
@@ -3648,7 +3672,11 @@ impl AlbumRepository {
         Ok(row.0)
     }
 
-    pub async fn get_by_slug(&self, artist_id: i64, slug: &str) -> Result<Option<super::models::AlbumDbModel>> {
+    pub async fn get_by_slug(
+        &self,
+        artist_id: i64,
+        slug: &str,
+    ) -> Result<Option<super::models::AlbumDbModel>> {
         let pool = self.db.pool();
         let album = sqlx::query_as::<_, super::models::AlbumDbModel>(
             "SELECT * FROM albums WHERE artist_id = $1 AND title_slug = $2 LIMIT 1",
@@ -3720,10 +3748,7 @@ impl TrackRepository {
         Ok(row)
     }
 
-    pub async fn get_by_album_id(
-        &self,
-        album_id: i64,
-    ) -> Result<Vec<super::models::TrackDbModel>> {
+    pub async fn get_by_album_id(&self, album_id: i64) -> Result<Vec<super::models::TrackDbModel>> {
         let pool = self.db.pool();
         let rows = sqlx::query_as::<_, super::models::TrackDbModel>(
             "SELECT * FROM tracks WHERE album_id = $1 ORDER BY disc_number, track_number",
@@ -4056,10 +4081,7 @@ impl PodcastEpisodeRepository {
         Ok(rows)
     }
 
-    pub async fn get_by_id(
-        &self,
-        id: i64,
-    ) -> Result<Option<super::models::PodcastEpisodeDbModel>> {
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::PodcastEpisodeDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::PodcastEpisodeDbModel>(
             "SELECT * FROM podcast_episodes WHERE id = $1",
@@ -4086,10 +4108,7 @@ impl PodcastEpisodeRepository {
         Ok(row)
     }
 
-    pub async fn insert(
-        &self,
-        episode: &super::models::PodcastEpisodeDbModel,
-    ) -> Result<i64> {
+    pub async fn insert(&self, episode: &super::models::PodcastEpisodeDbModel) -> Result<i64> {
         let pool = self.db.pool();
         let row: (i64,) = sqlx::query_as(
             r#"
@@ -4120,10 +4139,7 @@ impl PodcastEpisodeRepository {
         Ok(row.0)
     }
 
-    pub async fn update(
-        &self,
-        episode: &super::models::PodcastEpisodeDbModel,
-    ) -> Result<()> {
+    pub async fn update(&self, episode: &super::models::PodcastEpisodeDbModel) -> Result<()> {
         let pool = self.db.pool();
         sqlx::query(
             r#"
@@ -4172,10 +4188,7 @@ impl PodcastFileRepository {
         Self { db }
     }
 
-    pub async fn get_by_id(
-        &self,
-        id: i64,
-    ) -> Result<Option<super::models::PodcastFileDbModel>> {
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::PodcastFileDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::PodcastFileDbModel>(
             "SELECT * FROM podcast_files WHERE id = $1",
@@ -4200,10 +4213,7 @@ impl PodcastFileRepository {
         Ok(rows)
     }
 
-    pub async fn insert(
-        &self,
-        file: &super::models::PodcastFileDbModel,
-    ) -> Result<i64> {
+    pub async fn insert(&self, file: &super::models::PodcastFileDbModel) -> Result<i64> {
         let pool = self.db.pool();
         let row: (i64,) = sqlx::query_as(
             r#"
@@ -4268,10 +4278,7 @@ impl AudiobookRepository {
         Ok(row)
     }
 
-    pub async fn get_by_isbn(
-        &self,
-        isbn: &str,
-    ) -> Result<Option<super::models::AudiobookDbModel>> {
+    pub async fn get_by_isbn(&self, isbn: &str) -> Result<Option<super::models::AudiobookDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::AudiobookDbModel>(
             "SELECT * FROM audiobooks WHERE isbn = $1",
@@ -4282,10 +4289,7 @@ impl AudiobookRepository {
         Ok(row)
     }
 
-    pub async fn get_by_asin(
-        &self,
-        asin: &str,
-    ) -> Result<Option<super::models::AudiobookDbModel>> {
+    pub async fn get_by_asin(&self, asin: &str) -> Result<Option<super::models::AudiobookDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::AudiobookDbModel>(
             "SELECT * FROM audiobooks WHERE asin = $1",
@@ -4440,10 +4444,7 @@ impl AudiobookChapterRepository {
         Ok(row)
     }
 
-    pub async fn insert(
-        &self,
-        chapter: &super::models::AudiobookChapterDbModel,
-    ) -> Result<i64> {
+    pub async fn insert(&self, chapter: &super::models::AudiobookChapterDbModel) -> Result<i64> {
         let pool = self.db.pool();
         let row: (i64,) = sqlx::query_as(
             r#"
@@ -4466,10 +4467,7 @@ impl AudiobookChapterRepository {
         Ok(row.0)
     }
 
-    pub async fn update(
-        &self,
-        chapter: &super::models::AudiobookChapterDbModel,
-    ) -> Result<()> {
+    pub async fn update(&self, chapter: &super::models::AudiobookChapterDbModel) -> Result<()> {
         let pool = self.db.pool();
         sqlx::query(
             r#"
@@ -4510,10 +4508,7 @@ impl AudiobookFileRepository {
         Self { db }
     }
 
-    pub async fn get_by_id(
-        &self,
-        id: i64,
-    ) -> Result<Option<super::models::AudiobookFileDbModel>> {
+    pub async fn get_by_id(&self, id: i64) -> Result<Option<super::models::AudiobookFileDbModel>> {
         let pool = self.db.pool();
         let row = sqlx::query_as::<_, super::models::AudiobookFileDbModel>(
             "SELECT * FROM audiobook_files WHERE id = $1",
@@ -4538,10 +4533,7 @@ impl AudiobookFileRepository {
         Ok(rows)
     }
 
-    pub async fn insert(
-        &self,
-        file: &super::models::AudiobookFileDbModel,
-    ) -> Result<i64> {
+    pub async fn insert(&self, file: &super::models::AudiobookFileDbModel) -> Result<i64> {
         let pool = self.db.pool();
         let row: (i64,) = sqlx::query_as(
             r#"

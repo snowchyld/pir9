@@ -61,6 +61,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route("/{id}/files", get(files::get_queue_files))
         // Per-content-type endpoints
+        .route("/completed", get(content_endpoints::list_completed_queue))
         .route("/series", get(content_endpoints::list_series_queue))
         .route("/movies", get(content_endpoints::list_movies_queue))
         .route("/anime", get(content_endpoints::list_anime_queue))

@@ -204,3 +204,99 @@ pub(super) async fn list_podcasts_queue(
 ) -> Json<QueueResponse> {
     Json(filtered_queue(&state, &params, &["podcast"]).await)
 }
+
+/// GET /queue/completed — recently completed downloads derived from history table.
+///
+/// Returns Grabbed and Imported history events as QueueResource items for the
+/// "Completed" tab.  This replaces the old approach of storing terminal-state
+/// records (status=4 Imported, status=7 Ignored) in the tracked_downloads table.
+pub(super) async fn list_completed_queue(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<QueueResource>> {
+    use crate::core::datastore::repositories::HistoryRepository;
+
+    let history_repo = HistoryRepository::new(state.db.clone());
+    let completed = history_repo.get_recent_completed(100).await.unwrap_or_default();
+
+    let records: Vec<QueueResource> = completed
+        .iter()
+        .map(|h| {
+            let core_quality: crate::core::profiles::qualities::QualityModel =
+                serde_json::from_str(&h.quality).unwrap_or_default();
+            let quality = QualityModel {
+                quality: QualityResource {
+                    id: core_quality.quality.weight(),
+                    name: format!("{:?}", core_quality.quality),
+                    source: "unknown".to_string(),
+                    resolution: core_quality.quality.resolution_width(),
+                },
+                revision: RevisionResource {
+                    version: core_quality.revision.version,
+                    real: core_quality.revision.real,
+                    is_repack: core_quality.revision.is_repack,
+                },
+            };
+
+            let event_state = if h.event_type == 3 {
+                "imported"
+            } else {
+                "grabbed"
+            };
+
+            // Determine content type from which FK is set
+            let content_type = if h.movie_id.is_some_and(|id| id > 0) {
+                "movie"
+            } else {
+                "series"
+            };
+
+            QueueResource {
+                id: h.id,
+                series_id: h.series_id.filter(|&id| id > 0),
+                episode_id: h.episode_id.filter(|&id| id > 0),
+                languages: vec![LanguageResource {
+                    id: 1,
+                    name: "English".to_string(),
+                }],
+                quality,
+                custom_formats: vec![],
+                custom_format_score: 0,
+                size: 0.0,
+                title: h.source_title.clone(),
+                sizeleft: 0.0,
+                timeleft: None,
+                estimated_completion_time: None,
+                added: Some(h.date.to_rfc3339()),
+                status: "completed".to_string(),
+                tracked_download_status: Some("ok".to_string()),
+                tracked_download_state: Some(event_state.to_string()),
+                status_messages: vec![],
+                error_message: None,
+                download_id: h.download_id.clone(),
+                protocol: "unknown".to_string(),
+                download_client: None,
+                download_client_has_post_import_category: false,
+                indexer: None,
+                output_path: None,
+                episode_has_file: true,
+                content_type: content_type.to_string(),
+                movie_id: h.movie_id.filter(|&id| id > 0),
+                artist_id: None,
+                audiobook_id: None,
+                album_id: None,
+                seeds: None,
+                leechers: None,
+                seed_count: None,
+                leech_count: None,
+                episode: None,
+                series: None,
+                movie: None,
+                artist: None,
+                audiobook: None,
+                import_progress: None,
+            }
+        })
+        .collect();
+
+    Json(records)
+}

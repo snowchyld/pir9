@@ -308,6 +308,17 @@ export function useContentQueueQuery(contentType: string) {
 }
 
 /**
+ * Create a query for completed downloads (from history)
+ */
+export function useCompletedQueueQuery() {
+  return createQuery({
+    queryKey: ['/queue', 'completed'],
+    queryFn: () => http.get<import('./http').QueueItem[]>('/queue/completed'),
+    refetchInterval: 15000, // Poll less frequently — completed items don't change often
+  });
+}
+
+/**
  * Create a query for system status
  */
 export function useSystemStatusQuery() {
