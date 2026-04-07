@@ -1,0 +1,1 @@
+ALTER TABLE imdb_series ADD COLUMN IF NOT EXISTS network TEXT;
