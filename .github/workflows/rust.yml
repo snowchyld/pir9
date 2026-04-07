@@ -25,15 +25,8 @@ jobs:
       env:
         CACHE_HIT: ${{steps.cache-apt.outputs.cache-hit}}
       run: |
-        DPKG_CACHE=~/dpkg_cache3
-        if [[ "$CACHE_HIT" == 'true' ]]; then
-          sudo cp --force --recursive --preserve=all "$DPKG_CACHE"/* /
-        else
-          deps=(
-            libavutil-dev
-          )
           sudo apt update
-          sudo apt install -yq ${deps[@]}
+          sudo apt install -yq libavutil-dev
 
     - uses: actions/checkout@v4
     - name: Build
