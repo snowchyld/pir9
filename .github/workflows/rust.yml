@@ -24,7 +24,7 @@ jobs:
         CACHE_HIT: ${{steps.cache-apt.outputs.cache-hit}}
       run: |
           sudo apt update
-          sudo apt install -yq libavutil-dev
+          sudo apt install -yq libavutil-dev libavformat-dev
 
     - uses: actions/checkout@v4
     - name: Build
