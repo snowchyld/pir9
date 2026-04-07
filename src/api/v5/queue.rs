@@ -12,8 +12,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::core::datastore::repositories::{
-    DownloadClientRepository, EpisodeFileRepository, EpisodeRepository, MovieFileRepository,
-    MovieRepository, SeriesRepository, TrackedDownloadRepository,
+    ArtistRepository, AudiobookRepository, DownloadClientRepository, EpisodeFileRepository,
+    EpisodeRepository, MovieFileRepository, MovieRepository, SeriesRepository,
+    TrackedDownloadRepository,
 };
 use crate::core::download::clients::{create_client_from_model, DownloadState};
 use crate::core::parser::{best_series_match, normalize_title, parse_title};
@@ -91,6 +92,8 @@ pub struct QueueResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artist_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub audiobook_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub album_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seeds: Option<i32>,
@@ -106,6 +109,10 @@ pub struct QueueResource {
     pub series: Option<QueueSeriesResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub movie: Option<QueueMovieResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artist: Option<QueueArtistResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audiobook: Option<QueueAudiobookResource>,
     /// Live import progress when trackedDownloadState is "importing"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub import_progress: Option<ImportProgressResource>,
@@ -155,6 +162,22 @@ pub struct QueueSeriesResource {
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueMovieResource {
+    pub id: i64,
+    pub title: String,
+    pub title_slug: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueArtistResource {
+    pub id: i64,
+    pub title: String,
+    pub title_slug: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueAudiobookResource {
     pub id: i64,
     pub title: String,
     pub title_slug: String,
@@ -443,7 +466,8 @@ fn queue_item_to_resource(item: &crate::core::queue::QueueItem) -> QueueResource
         } else {
             None
         },
-        artist_id: None,
+        artist_id: item.artist_id,
+        audiobook_id: item.audiobook_id,
         album_id: None,
         seeds: item.seeds,
         leechers: item.leechers,
@@ -452,6 +476,8 @@ fn queue_item_to_resource(item: &crate::core::queue::QueueItem) -> QueueResource
         episode: None,
         series: None,
         movie: None,
+        artist: None,
+        audiobook: None,
         import_progress: None,
     }
 }
@@ -934,6 +960,7 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                     content_type: effective_content_type,
                     movie_id: matched_movie_id,
                     artist_id: None,
+                    audiobook_id: None,
                     album_id: None,
                     seeds: dl.seeds,
                     leechers: dl.leechers,
@@ -942,6 +969,8 @@ async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<Que
                     episode: parsed_episode,
                     series: parsed_series,
                     movie: matched_movie_resource,
+                    artist: None,
+                    audiobook: None,
                     import_progress: None,
                 });
 
@@ -1039,7 +1068,8 @@ async fn list_queue(
                 episode_has_file: true,
                 content_type,
                 movie_id: td.movie_id,
-                artist_id: None,
+                artist_id: td.artist_id,
+                audiobook_id: td.audiobook_id,
                 album_id: None,
                 seeds: None,
                 leechers: None,
@@ -1048,6 +1078,8 @@ async fn list_queue(
                 episode: None,
                 series: None,
                 movie: None,
+                artist: None,
+                audiobook: None,
                 import_progress: None,
             }
         })
@@ -1058,6 +1090,8 @@ async fn list_queue(
         let episode_repo = EpisodeRepository::new(state.db.clone());
         let series_repo = SeriesRepository::new(state.db.clone());
         let movie_repo = MovieRepository::new(state.db.clone());
+        let artist_repo = ArtistRepository::new(state.db.clone());
+        let audiobook_repo = AudiobookRepository::new(state.db.clone());
 
         for dl in &mut all_downloads {
             if include_episode {
@@ -1098,6 +1132,26 @@ async fn list_queue(
                     });
                 }
             }
+            // Enrich artist data (music)
+            if let Some(aid) = dl.artist_id {
+                if let Ok(Some(a)) = artist_repo.get_by_id(aid).await {
+                    dl.artist = Some(QueueArtistResource {
+                        id: a.id,
+                        title: a.name,
+                        title_slug: a.title_slug,
+                    });
+                }
+            }
+            // Enrich audiobook data
+            if let Some(abid) = dl.audiobook_id {
+                if let Ok(Some(ab)) = audiobook_repo.get_by_id(abid).await {
+                    dl.audiobook = Some(QueueAudiobookResource {
+                        id: ab.id,
+                        title: ab.title,
+                        title_slug: ab.title_slug,
+                    });
+                }
+            }
         }
 
         // Enrich completed records with the same metadata
@@ -1135,6 +1189,24 @@ async fn list_queue(
                         id: m.id,
                         title: m.title,
                         title_slug: m.title_slug,
+                    });
+                }
+            }
+            if let Some(aid) = dl.artist_id {
+                if let Ok(Some(a)) = artist_repo.get_by_id(aid).await {
+                    dl.artist = Some(QueueArtistResource {
+                        id: a.id,
+                        title: a.name,
+                        title_slug: a.title_slug,
+                    });
+                }
+            }
+            if let Some(abid) = dl.audiobook_id {
+                if let Ok(Some(ab)) = audiobook_repo.get_by_id(abid).await {
+                    dl.audiobook = Some(QueueAudiobookResource {
+                        id: ab.id,
+                        title: ab.title,
+                        title_slug: ab.title_slug,
                     });
                 }
             }
@@ -1300,6 +1372,8 @@ async fn remove_queue_item(
                 is_upgrade: false,
                 added: chrono::Utc::now(),
                 movie_id: download.movie_id,
+                artist_id: download.artist_id,
+                audiobook_id: None,
                 content_type: download.content_type.clone(),
             };
 
@@ -1478,10 +1552,10 @@ async fn import_queue_item(
     let import_service = ImportService::new(state.db.clone(), state.config.read().media.clone());
 
     // Find the download — either tracked (id < 10000) or untracked
-    let (download_id, download_client_id, title, tracked_movie_id) = if id < 10000 {
+    let (download_id, download_client_id, title, tracked_movie_id, tracked_artist_id, tracked_audiobook_id) = if id < 10000 {
         // Tracked download — look up from DB
         match td_repo.get_by_id(id).await {
-            Ok(Some(td)) => (td.download_id, td.download_client_id, td.title, td.movie_id),
+            Ok(Some(td)) => (td.download_id, td.download_client_id, td.title, td.movie_id, td.artist_id, td.audiobook_id),
             _ => {
                 tracing::warn!("Import: tracked download {} not found", id);
                 return Json(QueueActionResponse { success: false });
@@ -1504,7 +1578,7 @@ async fn import_queue_item(
                     .find(|c| c.name == client_name)
                     .map(|c| c.id)
                     .unwrap_or(0);
-                (dl_id, client_id, dl.title, dl.movie_id)
+                (dl_id, client_id, dl.title, dl.movie_id, dl.artist_id, dl.audiobook_id)
             }
             None => {
                 tracing::warn!("Import: queue item {} not found", id);
@@ -1721,6 +1795,298 @@ async fn import_queue_item(
                     output_path,
                     movie_title
                 );
+            }
+        });
+
+        return Json(QueueActionResponse { success: true });
+    }
+
+    // Music import: if this download is matched to an artist, scan for audio files and move to library
+    if let Some(artist_id) = tracked_artist_id {
+        let artist_repo = ArtistRepository::new(state.db.clone());
+        let artist = match artist_repo.get_by_id(artist_id).await {
+            Ok(Some(a)) => a,
+            _ => {
+                tracing::warn!("Import: artist {} not found for download {}", artist_id, download_id);
+                return Json(QueueActionResponse { success: false });
+            }
+        };
+
+        let db = state.db.clone();
+        let artist_name = artist.name.clone();
+        let artist_path = artist.path.clone();
+        let dl_title = title.clone();
+        tokio::spawn(async move {
+            use crate::core::datastore::repositories::{AlbumRepository, TrackRepository, TrackFileRepository};
+
+            let album_repo = AlbumRepository::new(db.clone());
+            let track_repo = TrackRepository::new(db.clone());
+            let track_file_repo = TrackFileRepository::new(db.clone());
+
+            // Collect audio files from the download directory (recurse one level for album folders)
+            let audio_extensions: &[&str] = &[
+                "mp3", "flac", "m4a", "ogg", "opus", "wav", "aac", "wma", "alac", "ape", "dsf", "dff",
+            ];
+            let mut audio_files: Vec<(String, String, i64)> = Vec::new(); // (path, filename, size)
+            let base = std::path::Path::new(&output_path);
+
+            if let Ok(mut dir) = tokio::fs::read_dir(base).await {
+                while let Ok(Some(entry)) = dir.next_entry().await {
+                    let path = entry.path();
+                    if path.is_file() {
+                        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+                        if audio_extensions.contains(&ext.as_str()) {
+                            let filename = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                            let size = entry.metadata().await.map(|m| m.len() as i64).unwrap_or(0);
+                            audio_files.push((path.to_string_lossy().to_string(), filename, size));
+                        }
+                    } else if path.is_dir() {
+                        if let Ok(mut subdir) = tokio::fs::read_dir(&path).await {
+                            while let Ok(Some(sub_entry)) = subdir.next_entry().await {
+                                let sub_path = sub_entry.path();
+                                if sub_path.is_file() {
+                                    let ext = sub_path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+                                    if audio_extensions.contains(&ext.as_str()) {
+                                        let filename = sub_path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                                        let size = sub_entry.metadata().await.map(|m| m.len() as i64).unwrap_or(0);
+                                        audio_files.push((sub_path.to_string_lossy().to_string(), filename, size));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if audio_files.is_empty() {
+                tracing::warn!("Import: no audio files found in '{}' for artist '{}'", output_path, artist_name);
+                return;
+            }
+
+            audio_files.sort_by(|a, b| a.0.cmp(&b.0));
+
+            // Match to album
+            let albums = album_repo.get_by_artist_id(artist_id).await.unwrap_or_default();
+            let title_lower = dl_title.to_lowercase();
+            let matched_album = albums.iter().find(|a| {
+                let clean = a.clean_title.to_lowercase();
+                clean.len() >= 4 && title_lower.contains(&clean)
+            });
+
+            let album_id = matched_album.map(|a| a.id);
+            let album_folder = matched_album
+                .map(|a| sanitize_filename::sanitize(&a.title))
+                .unwrap_or_else(|| {
+                    // Derive album folder from download title: strip "Artist - " prefix
+                    let t = dl_title.trim();
+                    let after_dash = t.find(" - ").map(|i| &t[i + 3..]).unwrap_or(t);
+                    sanitize_filename::sanitize(after_dash)
+                });
+
+            // Create destination directory: {artist_path}/{album_folder}/
+            let dest_dir = std::path::Path::new(&artist_path).join(&album_folder);
+            if let Err(e) = tokio::fs::create_dir_all(&dest_dir).await {
+                tracing::warn!("Import: failed to create album dir '{}': {}", dest_dir.display(), e);
+                return;
+            }
+
+            let existing_tracks = if let Some(aid) = album_id {
+                track_repo.get_by_album_id(aid).await.unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+
+            let mut added = 0;
+            let target_album_id = album_id.unwrap_or(0);
+
+            for (file_path, filename, size) in &audio_files {
+                // Copy file to library
+                let dest_file = dest_dir.join(&filename);
+                if dest_file.exists() {
+                    tracing::debug!("Import: skipping existing file '{}'", dest_file.display());
+                    continue;
+                }
+                if let Err(e) = tokio::fs::copy(&file_path, &dest_file).await {
+                    tracing::warn!("Import: failed to copy '{}' → '{}': {}", file_path, dest_file.display(), e);
+                    continue;
+                }
+
+                let dest_path_str = dest_file.to_string_lossy().to_string();
+                let (track_num, track_title) = super::music::parse_track_filename(filename);
+
+                // Find or create track record
+                let track_id = if target_album_id > 0 {
+                    if let Some(et) = existing_tracks.iter().find(|t| t.track_number == track_num && !t.has_file) {
+                        Some(et.id)
+                    } else if existing_tracks.iter().any(|t| t.track_number == track_num) {
+                        None // already has file
+                    } else {
+                        let new_track = crate::core::datastore::models::TrackDbModel {
+                            id: 0, album_id: target_album_id, artist_id,
+                            title: track_title.clone(), track_number: track_num, disc_number: 1,
+                            duration_ms: None, has_file: true, track_file_id: None,
+                            monitored: true, air_date_utc: None,
+                        };
+                        track_repo.insert(&new_track).await.ok()
+                    }
+                } else {
+                    None
+                };
+
+                let relative_path = format!("{}/{}", album_folder, filename);
+                let ext = std::path::Path::new(filename)
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_uppercase())
+                    .unwrap_or_else(|| "MP3".to_string());
+
+                let new_file = crate::core::datastore::models::TrackFileDbModel {
+                    id: 0, artist_id, album_id: target_album_id,
+                    relative_path, path: dest_path_str, size: *size,
+                    quality: serde_json::json!({ "codec": ext }).to_string(),
+                    media_info: Some(serde_json::json!({ "audio_format": ext }).to_string()),
+                    date_added: chrono::Utc::now(),
+                };
+
+                if let Ok(file_id) = track_file_repo.insert(&new_file).await {
+                    if let Some(tid) = track_id {
+                        let pool = db.pool();
+                        let _ = sqlx::query("UPDATE tracks SET has_file = true, track_file_id = $1 WHERE id = $2")
+                            .bind(file_id).bind(tid).execute(pool).await;
+                    }
+                    added += 1;
+                }
+            }
+
+            tracing::info!(
+                "Music imported: '{}' → '{}' ({} files copied to {})",
+                dl_title, artist_name, added, dest_dir.display(),
+            );
+
+            if id < 10000 {
+                let td_repo = TrackedDownloadRepository::new(db);
+                let _ = td_repo.delete(id).await;
+            }
+        });
+
+        return Json(QueueActionResponse { success: true });
+    }
+
+    // Audiobook import: if this download is matched to an audiobook, scan for audio files and move to library
+    if let Some(audiobook_id) = tracked_audiobook_id {
+        let audiobook_repo = AudiobookRepository::new(state.db.clone());
+        let audiobook = match audiobook_repo.get_by_id(audiobook_id).await {
+            Ok(Some(ab)) => ab,
+            _ => {
+                tracing::warn!("Import: audiobook {} not found for download {}", audiobook_id, download_id);
+                return Json(QueueActionResponse { success: false });
+            }
+        };
+
+        let db = state.db.clone();
+        let audiobook_title = audiobook.title.clone();
+        let audiobook_path = audiobook.path.clone();
+        tokio::spawn(async move {
+            use crate::core::datastore::repositories::AudiobookFileRepository;
+
+            let file_repo = AudiobookFileRepository::new(db.clone());
+
+            // Collect audio files from download directory
+            let audio_extensions: &[&str] = &[
+                "mp3", "flac", "m4a", "m4b", "ogg", "opus", "wav", "aac", "wma", "alac", "ape",
+            ];
+            let mut audio_files: Vec<(String, String, i64)> = Vec::new();
+            let base = std::path::Path::new(&output_path);
+
+            if let Ok(mut dir) = tokio::fs::read_dir(base).await {
+                while let Ok(Some(entry)) = dir.next_entry().await {
+                    let path = entry.path();
+                    if path.is_file() {
+                        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+                        if audio_extensions.contains(&ext.as_str()) {
+                            let filename = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                            let size = entry.metadata().await.map(|m| m.len() as i64).unwrap_or(0);
+                            audio_files.push((path.to_string_lossy().to_string(), filename, size));
+                        }
+                    } else if path.is_dir() {
+                        if let Ok(mut subdir) = tokio::fs::read_dir(&path).await {
+                            while let Ok(Some(sub_entry)) = subdir.next_entry().await {
+                                let sub_path = sub_entry.path();
+                                if sub_path.is_file() {
+                                    let ext = sub_path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+                                    if audio_extensions.contains(&ext.as_str()) {
+                                        let filename = sub_path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                                        let size = sub_entry.metadata().await.map(|m| m.len() as i64).unwrap_or(0);
+                                        audio_files.push((sub_path.to_string_lossy().to_string(), filename, size));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if audio_files.is_empty() {
+                tracing::warn!("Import: no audio files found in '{}' for audiobook '{}'", output_path, audiobook_title);
+                return;
+            }
+
+            // Create destination directory
+            let dest_dir = std::path::Path::new(&audiobook_path);
+            if let Err(e) = tokio::fs::create_dir_all(dest_dir).await {
+                tracing::warn!("Import: failed to create audiobook dir '{}': {}", dest_dir.display(), e);
+                return;
+            }
+
+            let mut added = 0;
+            let mut total_size: i64 = 0;
+
+            for (file_path, filename, size) in &audio_files {
+                let dest_file = dest_dir.join(filename);
+                if dest_file.exists() {
+                    continue;
+                }
+                if let Err(e) = tokio::fs::copy(&file_path, &dest_file).await {
+                    tracing::warn!("Import: failed to copy '{}' → '{}': {}", file_path, dest_file.display(), e);
+                    continue;
+                }
+
+                let dest_path_str = dest_file.to_string_lossy().to_string();
+                let ext = std::path::Path::new(filename)
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_uppercase())
+                    .unwrap_or_else(|| "MP3".to_string());
+
+                let new_file = crate::core::datastore::models::AudiobookFileDbModel {
+                    id: 0,
+                    audiobook_id,
+                    relative_path: filename.clone(),
+                    path: dest_path_str,
+                    size: *size,
+                    quality: serde_json::json!({ "codec": ext }).to_string(),
+                    media_info: Some(serde_json::json!({ "audio_format": ext }).to_string()),
+                    date_added: chrono::Utc::now(),
+                };
+
+                if let Ok(file_id) = file_repo.insert(&new_file).await {
+                    total_size += size;
+                    added += 1;
+                    // Update audiobook to point to the first file
+                    if added == 1 {
+                        let pool = db.pool();
+                        let _ = sqlx::query("UPDATE audiobooks SET has_file = true, audiobook_file_id = $1 WHERE id = $2")
+                            .bind(file_id).bind(audiobook_id).execute(pool).await;
+                    }
+                }
+            }
+
+            tracing::info!(
+                "Audiobook imported: '{}' ({} files copied to {})",
+                audiobook_title, added, dest_dir.display(),
+            );
+
+            if id < 10000 {
+                let td_repo = TrackedDownloadRepository::new(db);
+                let _ = td_repo.delete(id).await;
             }
         });
 
@@ -2066,6 +2432,10 @@ pub struct UpdateMatchRequest {
     pub episode_ids: Option<Vec<i64>>,
     /// Movie ID (for movie match — mutually exclusive with series_id)
     pub movie_id: Option<i64>,
+    /// Artist ID (for music match — mutually exclusive with series_id and movie_id)
+    pub artist_id: Option<i64>,
+    /// Audiobook ID (for audiobook match)
+    pub audiobook_id: Option<i64>,
     /// Required for untracked downloads (id >= 10000) — the download client's ID for this item
     pub download_id: Option<String>,
     /// Required for untracked downloads — the download client name
@@ -2090,10 +2460,183 @@ async fn update_match(
 ) -> Result<Json<QueueActionResponse>, StatusCode> {
     let td_repo = TrackedDownloadRepository::new(state.db.clone());
 
-    // Determine if this is a movie match or series match
+    // Determine match type: audiobook > artist > movie > series
+    let is_audiobook_match = body.audiobook_id.is_some();
+    let is_artist_match = body.artist_id.is_some();
     let is_movie_match = body.movie_id.is_some();
 
-    if is_movie_match {
+    if is_audiobook_match {
+        // --- Audiobook match ---
+        let audiobook_id = body.audiobook_id.unwrap();
+        let audiobook_repo = AudiobookRepository::new(state.db.clone());
+
+        match audiobook_repo.get_by_id(audiobook_id).await {
+            Ok(Some(_)) => {}
+            _ => return Err(StatusCode::NOT_FOUND),
+        }
+
+        if id < 10000 {
+            if let Err(e) = td_repo.update_audiobook_match(id, audiobook_id).await {
+                tracing::warn!("Failed to update audiobook match for tracked download {}: {}", id, e);
+                return Ok(Json(QueueActionResponse { success: false }));
+            }
+            tracing::info!("Queue match updated: download {} → audiobook {}", id, audiobook_id);
+        } else {
+            let download_id = match body.download_id {
+                Some(ref id) if !id.is_empty() => id.clone(),
+                _ => return Err(StatusCode::BAD_REQUEST),
+            };
+            let client_name = match body.download_client {
+                Some(ref name) if !name.is_empty() => name.clone(),
+                _ => return Err(StatusCode::BAD_REQUEST),
+            };
+
+            let client_repo = DownloadClientRepository::new(state.db.clone());
+            let clients = client_repo.get_all().await.unwrap_or_default();
+            let client_id = match clients.iter().find(|c| c.name == client_name) {
+                Some(c) => c.id,
+                None => return Err(StatusCode::NOT_FOUND),
+            };
+
+            if let Ok(Some(existing)) = td_repo.get_by_download_id(client_id, &download_id).await {
+                if let Err(e) = td_repo.update_audiobook_match(existing.id, audiobook_id).await {
+                    tracing::warn!("Failed to update audiobook match: {}", e);
+                    return Ok(Json(QueueActionResponse { success: false }));
+                }
+                let _ = td_repo.update_status(existing.id, TrackedDownloadState::ImportPending as i32, "[]", None).await;
+            } else {
+                let protocol = match body.protocol.as_deref() { Some("usenet") => 1, _ => 2 };
+                use crate::core::datastore::models::TrackedDownloadDbModel;
+                let model = TrackedDownloadDbModel {
+                    id: 0, download_id: download_id.clone(), download_client_id: client_id,
+                    series_id: 0, episode_ids: "[]".to_string(),
+                    title: body.title.unwrap_or_default(), indexer: None,
+                    size: body.size.unwrap_or(0.0) as i64, protocol,
+                    quality: "{}".to_string(), languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
+                    status: TrackedDownloadState::Downloading as i32,
+                    status_messages: "[]".to_string(), error_message: None, output_path: None,
+                    is_upgrade: false, added: chrono::Utc::now(),
+                    movie_id: None, artist_id: None, audiobook_id: Some(audiobook_id),
+                    content_type: "audiobook".to_string(),
+                };
+                if let Err(e) = td_repo.insert(&model).await {
+                    tracing::warn!("Failed to promote untracked download '{}': {}", download_id, e);
+                    return Ok(Json(QueueActionResponse { success: false }));
+                }
+            }
+        }
+    } else if is_artist_match {
+        // --- Artist match (music downloads) ---
+        let artist_id = body.artist_id.unwrap();
+        let artist_repo = ArtistRepository::new(state.db.clone());
+
+        // Validate artist exists
+        match artist_repo.get_by_id(artist_id).await {
+            Ok(Some(_)) => {}
+            _ => return Err(StatusCode::NOT_FOUND),
+        }
+
+        if id < 10000 {
+            // Tracked download — update existing record
+            if let Err(e) = td_repo.update_artist_match(id, artist_id).await {
+                tracing::warn!(
+                    "Failed to update artist match for tracked download {}: {}",
+                    id,
+                    e
+                );
+                return Ok(Json(QueueActionResponse { success: false }));
+            }
+            tracing::info!("Queue match updated: download {} → artist {}", id, artist_id);
+        } else {
+            // Untracked download — promote to tracked
+            let download_id = match body.download_id {
+                Some(ref id) if !id.is_empty() => id.clone(),
+                _ => return Err(StatusCode::BAD_REQUEST),
+            };
+            let client_name = match body.download_client {
+                Some(ref name) if !name.is_empty() => name.clone(),
+                _ => return Err(StatusCode::BAD_REQUEST),
+            };
+
+            let client_repo = DownloadClientRepository::new(state.db.clone());
+            let clients = client_repo.get_all().await.unwrap_or_default();
+            let client_id = match clients.iter().find(|c| c.name == client_name) {
+                Some(c) => c.id,
+                None => return Err(StatusCode::NOT_FOUND),
+            };
+
+            if let Ok(Some(existing)) = td_repo.get_by_download_id(client_id, &download_id).await {
+                if let Err(e) = td_repo.update_artist_match(existing.id, artist_id).await {
+                    tracing::warn!(
+                        "Failed to update artist match for existing tracked download {}: {}",
+                        existing.id,
+                        e
+                    );
+                    return Ok(Json(QueueActionResponse { success: false }));
+                }
+                let _ = td_repo
+                    .update_status(
+                        existing.id,
+                        TrackedDownloadState::ImportPending as i32,
+                        "[]",
+                        None,
+                    )
+                    .await;
+                tracing::info!(
+                    "Queue match updated (existing): download {} → artist {}",
+                    existing.id,
+                    artist_id
+                );
+            } else {
+                let protocol = match body.protocol.as_deref() {
+                    Some("usenet") => 1,
+                    _ => 2,
+                };
+                use crate::core::datastore::models::TrackedDownloadDbModel;
+                let model = TrackedDownloadDbModel {
+                    id: 0,
+                    download_id: download_id.clone(),
+                    download_client_id: client_id,
+                    series_id: 0,
+                    episode_ids: "[]".to_string(),
+                    title: body.title.unwrap_or_default(),
+                    indexer: None,
+                    size: body.size.unwrap_or(0.0) as i64,
+                    protocol,
+                    quality: "{}".to_string(),
+                    languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
+                    status: TrackedDownloadState::Downloading as i32,
+                    status_messages: "[]".to_string(),
+                    error_message: None,
+                    output_path: None,
+                    is_upgrade: false,
+                    added: chrono::Utc::now(),
+                    movie_id: None,
+                    artist_id: Some(artist_id),
+                    audiobook_id: None,
+                    content_type: "music".to_string(),
+                };
+                match td_repo.insert(&model).await {
+                    Ok(new_id) => {
+                        tracing::info!(
+                            "Untracked download promoted: '{}' → tracked {} (artist {})",
+                            download_id,
+                            new_id,
+                            artist_id,
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to promote untracked download '{}': {}",
+                            download_id,
+                            e
+                        );
+                        return Ok(Json(QueueActionResponse { success: false }));
+                    }
+                }
+            }
+        }
+    } else if is_movie_match {
         // --- Movie match ---
         let movie_id = body.movie_id.unwrap();
         let movie_repo = MovieRepository::new(state.db.clone());
@@ -2180,6 +2723,8 @@ async fn update_match(
                     is_upgrade: false,
                     added: chrono::Utc::now(),
                     movie_id: Some(movie_id),
+                    artist_id: None,
+                    audiobook_id: None,
                     content_type: "movie".to_string(),
                 };
                 match td_repo.insert(&model).await {
@@ -2318,6 +2863,8 @@ async fn update_match(
                     is_upgrade: false,
                     added: chrono::Utc::now(),
                     movie_id: None,
+                    artist_id: None,
+                    audiobook_id: None,
                     content_type: "series".to_string(),
                 };
 

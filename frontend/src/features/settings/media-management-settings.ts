@@ -28,6 +28,11 @@ interface NamingConfig {
   seasonFolderFormat: string;
   specialsFolderFormat: string;
   multiEpisodeStyle: number;
+  // Music naming
+  renameTracks: boolean;
+  trackNamingPattern: string;
+  artistFolderFormat: string;
+  albumFolderFormat: string;
 }
 
 interface MediaManagementConfig {
@@ -278,6 +283,52 @@ export class MediaManagementSettings extends BaseComponent {
             value="${escapeHtml(naming?.seasonFolderFormat ?? '')}"
             onchange="this.closest('media-management-settings').handleNamingChange('seasonFolderFormat', this.value)"
           />
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h2 class="section-title">Music Naming</h2>
+
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input
+              type="checkbox"
+              ${naming?.renameTracks ? 'checked' : ''}
+              onchange="this.closest('media-management-settings').handleNamingChange('renameTracks', this.checked)"
+            />
+            <span>Rename Tracks</span>
+          </label>
+          <p class="help-text">Rename music files when importing or organizing</p>
+        </div>
+
+        <div class="form-group">
+          <label>Track Naming Pattern</label>
+          <input
+            type="text"
+            value="${escapeHtml(naming?.trackNamingPattern ?? '{track:00} - {Track Title}')}"
+            onchange="this.closest('media-management-settings').handleNamingChange('trackNamingPattern', this.value)"
+          />
+          <p class="help-text">Tokens: {track:00}, {Track Title}, {Artist Name}, {Album Title}, {Quality}</p>
+        </div>
+
+        <div class="form-group">
+          <label>Artist Folder Format</label>
+          <input
+            type="text"
+            value="${escapeHtml(naming?.artistFolderFormat ?? '{Artist Name}')}"
+            onchange="this.closest('media-management-settings').handleNamingChange('artistFolderFormat', this.value)"
+          />
+          <p class="help-text">Tokens: {Artist Name}, {Artist SortName}</p>
+        </div>
+
+        <div class="form-group">
+          <label>Album Folder Format</label>
+          <input
+            type="text"
+            value="${escapeHtml(naming?.albumFolderFormat ?? '{Album Title}')}"
+            onchange="this.closest('media-management-settings').handleNamingChange('albumFolderFormat', this.value)"
+          />
+          <p class="help-text">Tokens: {Album Title}, {Album Year}, {Album Type}</p>
         </div>
       </div>
 

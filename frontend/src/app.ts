@@ -70,7 +70,7 @@ export class AppRoot extends BaseComponent {
                 <span>pir9</span>
               </div>
               <div>
-                <a href="https://github.com/pir9/pir9" target="_blank" rel="noopener">
+                <a href="https://github.com/snowchyld/pir9" target="_blank" rel="noopener">
                   GitHub
                 </a>
               </div>

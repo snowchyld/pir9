@@ -1018,7 +1018,7 @@ const AUDIO_EXTENSIONS: &[&str] = &[
 ];
 
 /// Parse track number and title from a filename like "01 Courage 1.mp3" or "01 - Courage.flac"
-fn parse_track_filename(filename: &str) -> (i32, String) {
+pub fn parse_track_filename(filename: &str) -> (i32, String) {
     let stem = std::path::Path::new(filename)
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())

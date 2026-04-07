@@ -104,7 +104,7 @@ pir9/
 
 ```bash
 # Clone the repository
-git clone https://github.com/pir9/pir9.git
+git clone https://github.com/snowchyld/pir9.git
 cd pir9
 
 # Build in release mode

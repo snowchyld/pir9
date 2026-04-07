@@ -392,6 +392,8 @@ export interface QueueItem {
   seriesId?: number | null;
   episodeId?: number | null;
   movieId?: number | null;
+  artistId?: number | null;
+  audiobookId?: number | null;
   contentType?: 'series' | 'movie' | 'anime' | 'music' | 'audiobook' | 'podcast';
   title: string;
   status: string;
@@ -414,6 +416,8 @@ export interface QueueItem {
   episode?: QueueItemEpisode;
   series?: QueueItemSeries;
   movie?: QueueItemMovie;
+  artist?: { id: number; title: string; titleSlug: string };
+  audiobook?: { id: number; title: string; titleSlug: string };
   outputPath?: string;
   importProgress?: {
     stage: string;

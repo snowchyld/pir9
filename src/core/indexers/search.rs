@@ -245,12 +245,24 @@ impl IndexerSearchService {
         Ok(all_releases)
     }
 
-    /// Search by series name and title
+    /// Search by query text with optional category override.
+    /// Pass `None` for categories to use TV defaults (backwards compat).
     pub async fn search_by_query(
         &self,
         series_title: &str,
         season: Option<i32>,
         episode: Option<i32>,
+    ) -> Result<Vec<ReleaseInfo>> {
+        self.search_by_query_with_categories(series_title, season, episode, None).await
+    }
+
+    /// Search by query text with explicit categories.
+    pub async fn search_by_query_with_categories(
+        &self,
+        query_text: &str,
+        season: Option<i32>,
+        episode: Option<i32>,
+        categories: Option<Vec<i32>>,
     ) -> Result<Vec<ReleaseInfo>> {
         let mut all_releases = Vec::new();
 
@@ -261,12 +273,14 @@ impl IndexerSearchService {
 
             match create_client_from_model(indexer) {
                 Ok(client) => {
+                    let cats = categories.clone()
+                        .unwrap_or_else(|| get_tv_categories(indexer.protocol));
                     let query = SearchQuery {
-                        query: Some(series_title.to_string()),
+                        query: Some(query_text.to_string()),
                         season,
                         episode,
                         limit: Some(100),
-                        categories: get_tv_categories(indexer.protocol),
+                        categories: cats,
                         ..Default::default()
                     };
 
@@ -389,4 +403,20 @@ fn get_tv_categories(_protocol: i32) -> Vec<i32> {
     // Standard Newznab TV categories
     // 5000: TV, 5010: WEB-DL, 5020: Foreign, 5030: SD, 5040: HD, 5045: UHD, 5050: Other, 5060: Sport, 5070: Anime, 5080: Documentary
     vec![5000, 5010, 5020, 5030, 5040, 5045, 5050, 5060, 5070, 5080]
+}
+
+/// Get Audio/Music categories (Newznab 3000 range)
+/// 3000: Audio, 3010: MP3, 3020: Video, 3030: Audiobook, 3040: Lossless, 3050: Podcast, 3060: Other
+pub fn get_music_categories() -> Vec<i32> {
+    vec![3000, 3010, 3020, 3040, 3060]
+}
+
+/// Get Audiobook categories
+pub fn get_audiobook_categories() -> Vec<i32> {
+    vec![3030]
+}
+
+/// Get Podcast categories
+pub fn get_podcast_categories() -> Vec<i32> {
+    vec![3050]
 }

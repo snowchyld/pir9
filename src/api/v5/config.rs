@@ -105,6 +105,10 @@ async fn get_naming_config(State(state): State<Arc<AppState>>) -> Json<NamingCon
         series_folder_format: media.series_folder_format.clone(),
         season_folder_format: media.season_folder_format.clone(),
         specials_folder_format: media.specials_folder_format.clone(),
+        rename_tracks: media.rename_tracks,
+        track_naming_pattern: media.track_naming_pattern.clone(),
+        artist_folder_format: media.artist_folder_format.clone(),
+        album_folder_format: media.album_folder_format.clone(),
     })
 }
 
@@ -127,6 +131,10 @@ async fn update_naming_config(
         app_config.media.series_folder_format = config.series_folder_format.clone();
         app_config.media.season_folder_format = config.season_folder_format.clone();
         app_config.media.specials_folder_format = config.specials_folder_format.clone();
+        app_config.media.rename_tracks = config.rename_tracks;
+        app_config.media.track_naming_pattern = config.track_naming_pattern.clone();
+        app_config.media.artist_folder_format = config.artist_folder_format.clone();
+        app_config.media.album_folder_format = config.album_folder_format.clone();
 
         if let Err(e) = app_config.save(&config_path) {
             tracing::warn!(
@@ -318,6 +326,15 @@ pub struct NamingConfig {
     pub series_folder_format: String,
     pub season_folder_format: String,
     pub specials_folder_format: String,
+    // Music naming
+    #[serde(default)]
+    pub rename_tracks: bool,
+    #[serde(default)]
+    pub track_naming_pattern: String,
+    #[serde(default)]
+    pub artist_folder_format: String,
+    #[serde(default)]
+    pub album_folder_format: String,
 }
 
 impl Default for NamingConfig {
@@ -334,6 +351,10 @@ impl Default for NamingConfig {
             series_folder_format: "{Series Title}".to_string(),
             season_folder_format: "Season {season:00}".to_string(),
             specials_folder_format: "Specials".to_string(),
+            rename_tracks: true,
+            track_naming_pattern: "{track:00} - {Track Title}".to_string(),
+            artist_folder_format: "{Artist Name}".to_string(),
+            album_folder_format: "{Album Title}".to_string(),
         }
     }
 }

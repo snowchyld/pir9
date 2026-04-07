@@ -14,7 +14,7 @@ import {
   type QueryObserverResult,
 } from '@tanstack/query-core';
 import { http } from './http';
-import { type Signal, signal } from './reactive';
+import { batch, type Signal, signal } from './reactive';
 
 /**
  * Singleton query client instance
@@ -25,7 +25,7 @@ export const queryClient = new QueryClient({
       staleTime: 5 * 60 * 1000, // 5 minutes
       gcTime: 30 * 60 * 1000, // 30 minutes (was cacheTime)
       retry: 1,
-      refetchOnWindowFocus: true,
+      refetchOnWindowFocus: false, // Disabled — causes render storms on mobile
     },
     mutations: {
       retry: 0,
@@ -75,24 +75,28 @@ export function createQuery<TData>(
 
   const observer = new QueryObserver<TData, Error, TData, TData, QueryKey>(queryClient, options);
 
-  // Update signals when query state changes
+  // Update signals when query state changes (batched to avoid cascading renders)
   observer.subscribe((result: QueryObserverResult<TData, Error>) => {
-    data.set(result.data);
-    error.set(result.error);
-    isLoading.set(result.isLoading);
-    isFetching.set(result.isFetching);
-    isError.set(result.isError);
-    isSuccess.set(result.isSuccess);
+    batch(() => {
+      data.set(result.data);
+      error.set(result.error);
+      isLoading.set(result.isLoading);
+      isFetching.set(result.isFetching);
+      isError.set(result.isError);
+      isSuccess.set(result.isSuccess);
+    });
   });
 
-  // Get initial state
+  // Get initial state (batched)
   const initialResult = observer.getCurrentResult();
-  data.set(initialResult.data);
-  error.set(initialResult.error);
-  isLoading.set(initialResult.isLoading);
-  isFetching.set(initialResult.isFetching);
-  isError.set(initialResult.isError);
-  isSuccess.set(initialResult.isSuccess);
+  batch(() => {
+    data.set(initialResult.data);
+    error.set(initialResult.error);
+    isLoading.set(initialResult.isLoading);
+    isFetching.set(initialResult.isFetching);
+    isError.set(initialResult.isError);
+    isSuccess.set(initialResult.isSuccess);
+  });
 
   return {
     data,
@@ -121,13 +125,15 @@ export function createMutation<TData, TVariables>(
 
   const observer = new MutationObserver<TData, Error, TVariables, unknown>(queryClient, options);
 
-  // Update signals when mutation state changes
+  // Update signals when mutation state changes (batched)
   observer.subscribe((result: MutationObserverResult<TData, Error, TVariables, unknown>) => {
-    data.set(result.data);
-    error.set(result.error);
-    isLoading.set(result.isPending);
-    isError.set(result.isError);
-    isSuccess.set(result.isSuccess);
+    batch(() => {
+      data.set(result.data);
+      error.set(result.error);
+      isLoading.set(result.isPending);
+      isError.set(result.isError);
+      isSuccess.set(result.isSuccess);
+    });
   });
 
   return {

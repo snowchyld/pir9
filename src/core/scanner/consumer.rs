@@ -836,11 +836,22 @@ impl ScanResultConsumer {
 
         // Check if file already tracked
         let existing_files = file_repo.get_by_movie_id(movie_id).await?;
-        if existing_files.iter().any(|f| f.path == file_path_str) {
-            info!(
-                "Movie file already tracked for '{}': {}",
-                movie.title, file_path_str
-            );
+        if let Some(existing) = existing_files.iter().find(|f| f.path == file_path_str) {
+            // File already tracked — ensure movie record is linked
+            if !movie.has_file || movie.movie_file_id != Some(existing.id) {
+                let pool = self.db.pool();
+                let _ = sqlx::query(
+                    "UPDATE movies SET has_file = true, movie_file_id = $1 WHERE id = $2",
+                )
+                .bind(existing.id)
+                .bind(movie_id)
+                .execute(pool)
+                .await;
+                info!(
+                    "Movie file already tracked for '{}', linked has_file: {}",
+                    movie.title, file_path_str
+                );
+            }
             return Ok(());
         }
 

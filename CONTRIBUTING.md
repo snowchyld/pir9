@@ -49,7 +49,7 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 
 ```bash
 # Clone your fork
-git clone https://github.com/YOUR_USERNAME/pir9.git
+git clone https://github.com/snowchyld/pir9.git
 cd pir9
 
 # Build
@@ -171,8 +171,8 @@ Fixes #123
 ## Getting Help
 
 - Join our [Discord](https://discord.gg/pir9)
-- Check existing [issues](https://github.com/pir9/pir9/issues)
-- Read the [documentation](https://github.com/pir9/pir9)
+- Check existing [issues](https://github.com/snowchyld/pir9/issues)
+- Read the [documentation](https://github.com/snowchyld/pir9)
 
 ## License
 

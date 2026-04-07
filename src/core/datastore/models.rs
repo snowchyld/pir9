@@ -382,8 +382,10 @@ pub struct TrackedDownloadDbModel {
     pub output_path: Option<String>,   // Download output path
     pub is_upgrade: bool,              // Whether this is an upgrade
     pub added: DateTime<Utc>,
-    pub movie_id: Option<i64>, // FK to movies (for movie downloads)
-    pub content_type: String,  // series, movie, anime, music, audiobook, podcast
+    pub movie_id: Option<i64>,  // FK to movies (for movie downloads)
+    pub artist_id: Option<i64>,    // FK to artists (for music downloads)
+    pub audiobook_id: Option<i64>, // FK to audiobooks (for audiobook downloads)
+    pub content_type: String,      // series, movie, anime, music, audiobook, podcast
 }
 
 /// Import exclusion database model

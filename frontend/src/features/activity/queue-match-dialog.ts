@@ -4,7 +4,7 @@
  */
 
 import { BaseComponent, customElement, escapeHtml, html } from '../../core/component';
-import { http, type Movie, type QueueItem, type Series } from '../../core/http';
+import { http, type Movie, type QueueItem, type Series, type Artist } from '../../core/http';
 import { createMutation, invalidateQueries } from '../../core/query';
 import { signal } from '../../core/reactive';
 import { showError, showSuccess } from '../../stores/app.store';
@@ -34,12 +34,26 @@ export class QueueMatchDialog extends BaseComponent {
   private movieFilter = signal('');
   private selectedMovieId = signal<number | null>(null);
 
+  // Artist matching (music)
+  private allArtists = signal<Artist[]>([]);
+  private isLoadingArtists = signal(false);
+  private artistFilter = signal('');
+  private selectedArtistId = signal<number | null>(null);
+
+  // Audiobook matching
+  private allAudiobooks = signal<{ id: number; title: string; sortTitle: string }[]>([]);
+  private isLoadingAudiobooks = signal(false);
+  private audiobookFilter = signal('');
+  private selectedAudiobookId = signal<number | null>(null);
+
   private matchMutation = createMutation({
     mutationFn: (params: {
       id: number;
       seriesId?: number;
       episodeIds?: number[];
       movieId?: number;
+      artistId?: number;
+      audiobookId?: number;
       downloadId?: string;
       downloadClient?: string;
       protocol?: string;
@@ -50,6 +64,8 @@ export class QueueMatchDialog extends BaseComponent {
         seriesId: params.seriesId,
         episodeIds: params.episodeIds,
         movieId: params.movieId,
+        artistId: params.artistId,
+        audiobookId: params.audiobookId,
         downloadId: params.downloadId,
         downloadClient: params.downloadClient,
         protocol: params.protocol,
@@ -85,6 +101,14 @@ export class QueueMatchDialog extends BaseComponent {
     this.watch(this.isLoadingMovies);
     this.watch(this.movieFilter);
     this.watch(this.selectedMovieId);
+    this.watch(this.allArtists);
+    this.watch(this.isLoadingArtists);
+    this.watch(this.artistFilter);
+    this.watch(this.selectedArtistId);
+    this.watch(this.allAudiobooks);
+    this.watch(this.isLoadingAudiobooks);
+    this.watch(this.audiobookFilter);
+    this.watch(this.selectedAudiobookId);
   }
 
   private onCloseCallback: (() => void) | null = null;
@@ -99,6 +123,10 @@ export class QueueMatchDialog extends BaseComponent {
     this.showFiles.set(false);
     this.selectedMovieId.set(null);
     this.movieFilter.set('');
+    this.selectedArtistId.set(null);
+    this.artistFilter.set('');
+    this.selectedAudiobookId.set(null);
+    this.audiobookFilter.set('');
 
     const ct = item.contentType ?? 'series';
     this.contentType.set(ct);
@@ -106,7 +134,11 @@ export class QueueMatchDialog extends BaseComponent {
 
     if (ct === 'movie') {
       this.loadMovies();
-    } else if (ct === 'music' || ct === 'audiobook' || ct === 'podcast') {
+    } else if (ct === 'music') {
+      this.loadArtists();
+    } else if (ct === 'audiobook') {
+      this.loadAudiobooks();
+    } else if (ct === 'podcast') {
       // Non-matchable content types — dialog shows info only
     } else {
       this.loadSeries();
@@ -222,6 +254,122 @@ export class QueueMatchDialog extends BaseComponent {
     });
   }
 
+  private async loadArtists(): Promise<void> {
+    this.isLoadingArtists.set(true);
+    try {
+      const artists = await http.get<Artist[]>('/artist');
+      this.allArtists.set(artists.sort((a, b) => a.sortTitle.localeCompare(b.sortTitle)));
+    } catch {
+      showError('Failed to load artists');
+    } finally {
+      this.isLoadingArtists.set(false);
+    }
+  }
+
+  updateArtistFilter(value: string): void {
+    this.artistFilter.set(value);
+  }
+
+  selectArtist(artistId: number): void {
+    this.selectedArtistId.set(artistId);
+  }
+
+  confirmArtistMatch(): void {
+    const item = this.queueItem.value;
+    const artistId = this.selectedArtistId.value;
+    if (!item || !artistId) return;
+
+    const isUntracked = item.id >= 10000;
+    this.matchMutation.mutate({
+      id: item.id,
+      artistId,
+      ...(isUntracked
+        ? {
+            downloadId: item.downloadId,
+            downloadClient: item.downloadClient,
+            protocol: item.protocol,
+            size: item.size,
+            title: item.title,
+          }
+        : {}),
+    });
+  }
+
+  private async loadAudiobooks(): Promise<void> {
+    this.isLoadingAudiobooks.set(true);
+    try {
+      const audiobooks = await http.get<{ id: number; title: string; sortTitle: string }[]>('/audiobook');
+      this.allAudiobooks.set(audiobooks.sort((a, b) => a.sortTitle.localeCompare(b.sortTitle)));
+    } catch {
+      showError('Failed to load audiobooks');
+    } finally {
+      this.isLoadingAudiobooks.set(false);
+    }
+  }
+
+  updateAudiobookFilter(value: string): void {
+    this.audiobookFilter.set(value);
+  }
+
+  selectAudiobook(audiobookId: number): void {
+    this.selectedAudiobookId.set(audiobookId);
+  }
+
+  confirmAudiobookMatch(): void {
+    const item = this.queueItem.value;
+    const audiobookId = this.selectedAudiobookId.value;
+    if (!item || !audiobookId) return;
+
+    const isUntracked = item.id >= 10000;
+    this.matchMutation.mutate({
+      id: item.id,
+      audiobookId,
+      ...(isUntracked
+        ? {
+            downloadId: item.downloadId,
+            downloadClient: item.downloadClient,
+            protocol: item.protocol,
+            size: item.size,
+            title: item.title,
+          }
+        : {}),
+    });
+  }
+
+  private renderAudiobookSelector(): string {
+    if (this.isLoadingAudiobooks.value) {
+      return html`<div class="loading-text">Loading audiobooks...</div>`;
+    }
+
+    const filter = this.audiobookFilter.value.toLowerCase();
+    const audiobooks = this.allAudiobooks.value.filter(
+      (a) => !filter || a.title.toLowerCase().includes(filter),
+    );
+    const selectedId = this.selectedAudiobookId.value;
+
+    return html`
+      <input
+        type="text"
+        class="search-input"
+        placeholder="Filter audiobooks..."
+        value="${escapeHtml(this.audiobookFilter.value)}"
+        oninput="this.closest('queue-match-dialog').updateAudiobookFilter(this.value)"
+      />
+      <div class="series-list">
+        ${audiobooks
+          .map(
+            (a) => html`
+          <div class="series-option ${a.id === selectedId ? 'selected-movie' : ''}" onclick="this.closest('queue-match-dialog').selectAudiobook(${a.id})">
+            <span class="series-option-title">${escapeHtml(a.title)}</span>
+          </div>
+        `,
+          )
+          .join('')}
+        ${audiobooks.length === 0 ? html`<div class="loading-text">No audiobooks found</div>` : ''}
+      </div>
+    `;
+  }
+
   private formatFileSize(bytes: number): string {
     if (bytes === 0) return '0 B';
     const k = 1024;
@@ -238,12 +386,16 @@ export class QueueMatchDialog extends BaseComponent {
     const isSubmitting = this.matchMutation.isLoading.value;
     const ct = this.contentType.value;
     const isMovie = ct === 'movie';
-    const isNonMatchable = ct === 'music' || ct === 'audiobook' || ct === 'podcast';
+    const isMusic = ct === 'music';
+    const isAudiobook = ct === 'audiobook';
+    const isNonMatchable = ct === 'podcast';
     const movieId = this.selectedMovieId.value;
+    const artistId = this.selectedArtistId.value;
+    const audiobookId = this.selectedAudiobookId.value;
 
     // Determine confirm button state and handler
-    const canConfirm = isNonMatchable ? false : isMovie ? movieId !== null : seriesId !== null;
-    const confirmHandler = isMovie ? 'confirmMovieMatch' : 'confirmMatch';
+    const canConfirm = isNonMatchable ? false : isAudiobook ? audiobookId !== null : isMusic ? artistId !== null : isMovie ? movieId !== null : seriesId !== null;
+    const confirmHandler = isAudiobook ? 'confirmAudiobookMatch' : isMusic ? 'confirmArtistMatch' : isMovie ? 'confirmMovieMatch' : 'confirmMatch';
 
     return html`
       <div class="dialog-overlay" onclick="if(event.target===this) this.querySelector('queue-match-dialog')?.close?.() || this.closest('queue-match-dialog').close()">
@@ -263,7 +415,7 @@ export class QueueMatchDialog extends BaseComponent {
 
             ${this.renderFilesPanel()}
 
-            ${isNonMatchable ? `<div class="loading-text">Manual matching is not available for ${ct} downloads. Use the remove button to clear this item.</div>` : isMovie ? this.renderMovieSelector() : this.renderSeriesSelector()}
+            ${isNonMatchable ? `<div class="loading-text">Manual matching is not available for ${ct} downloads. Use the remove button to clear this item.</div>` : isAudiobook ? this.renderAudiobookSelector() : isMusic ? this.renderArtistSelector() : isMovie ? this.renderMovieSelector() : this.renderSeriesSelector()}
           </div>
 
           <div class="dialog-footer">
@@ -577,6 +729,40 @@ export class QueueMatchDialog extends BaseComponent {
         `,
           )
           .join('')}
+      </div>
+    `;
+  }
+
+  private renderArtistSelector(): string {
+    if (this.isLoadingArtists.value) {
+      return html`<div class="loading-text">Loading artists...</div>`;
+    }
+
+    const filter = this.artistFilter.value.toLowerCase();
+    const artists = this.allArtists.value.filter(
+      (a) => !filter || a.title.toLowerCase().includes(filter),
+    );
+    const selectedId = this.selectedArtistId.value;
+
+    return html`
+      <input
+        type="text"
+        class="search-input"
+        placeholder="Filter artists..."
+        value="${escapeHtml(this.artistFilter.value)}"
+        oninput="this.closest('queue-match-dialog').updateArtistFilter(this.value)"
+      />
+      <div class="series-list">
+        ${artists
+          .map(
+            (a) => html`
+          <div class="series-option ${a.id === selectedId ? 'selected-movie' : ''}" onclick="this.closest('queue-match-dialog').selectArtist(${a.id})">
+            <span class="series-option-title">${escapeHtml(a.title)}</span>
+          </div>
+        `,
+          )
+          .join('')}
+        ${artists.length === 0 ? html`<div class="loading-text">No artists found</div>` : ''}
       </div>
     `;
   }

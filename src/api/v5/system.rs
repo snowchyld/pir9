@@ -480,7 +480,7 @@ async fn check_latest_release() -> Option<String> {
         .ok()?;
 
     let resp = client
-        .get("https://api.github.com/repos/pir9/pir9/releases/latest")
+        .get("https://api.github.com/repos/snowchyld/pir9/releases/latest")
         .header("Accept", "application/vnd.github.v3+json")
         .send()
         .await

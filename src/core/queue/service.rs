@@ -192,6 +192,8 @@ impl TrackedDownloadService {
             is_upgrade,
             added: Utc::now(),
             movie_id,
+            artist_id: None,
+            audiobook_id: None,
             content_type: content_type.to_string(),
         };
 
@@ -458,6 +460,8 @@ impl TrackedDownloadService {
                 output_path: td.output_path,
                 episode_has_file,
                 movie_id: td.movie_id.unwrap_or(0),
+                artist_id: td.artist_id,
+                audiobook_id: td.audiobook_id,
                 size: td.size,
                 sizeleft: size_left,
                 timeleft,
@@ -1169,6 +1173,8 @@ impl TrackedDownloadService {
                         is_upgrade: false,
                         added: Utc::now(),
                         movie_id: None,
+                        artist_id: None,
+                        audiobook_id: None,
                         content_type: if series.series_type == 2 { "anime".to_string() } else { "series".to_string() },
                     };
 
@@ -1233,6 +1239,8 @@ impl TrackedDownloadService {
                                 is_upgrade: false,
                                 added: Utc::now(),
                                 movie_id: Some(movie.id),
+                                artist_id: None,
+                                audiobook_id: None,
                                 content_type: "movie".to_string(),
                             };
 

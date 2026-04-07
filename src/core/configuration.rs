@@ -191,6 +191,19 @@ pub struct MediaConfig {
     #[serde(default)]
     pub multi_episode_style: i32,
 
+    // Music naming
+    #[serde(default)]
+    pub rename_tracks: bool,
+
+    #[serde(default = "default_track_naming_pattern")]
+    pub track_naming_pattern: String,
+
+    #[serde(default = "default_artist_folder_format")]
+    pub artist_folder_format: String,
+
+    #[serde(default = "default_album_folder_format")]
+    pub album_folder_format: String,
+
     pub create_empty_series_folders: bool,
     pub delete_empty_folders: bool,
     pub skip_free_space_check: bool,
@@ -215,12 +228,28 @@ impl Default for MediaConfig {
             series_folder_format: default_series_folder_format(),
             specials_folder_format: default_specials_folder_format(),
             multi_episode_style: 0,
+            rename_tracks: true,
+            track_naming_pattern: default_track_naming_pattern(),
+            artist_folder_format: default_artist_folder_format(),
+            album_folder_format: default_album_folder_format(),
             create_empty_series_folders: false,
             delete_empty_folders: true,
             skip_free_space_check: false,
             minimum_free_space_mb: 100,
         }
     }
+}
+
+fn default_track_naming_pattern() -> String {
+    "{track:00} - {Track Title}".to_string()
+}
+
+fn default_artist_folder_format() -> String {
+    "{Artist Name}".to_string()
+}
+
+fn default_album_folder_format() -> String {
+    "{Album Title}".to_string()
 }
 
 fn default_daily_episode_format() -> String {

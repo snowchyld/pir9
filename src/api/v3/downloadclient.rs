@@ -238,6 +238,30 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
                 "textbox",
                 settings.get("animeCategory").cloned(),
             ));
+            order += 1;
+            fields.push(make_field(
+                order,
+                "musicCategory",
+                "Music Category",
+                "textbox",
+                settings.get("musicCategory").cloned(),
+            ));
+            order += 1;
+            fields.push(make_field(
+                order,
+                "audiobookCategory",
+                "Audiobook Category",
+                "textbox",
+                settings.get("audiobookCategory").cloned(),
+            ));
+            order += 1;
+            fields.push(make_field(
+                order,
+                "podcastCategory",
+                "Podcast Category",
+                "textbox",
+                settings.get("podcastCategory").cloned(),
+            ));
         }
         "Sabnzbd" | "SABnzbd" => {
             fields.push(make_field(
@@ -302,6 +326,30 @@ fn settings_to_fields(implementation: &str, settings: &serde_json::Value) -> Vec
                 "Anime Category",
                 "textbox",
                 settings.get("animeCategory").cloned(),
+            ));
+            order += 1;
+            fields.push(make_field(
+                order,
+                "musicCategory",
+                "Music Category",
+                "textbox",
+                settings.get("musicCategory").cloned(),
+            ));
+            order += 1;
+            fields.push(make_field(
+                order,
+                "audiobookCategory",
+                "Audiobook Category",
+                "textbox",
+                settings.get("audiobookCategory").cloned(),
+            ));
+            order += 1;
+            fields.push(make_field(
+                order,
+                "podcastCategory",
+                "Podcast Category",
+                "textbox",
+                settings.get("podcastCategory").cloned(),
             ));
         }
         _ => {
@@ -687,6 +735,27 @@ fn create_qbittorrent_schema() -> DownloadClientResource {
             ),
             make_field(
                 9,
+                "musicCategory",
+                "Music Category",
+                "textbox",
+                Some(serde_json::json!("music")),
+            ),
+            make_field(
+                10,
+                "audiobookCategory",
+                "Audiobook Category",
+                "textbox",
+                Some(serde_json::json!("audiobooks")),
+            ),
+            make_field(
+                11,
+                "podcastCategory",
+                "Podcast Category",
+                "textbox",
+                Some(serde_json::json!("podcasts")),
+            ),
+            make_field(
+                12,
                 "recentTvPriority",
                 "Recent Priority",
                 "select",
@@ -782,13 +851,34 @@ fn create_sabnzbd_schema() -> DownloadClientResource {
             ),
             make_field(
                 8,
+                "musicCategory",
+                "Music Category",
+                "textbox",
+                Some(serde_json::json!("music")),
+            ),
+            make_field(
+                9,
+                "audiobookCategory",
+                "Audiobook Category",
+                "textbox",
+                Some(serde_json::json!("audiobooks")),
+            ),
+            make_field(
+                10,
+                "podcastCategory",
+                "Podcast Category",
+                "textbox",
+                Some(serde_json::json!("podcasts")),
+            ),
+            make_field(
+                11,
                 "recentTvPriority",
                 "Recent Priority",
                 "select",
                 Some(serde_json::json!(-100)),
             ),
             make_field(
-                9,
+                12,
                 "olderTvPriority",
                 "Older Priority",
                 "select",

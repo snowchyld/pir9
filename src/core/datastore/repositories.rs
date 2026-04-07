@@ -2282,8 +2282,8 @@ impl TrackedDownloadRepository {
                 download_id, download_client_id, series_id, episode_ids, title,
                 indexer, size, protocol, quality, languages, status,
                 status_messages, error_message, output_path, is_upgrade, added,
-                movie_id, content_type
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                movie_id, content_type, artist_id, audiobook_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
             RETURNING id
             "#,
         )
@@ -2305,6 +2305,8 @@ impl TrackedDownloadRepository {
         .bind(download.added)
         .bind(download.movie_id)
         .bind(&download.content_type)
+        .bind(download.artist_id)
+        .bind(download.audiobook_id)
         .fetch_one(pool)
         .await?;
         Ok(row.0)
@@ -2368,6 +2370,32 @@ impl TrackedDownloadRepository {
             "UPDATE tracked_downloads SET movie_id = $1, series_id = 0, episode_ids = '[]' WHERE id = $2",
         )
         .bind(movie_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Update tracked download artist match (for music downloads)
+    pub async fn update_artist_match(&self, id: i64, artist_id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            "UPDATE tracked_downloads SET artist_id = $1, series_id = 0, episode_ids = '[]', movie_id = NULL, audiobook_id = NULL, content_type = 'music' WHERE id = $2",
+        )
+        .bind(artist_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Update tracked download audiobook match (for audiobook downloads)
+    pub async fn update_audiobook_match(&self, id: i64, audiobook_id: i64) -> Result<()> {
+        let pool = self.db.pool();
+        sqlx::query(
+            "UPDATE tracked_downloads SET audiobook_id = $1, series_id = 0, episode_ids = '[]', movie_id = NULL, artist_id = NULL, content_type = 'audiobook' WHERE id = $2",
+        )
+        .bind(audiobook_id)
         .bind(id)
         .execute(pool)
         .await?;

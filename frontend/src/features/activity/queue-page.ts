@@ -572,7 +572,7 @@ export class QueuePage extends BaseComponent {
           <tr>
             ${safeHtml(th('Status', 'status'))}
             ${safeHtml(th('Title', 'title'))}
-            ${safeHtml(th(this.activeTab === 'movies' ? 'File' : 'Episode', 'episode'))}
+            ${safeHtml(th(this.activeTab === 'movies' ? 'File' : this.activeTab === 'music' ? 'Album' : this.activeTab === 'audiobooks' ? 'Book' : 'Episode', 'episode'))}
             ${safeHtml(th('Quality', 'quality'))}
             ${safeHtml(th('Protocol', 'protocol'))}
             ${safeHtml(th(this.activeTab === 'completed' ? 'Size' : 'Progress', 'progress'))}
@@ -592,9 +592,11 @@ export class QueuePage extends BaseComponent {
     const isCompleted =
       item.status === 'completed' || item.trackedDownloadState === 'importPending';
     if (!isCompleted) return false;
-    // Series/movie need a DB match; music/audiobook/podcast are always importable when completed
+    // Series/movie/music/audiobook need a DB match; podcast always importable when completed
     const ct = item.contentType;
-    if (ct === 'music' || ct === 'audiobook' || ct === 'podcast') return true;
+    if (ct === 'podcast') return true;
+    if (ct === 'audiobook') return item.audiobookId != null && item.audiobookId > 0;
+    if (ct === 'music') return item.artistId != null && item.artistId > 0;
     const hasSeriesMatch = item.seriesId != null && item.seriesId > 0;
     const hasMovieMatch = item.movieId != null && item.movieId > 0;
     return hasSeriesMatch || hasMovieMatch;
@@ -612,16 +614,30 @@ export class QueuePage extends BaseComponent {
     const isPodcast = ct === 'podcast';
 
     // Title: prefer matched entity name, fall back to release title
-    const displayTitle = isMovie
-      ? (item.movie?.title ?? item.title)
-      : (item.series?.title ?? item.title);
+    const displayTitle = isAudiobook
+      ? (item.audiobook?.title ?? item.title)
+      : isMusic
+        ? (item.artist?.title ?? item.title)
+        : isMovie
+          ? (item.movie?.title ?? item.title)
+          : (item.series?.title ?? item.title);
 
     // Link: route to correct content section
     let linkPath = '';
     let linkSlug = '';
     let hasDbLink = false;
     let clickHandler = 'handleSeriesClick';
-    if (isMovie && item.movie?.titleSlug) {
+    if (isAudiobook && item.audiobook?.titleSlug) {
+      linkPath = `/audiobooks/${item.audiobook.titleSlug}`;
+      linkSlug = item.audiobook.titleSlug;
+      hasDbLink = true;
+      clickHandler = 'handleAudiobookClick';
+    } else if (isMusic && item.artist?.titleSlug) {
+      linkPath = `/music/${item.artist.titleSlug}`;
+      linkSlug = item.artist.titleSlug;
+      hasDbLink = true;
+      clickHandler = 'handleArtistClick';
+    } else if (isMovie && item.movie?.titleSlug) {
       linkPath = `/movies/${item.movie.titleSlug}`;
       linkSlug = item.movie.titleSlug;
       hasDbLink = true;
@@ -711,7 +727,7 @@ export class QueuePage extends BaseComponent {
                     importable
                       ? `<button
                           class="action-btn import"
-                          onclick="this.closest('queue-page').handleImport(${item.id})"
+                          onclick="this.closest('queue-page').handleImport(${item.id}, '${ct}')"
                           title="Import to library"
                         >
                           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -911,7 +927,29 @@ export class QueuePage extends BaseComponent {
     navigate(`/movies/${slug}`);
   }
 
-  handleImport(id: number): void {
+  handleArtistClick(slug: string): void {
+    navigate(`/music/${slug}`);
+  }
+
+  handleAudiobookClick(slug: string): void {
+    navigate(`/audiobooks/${slug}`);
+  }
+
+  handleImport(id: number, contentType?: string): void {
+    if (contentType === 'music' || contentType === 'audiobook') {
+      // Music/audiobook imports skip the preview — import directly
+      http.post<{ success: boolean }>(`/queue/${id}/import`, {}).then((res) => {
+        if (res.success) {
+          showSuccess('Music import started');
+          invalidateQueries(['/queue']);
+        } else {
+          showError('Music import failed');
+        }
+      }).catch(() => {
+        showError('Music import failed');
+      });
+      return;
+    }
     navigate(`/activity/queue/${id}/import`);
   }
 
