@@ -1,5 +1,5 @@
 # pir9
-
+[![Rust](https://github.com/snowchyld/pir9/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/snowchyld/pir9/actions/workflows/rust.yml)
 A modern, high-performance Smart PVR for TV and anime, written in Rust.
 
 ## Overview
