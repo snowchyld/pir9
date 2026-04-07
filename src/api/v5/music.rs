@@ -72,6 +72,7 @@ pub fn album_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_albums))
         .route("/{id}", get(get_album).put(update_album))
+        .route("/{id}/rescan", post(rescan_album))
         .route("/{id}/rename", post(rename_album_files))
 }
 
@@ -477,11 +478,21 @@ async fn create_artist(
             "Artist not found after creation".to_string(),
         ))?;
 
+    // Re-fetch images with the real artist_id so URLs point to /MediaCover/Artists/{id}/
+    // (lookup stored remote fanart URLs because artist_id didn't exist yet)
+    if let Some(ref mbid) = created.musicbrainz_id {
+        let images = fetch_fanart_artist_images(mbid, Some(id)).await;
+        if !images.is_empty() {
+            created.images =
+                serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+        }
+    }
+
     // Mark as synced if we fetched albums
     if should_search {
         created.last_info_sync = Some(Utc::now());
-        let _ = repo.update(&created).await;
     }
+    let _ = repo.update(&created).await;
 
     let mut response = ArtistResponse::from(created);
     enrich_artist_response(&mut response, &state.db).await;
@@ -1304,6 +1315,117 @@ pub struct RenameQuery {
 
 /// Rename track files for an album using the pattern: "{track:00} - {title}.{ext}"
 /// Pass ?preview=true to get a dry-run preview of changes
+/// Rescan audio files for a single album
+async fn rescan_album(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<AlbumResponse>, ApiError> {
+    let album_repo = AlbumRepository::new(state.db.clone());
+    let artist_repo = ArtistRepository::new(state.db.clone());
+
+    let album = album_repo
+        .get_by_id(id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch album: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
+
+    let artist = artist_repo
+        .get_by_id(album.artist_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch artist: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
+
+    tracing::info!("Rescanning album: id={}, title='{}' by '{}'", id, album.title, artist.name);
+
+    // Scan just this album's folder
+    let artist_dir = std::path::Path::new(&artist.path);
+    let album_folder = sanitize_filename::sanitize(&album.title);
+    let album_path = artist_dir.join(&album_folder);
+
+    if album_path.is_dir() {
+        let track_repo = TrackRepository::new(state.db.clone());
+        let track_file_repo = TrackFileRepository::new(state.db.clone());
+        let existing_files = track_file_repo.get_by_album_id(album.id).await.unwrap_or_default();
+        let existing_file_paths: std::collections::HashSet<String> =
+            existing_files.iter().map(|f| f.path.clone()).collect();
+        let existing_tracks = track_repo.get_by_album_id(album.id).await.unwrap_or_default();
+
+        if let Ok(mut dir) = tokio::fs::read_dir(&album_path).await {
+            let mut audio_files = Vec::new();
+            while let Ok(Some(entry)) = dir.next_entry().await {
+                let path = entry.path();
+                if !path.is_file() { continue; }
+                let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+                if AUDIO_EXTENSIONS.contains(&ext.as_str()) {
+                    let filename = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                    let size = entry.metadata().await.map(|m| m.len() as i64).unwrap_or(0);
+                    audio_files.push((path.to_string_lossy().to_string(), filename, size));
+                }
+            }
+            audio_files.sort_by(|a, b| a.1.cmp(&b.1));
+
+            let mut added = 0;
+            for (file_path, filename, size) in &audio_files {
+                if existing_file_paths.contains(file_path) { continue; }
+                let (track_num, title) = parse_track_filename(filename);
+
+                let track_id = if let Some(et) = existing_tracks.iter().find(|t| t.track_number == track_num && !t.has_file) {
+                    et.id
+                } else if existing_tracks.iter().any(|t| t.track_number == track_num) {
+                    continue;
+                } else {
+                    let new_track = crate::core::datastore::models::TrackDbModel {
+                        id: 0, album_id: album.id, artist_id: album.artist_id,
+                        title: title.clone(), track_number: track_num, disc_number: 1,
+                        duration_ms: None, has_file: true, track_file_id: None,
+                        monitored: true, air_date_utc: None,
+                    };
+                    match track_repo.insert(&new_track).await {
+                        Ok(tid) => tid,
+                        Err(_) => continue,
+                    }
+                };
+
+                let relative_path = format!("{}/{}", album_folder, filename);
+                let ext = std::path::Path::new(filename).extension()
+                    .map(|e| e.to_string_lossy().to_uppercase())
+                    .unwrap_or_else(|| "MP3".to_string());
+
+                let matched_track = existing_tracks.iter().find(|t| t.track_number == track_num);
+                let bitrate = matched_track.and_then(|t| t.duration_ms).filter(|&d| d > 0)
+                    .map(|duration_ms| (*size * 8 / (duration_ms as i64 / 1000)) as i32 / 1000);
+
+                let media_info = serde_json::json!({ "audio_format": ext, "bitrate": bitrate });
+
+                let new_file = crate::core::datastore::models::TrackFileDbModel {
+                    id: 0, artist_id: album.artist_id, album_id: album.id,
+                    relative_path, path: file_path.clone(), size: *size,
+                    quality: serde_json::json!({ "codec": ext }).to_string(),
+                    media_info: Some(media_info.to_string()), date_added: Utc::now(),
+                };
+
+                if let Ok(file_id) = track_file_repo.insert(&new_file).await {
+                    let pool = state.db.pool();
+                    let _ = sqlx::query("UPDATE tracks SET has_file = true, track_file_id = $1 WHERE id = $2")
+                        .bind(file_id).bind(track_id).execute(pool).await;
+                    added += 1;
+                }
+            }
+            tracing::info!("Album rescan complete: {} files found, {} added for '{}'", audio_files.len(), added, album.title);
+        }
+    } else {
+        tracing::info!("Album folder not found: {}", album_path.display());
+    }
+
+    // Return updated album response
+    let updated = album_repo.get_by_id(id).await
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch album: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
+    let mut response = AlbumResponse::from(updated);
+    enrich_album_response(&mut response, &state.db).await;
+    Ok(Json(response))
+}
+
 async fn rename_album_files(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,

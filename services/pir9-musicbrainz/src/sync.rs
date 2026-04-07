@@ -625,6 +625,13 @@ async fn should_skip_dataset(
     if progress.read().await.process_only {
         return false;
     }
+    // Never skip if there's an in-progress (incomplete) sync — resume it
+    if let Ok(Some(resume)) = db.get_resumable_sync(dataset).await {
+        if !resume.last_processed_id.is_empty() {
+            info!("{} has an incomplete sync (at id {}), will resume", dataset, resume.last_processed_id);
+            return false;
+        }
+    }
     match db.last_completed_sync_time(dataset).await {
         Ok(Some(completed_at)) => {
             let hours_ago = (Utc::now() - completed_at).num_hours();
