@@ -231,7 +231,7 @@ async fn create_audiobook(
         serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string());
     let tags_json =
         serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
-    let images = build_images_from_url(&options.image_url);
+    let images = build_images_from_url(&options.image_url, None);
     let images_json =
         serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
 
@@ -282,6 +282,17 @@ async fn create_audiobook(
                 ),
             }
         }
+    }
+
+    // Rewrite images with real audiobook id for local MediaCover URLs
+    if options.image_url.is_some() {
+        let images = build_images_from_url(&options.image_url, Some(id));
+        let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+        let _ = sqlx::query("UPDATE audiobooks SET images = $1 WHERE id = $2")
+            .bind(&images_json)
+            .bind(id)
+            .execute(state.db.pool())
+            .await;
     }
 
     let created = repo
@@ -447,7 +458,7 @@ async fn refresh_audiobook(
     if let Some(best) = lookup_results.first() {
         // Update images if we found a cover
         if best.image_url.is_some() {
-            let images = build_images_from_url(&best.image_url);
+            let images = build_images_from_url(&best.image_url, Some(id));
             audiobook.images =
                 serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
         }
@@ -856,14 +867,21 @@ async fn search_openlibrary(term: &str) -> Result<Vec<AudiobookLookupResult>, an
     Ok(results)
 }
 
-/// Build AudiobookImage array from a remote cover URL
-fn build_images_from_url(image_url: &Option<String>) -> Vec<AudiobookImage> {
+/// Build AudiobookImage array with local MediaCover URL + remote source
+fn build_images_from_url(image_url: &Option<String>, audiobook_id: Option<i64>) -> Vec<AudiobookImage> {
     match image_url {
-        Some(url) if !url.is_empty() => vec![AudiobookImage {
-            cover_type: "poster".to_string(),
-            url: url.clone(),
-            remote_url: Some(url.clone()),
-        }],
+        Some(remote) if !remote.is_empty() => {
+            let ext = if remote.contains(".png") { "png" } else { "jpg" };
+            let local_url = match audiobook_id {
+                Some(id) => format!("/MediaCover/Audiobooks/{}/poster.{}", id, ext),
+                None => remote.clone(), // No id yet — will be rewritten after insert
+            };
+            vec![AudiobookImage {
+                cover_type: "poster".to_string(),
+                url: local_url,
+                remote_url: Some(remote.clone()),
+            }]
+        }
         _ => vec![],
     }
 }

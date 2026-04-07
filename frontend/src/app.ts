@@ -10,15 +10,20 @@ import { closeMobileMenu, mobileMenuOpen, sidebarCollapsed } from './stores/app.
 @customElement('app-root')
 export class AppRoot extends BaseComponent {
   protected onInit(): void {
-    // Watch sidebar state
-    this.watch(sidebarCollapsed);
-    this.watch(mobileMenuOpen);
-
     // Close mobile menu on route change
     window.addEventListener('popstate', closeMobileMenu);
   }
 
   protected onMount(): void {
+    // Watch sidebar/mobile state — update CSS classes directly instead of re-rendering
+    // (full re-render would destroy the router-outlet's mounted page component)
+    this.watch(sidebarCollapsed, (collapsed) => {
+      this.$('.app-layout')?.classList.toggle('sidebar-collapsed', collapsed);
+    });
+    this.watch(mobileMenuOpen, (open) => {
+      this.$('.app-layout')?.classList.toggle('mobile-menu-open', open);
+      this.$('.mobile-overlay')?.classList.toggle('hidden', !open);
+    });
     // Connection state indicator
     this.watch(wsManager.connectionState, (state) => {
       const indicator = this.$('.connection-indicator');

@@ -60,7 +60,9 @@ export function safeHtml(content: string): { __safeHtml: string } {
  */
 export function customElement(tagName: string) {
   return <T extends Constructor<HTMLElement>>(target: T): T => {
-    if (!registry.has(tagName)) {
+    // Guard with browser's own registry — prevents duplicate define errors
+    // when Vite code-splits and modules evaluate across separate chunks
+    if (!customElements.get(tagName)) {
       registry.set(tagName, target);
       customElements.define(tagName, target);
     }
@@ -159,6 +161,8 @@ export abstract class BaseComponent extends HTMLElement {
 
   _isConnected = false;
   private _updateScheduled = false;
+  private _rafId: number | null = null;
+  private _lastTemplateHash = '';
   private _effectCleanups: Array<() => void> = [];
 
   static get observedAttributes(): string[] {
@@ -180,6 +184,11 @@ export abstract class BaseComponent extends HTMLElement {
    */
   disconnectedCallback(): void {
     this._isConnected = false;
+    if (this._rafId !== null) {
+      cancelAnimationFrame(this._rafId);
+      this._rafId = null;
+      this._updateScheduled = false;
+    }
     this._effectCleanups.forEach((cleanup) => {
       cleanup();
     });
@@ -245,13 +254,16 @@ export abstract class BaseComponent extends HTMLElement {
   protected onUpdate(): void {}
 
   /**
-   * Schedule an update (batched via microtask)
+   * Schedule an update (batched via requestAnimationFrame).
+   * RAF is throttled to display refresh rate and paused when tab is hidden,
+   * preventing render storms on mobile.
    */
   requestUpdate(): void {
     if (!this._updateScheduled) {
       this._updateScheduled = true;
-      queueMicrotask(() => {
+      this._rafId = requestAnimationFrame(() => {
         this._updateScheduled = false;
+        this._rafId = null;
         if (this._isConnected) {
           this.render();
         }
@@ -268,14 +280,26 @@ export abstract class BaseComponent extends HTMLElement {
    * the active element's selector and selection state before updating,
    * then restoring it after.
    */
+  /**
+   * Render the component.
+   * Uses developer-controlled template() output to update the DOM.
+   * Skips DOM update if template output is identical (prevents unnecessary reflows).
+   * User data must be escaped via html() or escapeHtml().
+   */
   private render(): void {
-    const focusInfo = this.saveFocusState();
-
-    // Template returns developer-controlled HTML (see SECURITY NOTE at top of file).
     // Templates are author-controlled; user data must use escapeHtml() — see file header.
     const templateContent = this.template();
+
+    // Skip DOM update if template output hasn't changed — prevents unnecessary reflows
+    if (templateContent === this._lastTemplateHash) {
+      return;
+    }
+    this._lastTemplateHash = templateContent;
+
+    const focusInfo = this.saveFocusState();
+
     // nosemgrep: javascript.browser.security.insecure-document-method.insecure-document-method
-    this.innerHTML = templateContent;
+    this.innerHTML = templateContent; // Safe: developer-controlled templates, user data escaped via escapeHtml()
 
     if (focusInfo) {
       this.restoreFocusState(focusInfo);

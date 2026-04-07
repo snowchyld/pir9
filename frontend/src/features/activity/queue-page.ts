@@ -592,7 +592,9 @@ export class QueuePage extends BaseComponent {
     const isCompleted =
       item.status === 'completed' || item.trackedDownloadState === 'importPending';
     if (!isCompleted) return false;
-    // Must have a valid series or movie match in the DB (id > 0 means real DB record)
+    // Series/movie need a DB match; music/audiobook/podcast are always importable when completed
+    const ct = item.contentType;
+    if (ct === 'music' || ct === 'audiobook' || ct === 'podcast') return true;
     const hasSeriesMatch = item.seriesId != null && item.seriesId > 0;
     const hasMovieMatch = item.movieId != null && item.movieId > 0;
     return hasSeriesMatch || hasMovieMatch;

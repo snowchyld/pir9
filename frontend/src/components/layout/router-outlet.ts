@@ -1,128 +1,31 @@
 /**
- * Router outlet component
- * Placeholder for route-based content with page transitions
+ * Router outlet — a plain container for route-based content.
+ * NOT a BaseComponent to avoid re-rendering (which would overwrite router-mounted pages).
+ * Shows a loading spinner initially; the router replaces it with the matched page component.
  */
 
-import { BaseComponent, customElement } from '../../core/component';
+// Safe: all content below is static developer-controlled HTML, no user input
+// nosemgrep: javascript.browser.security.insecure-document-method.insecure-document-method
+class RouterOutlet extends HTMLElement {
+  connectedCallback(): void {
+    const spinner = document.createElement('div');
+    spinner.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4rem 2rem;color:var(--text-color-muted);gap:1.25rem;min-height:200px';
 
-@customElement('router-outlet')
-export class RouterOutlet extends BaseComponent {
-  protected template(): string {
-    return `
-      <div class="router-outlet">
-        <div class="loading-state">
-          <div class="spinner-container">
-            <div class="spinner"></div>
-            <div class="spinner-glow"></div>
-          </div>
-          <span class="loading-text">Loading</span>
-        </div>
-      </div>
+    const circle = document.createElement('div');
+    circle.style.cssText = 'width:48px;height:48px;border:3px solid var(--border-glass,#333);border-top-color:var(--color-primary,#5d9cec);border-radius:50%;animation:spin .8s linear infinite';
 
-      <style>
-        :host {
-          display: block;
-        }
+    const label = document.createElement('span');
+    label.style.cssText = 'font-size:.875rem;font-weight:500';
+    label.textContent = 'Loading...';
 
-        .router-outlet {
-          min-height: 200px;
-          animation: pageEnter var(--transition-page) var(--ease-out-expo);
-        }
+    const style = document.createElement('style');
+    style.textContent = '@keyframes spin{to{transform:rotate(360deg)}}';
 
-        /* Page enter animation for child elements */
-        .router-outlet > * {
-          animation: pageEnter var(--transition-page) var(--ease-out-expo);
-        }
-
-        @keyframes pageEnter {
-          from {
-            opacity: 0;
-            transform: translateY(12px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-
-        .loading-state {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          gap: 1.25rem;
-          padding: 4rem 2rem;
-          color: var(--text-color-muted);
-          animation: fadeIn var(--transition-normal) var(--ease-out-expo);
-        }
-
-        .spinner-container {
-          position: relative;
-          width: 48px;
-          height: 48px;
-        }
-
-        .spinner {
-          position: absolute;
-          inset: 0;
-          border: 3px solid var(--border-glass);
-          border-top-color: var(--color-primary);
-          border-radius: 50%;
-          animation: spin 0.8s linear infinite;
-        }
-
-        .spinner-glow {
-          position: absolute;
-          inset: -4px;
-          border-radius: 50%;
-          background: radial-gradient(
-            circle at center,
-            rgba(93, 156, 236, 0.2) 0%,
-            transparent 70%
-          );
-          animation: glowPulse 2s ease-in-out infinite;
-        }
-
-        .loading-text {
-          font-size: 0.875rem;
-          font-weight: 500;
-          letter-spacing: 0.05em;
-        }
-
-        .loading-text::after {
-          content: '';
-          animation: loadingDots 1.5s infinite;
-        }
-
-        @keyframes spin {
-          to {
-            transform: rotate(360deg);
-          }
-        }
-
-        @keyframes glowPulse {
-          0%, 100% {
-            opacity: 0.5;
-            transform: scale(1);
-          }
-          50% {
-            opacity: 1;
-            transform: scale(1.1);
-          }
-        }
-
-        @keyframes loadingDots {
-          0%, 20% { content: ''; }
-          40% { content: '.'; }
-          60% { content: '..'; }
-          80%, 100% { content: '...'; }
-        }
-
-        @keyframes fadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-      </style>
-    `;
+    spinner.append(circle, label);
+    this.append(spinner, style);
   }
+}
+
+if (!customElements.get('router-outlet')) {
+  customElements.define('router-outlet', RouterOutlet);
 }

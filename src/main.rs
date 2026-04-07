@@ -354,6 +354,14 @@ fn create_router(state: Arc<AppState>) -> Router {
             "/MediaCover/Movies/{movie_id}/{filename}",
             get(movie_media_cover_handler),
         )
+        .route(
+            "/MediaCover/Artists/{artist_id}/{filename}",
+            get(artist_media_cover_handler),
+        )
+        .route(
+            "/MediaCover/Audiobooks/{audiobook_id}/{filename}",
+            get(audiobook_media_cover_handler),
+        )
         // Static files (frontend) with SPA fallback
         // Using fallback_service so explicit routes above take precedence
         .fallback_service(
@@ -775,6 +783,198 @@ async fn movie_media_cover_handler(
         image_data,
     )
         .into_response()
+}
+
+/// Handler for /MediaCover/Artists/:artist_id/:filename
+/// Fetches artist images from Fanart.tv (via stored remote_url) and caches them locally
+async fn artist_media_cover_handler(
+    State(state): State<Arc<AppState>>,
+    Path((artist_id, filename)): Path<(i64, String)>,
+) -> impl IntoResponse {
+    use crate::core::datastore::repositories::ArtistRepository;
+
+    let cover_type = filename
+        .split('.')
+        .next()
+        .unwrap_or("poster");
+
+    let content_type = if filename.ends_with(".png") {
+        "image/png"
+    } else {
+        "image/jpeg"
+    };
+
+    // Check local cache first
+    let cache_dir = format!("cache/MediaCover/Artists/{}", artist_id);
+    let cache_path = format!("{}/{}", cache_dir, filename);
+
+    if let Ok(data) = tokio::fs::read(&cache_path).await {
+        return (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, content_type),
+                (header::CACHE_CONTROL, "max-age=86400"),
+            ],
+            data,
+        )
+            .into_response();
+    }
+
+    // Look up artist in DB to find stored remote_url for this cover type
+    let repo = ArtistRepository::new(state.db.clone());
+    let artist = match repo.get_by_id(artist_id).await {
+        Ok(Some(a)) => a,
+        _ => {
+            return (StatusCode::NOT_FOUND, "Artist not found").into_response();
+        }
+    };
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StoredImage {
+        cover_type: String,
+        #[serde(default)]
+        remote_url: Option<String>,
+    }
+
+    let stored_images: Vec<StoredImage> =
+        serde_json::from_str(&artist.images).unwrap_or_default();
+    let remote_url = stored_images
+        .into_iter()
+        .find(|img| img.cover_type.eq_ignore_ascii_case(cover_type))
+        .and_then(|img| img.remote_url);
+
+    // If no stored remote_url, try fetching fresh from Fanart.tv
+    let image_url = if let Some(url) = remote_url {
+        url
+    } else if let Some(ref mbid) = artist.musicbrainz_id {
+        let fresh_images =
+            crate::api::v5::music::fetch_fanart_artist_images(mbid, Some(artist_id)).await;
+        match fresh_images
+            .into_iter()
+            .find(|img| img.cover_type.eq_ignore_ascii_case(cover_type))
+            .and_then(|img| img.remote_url)
+        {
+            Some(url) => url,
+            None => {
+                return (StatusCode::NOT_FOUND, "No image available").into_response();
+            }
+        }
+    } else {
+        return (StatusCode::NOT_FOUND, "No image available").into_response();
+    };
+
+    // Fetch the image from remote URL
+    let client = reqwest::Client::new();
+    let image_response = match client.get(&image_url).send().await {
+        Ok(r) if r.status().is_success() => r,
+        _ => {
+            return (StatusCode::NOT_FOUND, "Failed to fetch image").into_response();
+        }
+    };
+
+    let image_data = match image_response.bytes().await {
+        Ok(b) => b.to_vec(),
+        Err(_) => {
+            return (StatusCode::NOT_FOUND, "Failed to read image data").into_response();
+        }
+    };
+
+    // Cache locally (fire and forget)
+    let cache_dir_clone = cache_dir.clone();
+    let cache_path_clone = cache_path.clone();
+    let image_data_clone = image_data.clone();
+    tokio::spawn(async move {
+        if tokio::fs::create_dir_all(&cache_dir_clone).await.is_ok() {
+            let _ = tokio::fs::write(&cache_path_clone, &image_data_clone).await;
+        }
+    });
+
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "max-age=86400"),
+        ],
+        image_data,
+    )
+        .into_response()
+}
+
+/// Handler for /MediaCover/Audiobooks/:audiobook_id/:filename
+/// Fetches audiobook cover images from OpenLibrary/Google Books and caches locally
+async fn audiobook_media_cover_handler(
+    State(state): State<Arc<AppState>>,
+    Path((audiobook_id, filename)): Path<(i64, String)>,
+) -> impl IntoResponse {
+    use crate::core::datastore::repositories::AudiobookRepository;
+
+    let cover_type = filename.split('.').next().unwrap_or("poster");
+    let content_type = if filename.ends_with(".png") { "image/png" } else { "image/jpeg" };
+
+    // Check local cache first
+    let cache_dir = format!("cache/MediaCover/Audiobooks/{}", audiobook_id);
+    let cache_path = format!("{}/{}", cache_dir, filename);
+
+    if let Ok(data) = tokio::fs::read(&cache_path).await {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "max-age=604800")],
+            data,
+        ).into_response();
+    }
+
+    // Look up audiobook to find stored remote_url
+    let repo = AudiobookRepository::new(state.db.clone());
+    let audiobook = match repo.get_by_id(audiobook_id).await {
+        Ok(Some(a)) => a,
+        _ => return (StatusCode::NOT_FOUND, "Audiobook not found").into_response(),
+    };
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StoredImage {
+        cover_type: String,
+        #[serde(default)]
+        remote_url: Option<String>,
+    }
+
+    let stored_images: Vec<StoredImage> = serde_json::from_str(&audiobook.images).unwrap_or_default();
+    let remote_url = match stored_images.into_iter()
+        .find(|img| img.cover_type.eq_ignore_ascii_case(cover_type))
+        .and_then(|img| img.remote_url)
+    {
+        Some(url) => url,
+        None => return (StatusCode::NOT_FOUND, "No image available").into_response(),
+    };
+
+    // Fetch from remote
+    let client = reqwest::Client::new();
+    let image_response = match client.get(&remote_url).send().await {
+        Ok(r) if r.status().is_success() => r,
+        _ => return (StatusCode::NOT_FOUND, "Failed to fetch image").into_response(),
+    };
+
+    let image_data = match image_response.bytes().await {
+        Ok(b) => b.to_vec(),
+        Err(_) => return (StatusCode::NOT_FOUND, "Failed to read image data").into_response(),
+    };
+
+    // Cache locally (permanent — only re-fetched on metadata refresh)
+    let cd = cache_dir.clone();
+    let cp = cache_path.clone();
+    let data = image_data.clone();
+    tokio::spawn(async move {
+        if tokio::fs::create_dir_all(&cd).await.is_ok() {
+            let _ = tokio::fs::write(&cp, &data).await;
+        }
+    });
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "max-age=604800")],
+        image_data,
+    ).into_response()
 }
 
 async fn shutdown_signal() {

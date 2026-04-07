@@ -272,13 +272,22 @@ function getOutlet(): HTMLElement | null {
   return document.querySelector('router-outlet');
 }
 
-/** Track the current navigation to discard stale loads */
-let navigationId = 0;
+/**
+ * Mount a component into the outlet with route params
+ */
+function mountComponent(outlet: HTMLElement, tagName: string, params: RouteParams): void {
+  const component = document.createElement(tagName);
+  for (const [key, value] of Object.entries(params)) {
+    component.setAttribute(key, value);
+  }
+  outlet.textContent = '';
+  outlet.appendChild(component);
+}
 
 /**
- * Render a route's component (lazy-loads the module first)
+ * Render a route's component (lazy-loads the module first if needed)
  */
-async function renderRoute(route: Route, params: RouteParams, queryString: string): Promise<void> {
+function renderRoute(route: Route, params: RouteParams, queryString: string): void {
   const outlet = getOutlet();
   if (!outlet) {
     console.error('[Router] No router-outlet found');
@@ -286,46 +295,44 @@ async function renderRoute(route: Route, params: RouteParams, queryString: strin
   }
 
   // Update state immediately (title, signals)
-  const thisNav = ++navigationId;
   currentRoute.set(route);
   currentParams.set(params);
   currentQuery.set(new URLSearchParams(queryString));
   document.title = route.title ? `${route.title} | pir9` : 'pir9';
 
-  // Lazy-load the component module (registers the custom element)
-  await route.load();
-
-  // If the user navigated away while we were loading, discard
-  if (thisNav !== navigationId) return;
-
-  // Create the component element
-  const component = document.createElement(route.component);
-
-  // Pass route params as attributes
-  for (const [key, value] of Object.entries(params)) {
-    component.setAttribute(key, value);
+  // If the custom element is already defined, mount immediately
+  if (customElements.get(route.component)) {
+    mountComponent(outlet, route.component, params);
+    return;
   }
 
-  // Replace outlet content
-  outlet.textContent = '';
-  outlet.appendChild(component);
+  // Lazy-load the chunk, then mount once the custom element is defined
+  route.load();
+  customElements.whenDefined(route.component).then(() => {
+    mountComponent(outlet, route.component, params);
+  });
 }
 
 /**
  * Render 404 page
  */
-async function renderNotFound(): Promise<void> {
+function renderNotFound(): void {
   const outlet = getOutlet();
   if (!outlet) return;
 
   currentRoute.set(null);
   document.title = 'Not Found | pir9';
 
-  await notFound();
+  if (customElements.get('not-found-page')) {
+    outlet.textContent = '';
+    outlet.appendChild(document.createElement('not-found-page'));
+    return;
+  }
 
-  outlet.textContent = '';
-  const el = document.createElement('not-found-page');
-  outlet.appendChild(el);
+  notFound().then(() => {
+    outlet.textContent = '';
+    outlet.appendChild(document.createElement('not-found-page'));
+  });
 }
 
 /**
