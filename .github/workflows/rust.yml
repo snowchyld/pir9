@@ -16,7 +16,7 @@ jobs:
     steps:
     # install dependencies
     - name: Cache apt
-      uses: actions/cache@v2
+      uses: actions/cache@v4
       id: cache-apt
       with:
         path: ~/dpkg_cache3
