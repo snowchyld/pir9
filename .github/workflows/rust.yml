@@ -1,6 +1,8 @@
 name: Rust
 
 on:
+  workflow_dispatch:
+    
   release:
     branches: [ "main" ]
 
