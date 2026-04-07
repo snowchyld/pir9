@@ -169,23 +169,41 @@ impl TrackedDownloadService {
         let id = match content_type {
             "movie" => {
                 let movie_id = movie_id.context("movie_id required for movie content type")?;
-                self.tracked.movies.insert(make_td!(MovieRef { movie_id })).await?
+                self.tracked
+                    .movies
+                    .insert(make_td!(MovieRef { movie_id }))
+                    .await?
             }
             "music" => {
                 let artist_id = release.series_id.unwrap_or(0);
-                self.tracked.music.insert(make_td!(MusicRef { artist_id })).await?
+                self.tracked
+                    .music
+                    .insert(make_td!(MusicRef { artist_id }))
+                    .await?
             }
             "audiobook" => {
                 let audiobook_id = release.series_id.unwrap_or(0);
-                self.tracked.audiobooks.insert(make_td!(AudiobookRef { audiobook_id })).await?
+                self.tracked
+                    .audiobooks
+                    .insert(make_td!(AudiobookRef { audiobook_id }))
+                    .await?
             }
             "podcast" => {
                 let podcast_id = release.series_id.unwrap_or(0);
-                self.tracked.podcasts.insert(make_td!(PodcastRef { podcast_id })).await?
+                self.tracked
+                    .podcasts
+                    .insert(make_td!(PodcastRef { podcast_id }))
+                    .await?
             }
             _ => {
                 let series_id = release.series_id.unwrap_or(0);
-                self.tracked.series.insert(make_td!(SeriesRef { series_id, episode_ids })).await?
+                self.tracked
+                    .series
+                    .insert(make_td!(SeriesRef {
+                        series_id,
+                        episode_ids
+                    }))
+                    .await?
             }
         };
 
@@ -232,8 +250,7 @@ impl TrackedDownloadService {
                     Ok(downloads) => {
                         polled_clients.insert(client_model.id);
                         for dl in &downloads {
-                            client_status_map
-                                .insert((client_model.id, dl.id.clone()), dl.clone());
+                            client_status_map.insert((client_model.id, dl.id.clone()), dl.clone());
                         }
                         client_downloads.insert(client_model.id, downloads);
                     }
@@ -258,12 +275,10 @@ impl TrackedDownloadService {
         let mut queue_items = Vec::new();
 
         for td in tracked {
-            let quality: QualityModel =
-                serde_json::from_str(&td.quality).unwrap_or_default();
+            let quality: QualityModel = serde_json::from_str(&td.quality).unwrap_or_default();
 
             // Get live status from download client
-            let live_status =
-                client_status_map.get(&(td.client_id, td.download_id.clone()));
+            let live_status = client_status_map.get(&(td.client_id, td.download_id.clone()));
 
             // If the client was successfully polled but the download is gone,
             // auto-remove the tracked record.
@@ -277,64 +292,73 @@ impl TrackedDownloadService {
             }
 
             // Determine queue status and state from live client data
-            let (queue_status, tracked_state, size, size_left, timeleft, estimated_completion, output_path, error_message) =
-                if let Some(live) = live_status {
-                    let queue_status = match live.status {
-                        DownloadState::Queued => QueueStatus::Queued,
-                        DownloadState::Paused => QueueStatus::Paused,
-                        DownloadState::Downloading => QueueStatus::Downloading,
-                        DownloadState::Stalled => QueueStatus::Warning,
-                        DownloadState::Seeding => QueueStatus::Completed,
-                        DownloadState::Completed => QueueStatus::Completed,
-                        DownloadState::Failed => QueueStatus::Failed,
-                        DownloadState::Warning => QueueStatus::Warning,
-                    };
-
-                    let tracked_state = match live.status {
-                        DownloadState::Queued
-                        | DownloadState::Downloading
-                        | DownloadState::Stalled
-                        | DownloadState::Paused => TrackedDownloadState::Downloading,
-                        DownloadState::Seeding
-                        | DownloadState::Completed => TrackedDownloadState::ImportPending,
-                        DownloadState::Failed => TrackedDownloadState::Failed,
-                        DownloadState::Warning => TrackedDownloadState::ImportBlocked,
-                    };
-
-                    let timeleft = live.eta.map(|secs| {
-                        let hours = secs / 3600;
-                        let minutes = (secs % 3600) / 60;
-                        let seconds = secs % 60;
-                        format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
-                    });
-
-                    let estimated = live
-                        .eta
-                        .map(|secs| Utc::now() + chrono::Duration::seconds(secs));
-
-                    (
-                        queue_status,
-                        tracked_state,
-                        live.size,
-                        live.size_left,
-                        timeleft,
-                        estimated,
-                        live.output_path.clone(),
-                        live.error_message.clone(),
-                    )
-                } else {
-                    // Download client unavailable — show with zero progress
-                    (
-                        QueueStatus::DownloadClientUnavailable,
-                        TrackedDownloadState::Downloading,
-                        0i64,
-                        0i64,
-                        None,
-                        None,
-                        None,
-                        None,
-                    )
+            let (
+                queue_status,
+                tracked_state,
+                size,
+                size_left,
+                timeleft,
+                estimated_completion,
+                output_path,
+                error_message,
+            ) = if let Some(live) = live_status {
+                let queue_status = match live.status {
+                    DownloadState::Queued => QueueStatus::Queued,
+                    DownloadState::Paused => QueueStatus::Paused,
+                    DownloadState::Downloading => QueueStatus::Downloading,
+                    DownloadState::Stalled => QueueStatus::Warning,
+                    DownloadState::Seeding => QueueStatus::Completed,
+                    DownloadState::Completed => QueueStatus::Completed,
+                    DownloadState::Failed => QueueStatus::Failed,
+                    DownloadState::Warning => QueueStatus::Warning,
                 };
+
+                let tracked_state = match live.status {
+                    DownloadState::Queued
+                    | DownloadState::Downloading
+                    | DownloadState::Stalled
+                    | DownloadState::Paused => TrackedDownloadState::Downloading,
+                    DownloadState::Seeding | DownloadState::Completed => {
+                        TrackedDownloadState::ImportPending
+                    }
+                    DownloadState::Failed => TrackedDownloadState::Failed,
+                    DownloadState::Warning => TrackedDownloadState::ImportBlocked,
+                };
+
+                let timeleft = live.eta.map(|secs| {
+                    let hours = secs / 3600;
+                    let minutes = (secs % 3600) / 60;
+                    let seconds = secs % 60;
+                    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                });
+
+                let estimated = live
+                    .eta
+                    .map(|secs| Utc::now() + chrono::Duration::seconds(secs));
+
+                (
+                    queue_status,
+                    tracked_state,
+                    live.size,
+                    live.size_left,
+                    timeleft,
+                    estimated,
+                    live.output_path.clone(),
+                    live.error_message.clone(),
+                )
+            } else {
+                // Download client unavailable — show with zero progress
+                (
+                    QueueStatus::DownloadClientUnavailable,
+                    TrackedDownloadState::Downloading,
+                    0i64,
+                    0i64,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            };
 
             // Resolve episode info for series downloads
             let (resolved_episode_id, season_number, episode_numbers) =
@@ -609,8 +633,7 @@ impl TrackedDownloadService {
                 if let Ok(downloads) = client.get_downloads().await {
                     for dl in downloads {
                         if let Some(ref path) = dl.output_path {
-                            output_paths
-                                .insert((client_model.id, dl.id.clone()), path.clone());
+                            output_paths.insert((client_model.id, dl.id.clone()), path.clone());
                         }
                     }
                 }
@@ -702,14 +725,10 @@ impl TrackedDownloadService {
                     if let Some(file_id) = ep.episode_file_id {
                         match episode_file_repo.get_by_id(file_id).await {
                             Ok(Some(ef))
-                                if ef
-                                    .file_hash
-                                    .as_deref()
-                                    .is_some_and(|h| !h.is_empty()) =>
+                                if ef.file_hash.as_deref().is_some_and(|h| !h.is_empty()) =>
                             {
                                 if td.episode_ids.len() == 1 {
-                                    single_ep_hash =
-                                        Some((file_id, ef.file_hash.unwrap().clone()));
+                                    single_ep_hash = Some((file_id, ef.file_hash.unwrap().clone()));
                                 }
                             }
                             _ => {
@@ -830,10 +849,7 @@ impl TrackedDownloadService {
             };
             let _ = self.tracked.suppressed.insert(suppressed).await;
             self.tracked.remove_by_id(id).await;
-            info!(
-                "Suppressed tracked download: {} ({})",
-                td.title, id
-            );
+            info!("Suppressed tracked download: {} ({})", td.title, id);
         }
 
         Ok(())
@@ -1123,9 +1139,7 @@ impl TrackedDownloadService {
                             id: 0,
                             download_id: dl.id.clone(),
                             client_id: client_model.id,
-                            content: MovieRef {
-                                movie_id: movie.id,
-                            },
+                            content: MovieRef { movie_id: movie.id },
                             title: dl.name.clone(),
                             quality: quality_json,
                             indexer: None,
@@ -1149,10 +1163,7 @@ impl TrackedDownloadService {
                             }
                         }
                     } else {
-                        debug!(
-                            "Reconcile: no series or movie match for '{}'",
-                            dl.name
-                        );
+                        debug!("Reconcile: no series or movie match for '{}'", dl.name);
                     }
                 }
             }
@@ -1292,11 +1303,7 @@ async fn find_largest_video_file(path: &str) -> Option<std::path::PathBuf> {
 
         let mut best: Option<(std::path::PathBuf, u64)> = None;
 
-        fn walk(
-            dir: &std::path::Path,
-            best: &mut Option<(std::path::PathBuf, u64)>,
-            depth: usize,
-        ) {
+        fn walk(dir: &std::path::Path, best: &mut Option<(std::path::PathBuf, u64)>, depth: usize) {
             use crate::core::scanner::is_video_file;
             if depth > 2 {
                 return;

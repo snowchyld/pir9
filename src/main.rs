@@ -15,7 +15,9 @@ use axum::{
 use clap::Parser;
 use tokio::signal;
 use tower_http::{
-    compression::CompressionLayer, cors::CorsLayer, normalize_path::NormalizePathLayer,
+    compression::CompressionLayer,
+    cors::CorsLayer,
+    normalize_path::NormalizePathLayer,
     trace::{DefaultOnResponse, TraceLayer},
 };
 use tracing::Level;
@@ -180,11 +182,9 @@ async fn run_server_mode(args: &Args) -> Result<()> {
     }
 
     // Load tracked downloads from JSONL files (or migrate from DB on first run)
-    let tracked = crate::core::queue::TrackedDownloads::load_or_migrate(
-        &config.paths.data_dir,
-        &database,
-    )
-    .await?;
+    let tracked =
+        crate::core::queue::TrackedDownloads::load_or_migrate(&config.paths.data_dir, &database)
+            .await?;
 
     // Create application state (with Redis event bus if in server mode)
     let state = if args.mode == RunMode::Server {
@@ -242,9 +242,8 @@ async fn run_server_mode(args: &Args) -> Result<()> {
             tokio::spawn(async move {
                 loop {
                     let bus = bus_for_results.clone();
-                    let handle = tokio::spawn(async move {
-                        bus.start_result_stream_reader().await
-                    });
+                    let handle =
+                        tokio::spawn(async move { bus.start_result_stream_reader().await });
                     match handle.await {
                         Ok(Ok(())) => {
                             tracing::warn!("Result stream reader exited cleanly — restarting");
@@ -253,7 +252,10 @@ async fn run_server_mode(args: &Args) -> Result<()> {
                             tracing::error!("Result stream reader error: {} — restarting in 5s", e);
                         }
                         Err(e) => {
-                            tracing::error!("Result stream reader panicked: {} — restarting in 5s", e);
+                            tracing::error!(
+                                "Result stream reader panicked: {} — restarting in 5s",
+                                e
+                            );
                         }
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -263,10 +265,7 @@ async fn run_server_mode(args: &Args) -> Result<()> {
 
             // Start scan result consumer (with media config for download import naming)
             let media_config = state.config.read().media.clone();
-            let mut consumer_inner = ScanResultConsumer::new(
-                database.clone(),
-                hybrid_bus.clone(),
-            );
+            let mut consumer_inner = ScanResultConsumer::new(database.clone(), hybrid_bus.clone());
             consumer_inner.set_media_config(media_config);
             consumer_inner.set_tracked(state.tracked.clone());
             // Bridge scan progress to WebSocket event bus so frontend gets real-time updates
@@ -383,7 +382,7 @@ fn create_router(state: Arc<AppState>) -> Router {
                         tracing::debug_span!("request", %method, %path)
                     }
                 })
-                .on_response(DefaultOnResponse::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
         .layer(CompressionLayer::new())
         .layer(CorsLayer::permissive())
@@ -793,10 +792,7 @@ async fn artist_media_cover_handler(
 ) -> impl IntoResponse {
     use crate::core::datastore::repositories::ArtistRepository;
 
-    let cover_type = filename
-        .split('.')
-        .next()
-        .unwrap_or("poster");
+    let cover_type = filename.split('.').next().unwrap_or("poster");
 
     let content_type = if filename.ends_with(".png") {
         "image/png"
@@ -837,8 +833,7 @@ async fn artist_media_cover_handler(
         remote_url: Option<String>,
     }
 
-    let stored_images: Vec<StoredImage> =
-        serde_json::from_str(&artist.images).unwrap_or_default();
+    let stored_images: Vec<StoredImage> = serde_json::from_str(&artist.images).unwrap_or_default();
     let remote_url = stored_images
         .into_iter()
         .find(|img| img.cover_type.eq_ignore_ascii_case(cover_type))
@@ -910,7 +905,11 @@ async fn audiobook_media_cover_handler(
     use crate::core::datastore::repositories::AudiobookRepository;
 
     let cover_type = filename.split('.').next().unwrap_or("poster");
-    let content_type = if filename.ends_with(".png") { "image/png" } else { "image/jpeg" };
+    let content_type = if filename.ends_with(".png") {
+        "image/png"
+    } else {
+        "image/jpeg"
+    };
 
     // Check local cache first
     let cache_dir = format!("cache/MediaCover/Audiobooks/{}", audiobook_id);
@@ -919,9 +918,13 @@ async fn audiobook_media_cover_handler(
     if let Ok(data) = tokio::fs::read(&cache_path).await {
         return (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "max-age=604800")],
+            [
+                (header::CONTENT_TYPE, content_type),
+                (header::CACHE_CONTROL, "max-age=604800"),
+            ],
             data,
-        ).into_response();
+        )
+            .into_response();
     }
 
     // Look up audiobook to find stored remote_url
@@ -939,8 +942,10 @@ async fn audiobook_media_cover_handler(
         remote_url: Option<String>,
     }
 
-    let stored_images: Vec<StoredImage> = serde_json::from_str(&audiobook.images).unwrap_or_default();
-    let remote_url = match stored_images.into_iter()
+    let stored_images: Vec<StoredImage> =
+        serde_json::from_str(&audiobook.images).unwrap_or_default();
+    let remote_url = match stored_images
+        .into_iter()
         .find(|img| img.cover_type.eq_ignore_ascii_case(cover_type))
         .and_then(|img| img.remote_url)
     {
@@ -972,9 +977,13 @@ async fn audiobook_media_cover_handler(
 
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "max-age=604800")],
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "max-age=604800"),
+        ],
         image_data,
-    ).into_response()
+    )
+        .into_response()
 }
 
 async fn shutdown_signal() {

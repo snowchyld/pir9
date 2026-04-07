@@ -382,18 +382,25 @@ async fn add_series(
 
     // Check if already exists
     if let Ok(Some(existing)) = repo.get_by_tvdb_id(tvdb_id).await {
-        tracing::info!("Series already exists: id={}, title={}", existing.id, existing.title);
+        tracing::info!(
+            "Series already exists: id={}, title={}",
+            existing.id,
+            existing.title
+        );
         let (episode_count, episode_file_count, season_count, total_episode_count) =
             get_series_stats(&state.db, existing.id).await;
         return (
             StatusCode::OK,
-            Json(serde_json::to_value(build_series_resource(
-                existing,
-                episode_count,
-                episode_file_count,
-                season_count,
-                total_episode_count,
-            )).expect("serialize")),
+            Json(
+                serde_json::to_value(build_series_resource(
+                    existing,
+                    episode_count,
+                    episode_file_count,
+                    season_count,
+                    total_episode_count,
+                ))
+                .expect("serialize"),
+            ),
         )
             .into_response();
     }
@@ -402,7 +409,11 @@ async fn add_series(
     let full_path = body.path.clone().unwrap_or_else(|| {
         let root = body.root_folder_path.as_deref().unwrap_or("/data/series");
         let media_config = &state.config.read().media;
-        tracing::debug!("v3 add series: no path provided, computing from root='{}', series_folder_format='{}'", root, media_config.series_folder_format);
+        tracing::debug!(
+            "v3 add series: no path provided, computing from root='{}', series_folder_format='{}'",
+            root,
+            media_config.series_folder_format
+        );
         let folder_name =
             crate::core::naming::build_series_folder_name(media_config, &body.title, body.year);
         format!("{}/{}", root.trim_end_matches('/'), folder_name)
@@ -480,7 +491,12 @@ async fn add_series(
         }
     };
 
-    tracing::info!("Created series via v3: id={}, title={}, tvdb_id={}", id, body.title, tvdb_id);
+    tracing::info!(
+        "Created series via v3: id={}, title={}, tvdb_id={}",
+        id,
+        body.title,
+        tvdb_id
+    );
 
     // Create series folder on disk
     let series_path = &db_series.path;
@@ -504,7 +520,9 @@ async fn add_series(
 
     // Refresh metadata inline so the response includes full details (images, year, episodes)
     tracing::info!("Auto-refreshing new series: {} (id={})", body.title, id);
-    if let Err(e) = crate::api::v5::series::auto_refresh_series(id, &state.db, &state.metadata_service).await {
+    if let Err(e) =
+        crate::api::v5::series::auto_refresh_series(id, &state.db, &state.metadata_service).await
+    {
         tracing::error!("Failed to auto-refresh series {}: {}", id, e);
     }
 
@@ -520,7 +538,9 @@ async fn add_series(
             &db_clone,
             hybrid_bus.as_ref(),
             consumer.as_ref(),
-        ).await {
+        )
+        .await
+        {
             tracing::error!("Failed to auto-scan series {}: {}", id, e);
         }
         if search_for_missing {
@@ -535,7 +555,9 @@ async fn add_series(
                 &db_clone,
                 &event_bus,
                 &search_options,
-            ).await {
+            )
+            .await
+            {
                 tracing::error!("Failed to auto-search series {}: {}", id, e);
             }
         }
@@ -593,9 +615,21 @@ fn build_series_resource(
         network: s.network.unwrap_or_default(),
         air_time: None,
         images: vec![
-            ImageResource { cover_type: "poster".to_string(), url: format!("/MediaCover/Series/{}/poster.jpg", s.id), remote_url: None },
-            ImageResource { cover_type: "banner".to_string(), url: format!("/MediaCover/Series/{}/banner.jpg", s.id), remote_url: None },
-            ImageResource { cover_type: "fanart".to_string(), url: format!("/MediaCover/Series/{}/fanart.jpg", s.id), remote_url: None },
+            ImageResource {
+                cover_type: "poster".to_string(),
+                url: format!("/MediaCover/Series/{}/poster.jpg", s.id),
+                remote_url: None,
+            },
+            ImageResource {
+                cover_type: "banner".to_string(),
+                url: format!("/MediaCover/Series/{}/banner.jpg", s.id),
+                remote_url: None,
+            },
+            ImageResource {
+                cover_type: "fanart".to_string(),
+                url: format!("/MediaCover/Series/{}/fanart.jpg", s.id),
+                remote_url: None,
+            },
         ],
         seasons: vec![],
         year: s.year,
@@ -623,7 +657,10 @@ fn build_series_resource(
         genres: vec![],
         tags: vec![],
         added: s.added.to_rfc3339(),
-        ratings: RatingResource { votes: 0, value: 0.0 },
+        ratings: RatingResource {
+            votes: 0,
+            value: 0.0,
+        },
         statistics: SeriesStatisticsResource {
             season_count,
             episode_file_count,

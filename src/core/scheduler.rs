@@ -30,8 +30,7 @@ pub struct JobScheduler {
     /// Hybrid event bus for distributed scanning (set after AppState creation)
     hybrid_event_bus: Arc<tokio::sync::OnceCell<crate::core::messaging::HybridEventBus>>,
     /// Scan result consumer for registering download imports (set after consumer creation)
-    scan_result_consumer:
-        Arc<tokio::sync::OnceCell<Arc<crate::core::scanner::ScanResultConsumer>>>,
+    scan_result_consumer: Arc<tokio::sync::OnceCell<Arc<crate::core::scanner::ScanResultConsumer>>>,
     /// Tracked downloads stores (set after load_or_migrate)
     tracked: Arc<tokio::sync::OnceCell<Arc<crate::core::queue::TrackedDownloads>>>,
 }
@@ -240,9 +239,7 @@ async fn run_job_loop(
     metadata_service: Option<crate::core::metadata::MetadataService>,
     media_config: Option<crate::core::configuration::MediaConfig>,
     hybrid_event_bus: Arc<tokio::sync::OnceCell<crate::core::messaging::HybridEventBus>>,
-    scan_result_consumer: Arc<
-        tokio::sync::OnceCell<Arc<crate::core::scanner::ScanResultConsumer>>,
-    >,
+    scan_result_consumer: Arc<tokio::sync::OnceCell<Arc<crate::core::scanner::ScanResultConsumer>>>,
     tracked: Arc<tokio::sync::OnceCell<Arc<crate::core::queue::TrackedDownloads>>>,
 ) {
     let interval = tokio::time::Duration::from_secs(job.interval_minutes as u64 * 60);
@@ -290,7 +287,13 @@ async fn execute_job_command(
             execute_refresh_series(db, metadata_service).await?;
         }
         JobCommand::DownloadedEpisodesScan => {
-            execute_downloaded_episodes_scan(db, media_config, hybrid_event_bus, scan_result_consumer).await?;
+            execute_downloaded_episodes_scan(
+                db,
+                media_config,
+                hybrid_event_bus,
+                scan_result_consumer,
+            )
+            .await?;
         }
         JobCommand::Housekeeping => {
             execute_housekeeping(db).await?;
@@ -485,7 +488,10 @@ async fn execute_rss_sync(
             release.quality.quality
         );
 
-        match tracked_service.grab_release(&release, episode_ids, None, "series").await {
+        match tracked_service
+            .grab_release(&release, episode_ids, None, "series")
+            .await
+        {
             Ok(tracked_id) => {
                 grabbed += 1;
                 info!("Grabbed successfully (tracked_id={})", tracked_id);

@@ -85,10 +85,7 @@ where
                 path.display()
             );
         } else {
-            debug!(
-                "No tracking file at {} — starting empty",
-                path.display()
-            );
+            debug!("No tracking file at {} — starting empty", path.display());
         }
 
         Ok(Self {
@@ -118,7 +115,12 @@ where
 
     /// Look up a tracked download by its store-assigned ID.
     pub async fn get_by_id(&self, id: i64) -> Option<TrackedDownload<C>> {
-        self.items.read().await.iter().find(|td| td.id == id).cloned()
+        self.items
+            .read()
+            .await
+            .iter()
+            .find(|td| td.id == id)
+            .cloned()
     }
 
     /// Look up by the download client's natural key.

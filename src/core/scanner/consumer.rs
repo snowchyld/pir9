@@ -20,7 +20,9 @@ use crate::core::datastore::repositories::{
 };
 use crate::core::datastore::Database;
 use crate::core::mediafiles::{compute_file_hash, derive_quality_from_media, MediaAnalyzer};
-use crate::core::messaging::{EventBus, HybridEventBus, ImportFileResult, ImportFileSpec, Message, ScanType, ScannedFile};
+use crate::core::messaging::{
+    EventBus, HybridEventBus, ImportFileResult, ImportFileSpec, Message, ScanType, ScannedFile,
+};
 
 /// Tracks pending scan jobs and their results
 #[derive(Debug, Default)]
@@ -362,11 +364,7 @@ impl ScanResultConsumer {
     }
 
     /// Register a pending download import (called from command.rs when dispatching to worker)
-    pub async fn register_download_import(
-        &self,
-        job_id: &str,
-        imports: Vec<DownloadImportInfo>,
-    ) {
+    pub async fn register_download_import(&self, job_id: &str, imports: Vec<DownloadImportInfo>) {
         let mut jobs = self.pending_jobs.write().await;
         // Store each download import keyed by job_id + index for multi-download batches
         // For now we key by job_id and store one at a time (imports dispatched per-download)
@@ -567,20 +565,22 @@ impl ScanResultConsumer {
 
                             // Forward enriched progress to WebSocket
                             if let Some(ref ws_bus) = self.ws_event_bus {
-                                ws_bus.publish(Message::ScanProgress {
-                                    job_id,
-                                    worker_id,
-                                    stage,
-                                    current_file,
-                                    files_total,
-                                    files_processed,
-                                    percent,
-                                    detail,
-                                    entity_ids,
-                                    scan_type: job_scan_type,
-                                    bytes_copied,
-                                    bytes_total,
-                                }).await;
+                                ws_bus
+                                    .publish(Message::ScanProgress {
+                                        job_id,
+                                        worker_id,
+                                        stage,
+                                        current_file,
+                                        files_total,
+                                        files_processed,
+                                        percent,
+                                        detail,
+                                        entity_ids,
+                                        scan_type: job_scan_type,
+                                        bytes_copied,
+                                        bytes_total,
+                                    })
+                                    .await;
                             }
                         }
                         Message::ImportFilesResult {
@@ -601,9 +601,9 @@ impl ScanResultConsumer {
                             quality,
                         } => {
                             self.handle_probe_file_result(
-                                &job_id, &file_path, entity_id, &worker_id,
-                                media_info, quality,
-                            ).await;
+                                &job_id, &file_path, entity_id, &worker_id, media_info, quality,
+                            )
+                            .await;
                         }
                         Message::HashFileResult {
                             job_id,
@@ -614,9 +614,9 @@ impl ScanResultConsumer {
                             file_hash,
                         } => {
                             self.handle_hash_file_result(
-                                &job_id, &file_path, entity_id, &worker_id,
-                                file_hash,
-                            ).await;
+                                &job_id, &file_path, entity_id, &worker_id, file_hash,
+                            )
+                            .await;
                         }
                         Message::RenameFilesResult {
                             job_id,
@@ -687,7 +687,9 @@ impl ScanResultConsumer {
 
         info!(
             "Discovery: {} files for series {} (job={}), dispatching enrichment",
-            files_found.len(), series_id, job_id
+            files_found.len(),
+            series_id,
+            job_id
         );
 
         // Load known file data from DB for skip-enrichment
@@ -715,7 +717,10 @@ impl ScanResultConsumer {
         // Process already-enriched files immediately
         if !enriched_files.is_empty() {
             let count = enriched_files.len();
-            debug!("Processing {} unchanged files for series {}", count, series_id);
+            debug!(
+                "Processing {} unchanged files for series {}",
+                count, series_id
+            );
             if let Err(e) = self.process_scanned_files(series_id, enriched_files).await {
                 error!(
                     "Failed to process enriched files for series {}: {}",
@@ -736,7 +741,8 @@ impl ScanResultConsumer {
             series_id,
             ScanType::RescanSeries,
             files_needing_enrichment,
-        ).await;
+        )
+        .await;
     }
 
     /// Handle a movie scan result from discovery phase.
@@ -759,10 +765,7 @@ impl ScanResultConsumer {
 
         if files_found.is_empty() {
             // No file found — clear has_file if movie thought it had one
-            info!(
-                "Discovery: 0 files for movie {} (job={})",
-                movie_id, job_id
-            );
+            info!("Discovery: 0 files for movie {} (job={})", movie_id, job_id);
             let movie_repo = MovieRepository::new(self.db.clone());
             if let Ok(Some(movie)) = movie_repo.get_by_id(movie_id).await {
                 if movie.has_file {
@@ -781,7 +784,9 @@ impl ScanResultConsumer {
 
         info!(
             "Discovery: {} files for movie {} (job={}), dispatching enrichment",
-            files_found.len(), movie_id, job_id
+            files_found.len(),
+            movie_id,
+            job_id
         );
 
         // Load known file data from DB for skip-enrichment
@@ -826,7 +831,8 @@ impl ScanResultConsumer {
             movie_id,
             ScanType::RescanMovie,
             files_needing_enrichment,
-        ).await;
+        )
+        .await;
     }
 
     /// Process a single movie file from a worker scan result
@@ -889,10 +895,8 @@ impl ScanResultConsumer {
                 .ok()
                 .and_then(|info| serde_json::to_string(info).ok());
             let quality = match &media_info_result {
-                Ok(info) => {
-                    serde_json::to_string(&derive_quality_from_media(info, &file.filename))
-                        .unwrap_or_default()
-                }
+                Ok(info) => serde_json::to_string(&derive_quality_from_media(info, &file.filename))
+                    .unwrap_or_default(),
                 Err(_) => serde_json::to_string(&serde_json::json!({
                     "quality": {"id": 1, "name": "SDTV", "source": "unknown", "resolution": 0},
                     "revision": {"version": 1, "real": 0, "isRepack": false}
@@ -945,10 +949,7 @@ impl ScanResultConsumer {
                     .await;
             }
             Err(e) => {
-                warn!(
-                    "Failed to insert movie file for '{}': {}",
-                    movie.title, e
-                );
+                warn!("Failed to insert movie file for '{}': {}", movie.title, e);
             }
         }
 
@@ -1108,10 +1109,7 @@ impl ScanResultConsumer {
 
         // Empty result = scan completion signal from worker
         if files_found.is_empty() {
-            info!(
-                "[worker:{}] Scan complete for job {}",
-                worker_id, job_id
-            );
+            info!("[worker:{}] Scan complete for job {}", worker_id, job_id);
             {
                 let mut jobs = self.pending_jobs.write().await;
                 if let Some(tracker) = jobs.download_job_trackers.get_mut(job_id) {
@@ -1125,7 +1123,9 @@ impl ScanResultConsumer {
 
         info!(
             "[worker:{}] Scan result: job_id={}, {} file(s)",
-            worker_id, job_id, files_found.len()
+            worker_id,
+            job_id,
+            files_found.len()
         );
 
         // Look up which download imports are associated with this job
@@ -1187,9 +1187,7 @@ impl ScanResultConsumer {
             let filename = &file.filename;
 
             // User explicitly chose "Do not import" for this file
-            if skip_files.contains(filename)
-                || skip_files.iter().any(|p| p.ends_with(filename))
-            {
+            if skip_files.contains(filename) || skip_files.iter().any(|p| p.ends_with(filename)) {
                 info!(
                     "[worker:{}] skipping '{}' — user chose Do not import",
                     worker_id, filename,
@@ -1210,7 +1208,11 @@ impl ScanResultConsumer {
                             .file_name()
                             .and_then(|n| n.to_str())
                             .unwrap_or(key);
-                        if key_basename == filename { Some(pairs) } else { None }
+                        if key_basename == filename {
+                            Some(pairs)
+                        } else {
+                            None
+                        }
                     })
                 });
                 if let Some(pairs) = override_match {
@@ -1229,7 +1231,10 @@ impl ScanResultConsumer {
                         worker_id, filename, pre_resolved_episodes
                     );
                 } else {
-                    debug!("[worker:{}] skipping unmatched file '{}'", worker_id, filename);
+                    debug!(
+                        "[worker:{}] skipping unmatched file '{}'",
+                        worker_id, filename
+                    );
                     continue;
                 }
             }
@@ -1307,26 +1312,18 @@ impl ScanResultConsumer {
                 (s, eps, pi)
             } else if let Some(pi) = parsed_info {
                 // Fallback: no known series — try to match from filename
-                let s = match crate::core::download::import::match_series_standalone(
-                    &self.db,
-                    &pi,
-                )
-                .await
+                let s = match crate::core::download::import::match_series_standalone(&self.db, &pi)
+                    .await
                 {
                     Ok(Some(s)) => s,
                     _ => {
-                        info!(
-                            "[worker:{}] no series match for '{}'",
-                            worker_id, filename
-                        );
+                        info!("[worker:{}] no series match for '{}'", worker_id, filename);
                         continue;
                     }
                 };
 
                 let eps = match crate::core::download::import::match_episodes_standalone(
-                    &self.db,
-                    &s,
-                    &pi,
+                    &self.db, &s, &pi,
                 )
                 .await
                 {
@@ -1376,10 +1373,8 @@ impl ScanResultConsumer {
                         .get_by_series_id(series.id)
                         .await
                         .unwrap_or_default();
-                    let ep_file_map: HashMap<i64, &_> = ep_files
-                        .iter()
-                        .map(|f| (f.id, f))
-                        .collect();
+                    let ep_file_map: HashMap<i64, &_> =
+                        ep_files.iter().map(|f| (f.id, f)).collect();
                     let all_same = episodes.iter().all(|ep| {
                         ep.episode_file_id
                             .and_then(|fid| ep_file_map.get(&fid))
@@ -1387,7 +1382,9 @@ impl ScanResultConsumer {
                                 let size_match = existing.size == file.size;
                                 if size_match {
                                     match (&existing.file_hash, &file.file_hash) {
-                                        (Some(eh), Some(fh)) if !eh.is_empty() && !fh.is_empty() => {
+                                        (Some(eh), Some(fh))
+                                            if !eh.is_empty() && !fh.is_empty() =>
+                                        {
                                             eh == fh
                                         }
                                         _ => true,
@@ -1402,8 +1399,11 @@ impl ScanResultConsumer {
                         info!(
                             "[worker:{}] skipping '{}' — identical to existing file(s) \
                              (source_size={}, existing_size={}, hash={})",
-                            worker_id, filename, file.size,
-                            episodes.first()
+                            worker_id,
+                            filename,
+                            file.size,
+                            episodes
+                                .first()
                                 .and_then(|ep| ep.episode_file_id)
                                 .and_then(|fid| ep_file_map.get(&fid))
                                 .map(|f| f.size)
@@ -1433,9 +1433,7 @@ impl ScanResultConsumer {
             let quality_str = file
                 .quality
                 .clone()
-                .unwrap_or_else(|| {
-                    serde_json::to_string(&parsed_info.quality).unwrap_or_default()
-                });
+                .unwrap_or_else(|| serde_json::to_string(&parsed_info.quality).unwrap_or_default());
 
             // Generate a unique import_job_id for this single file
             let import_job_id = uuid::Uuid::new_v4().to_string();
@@ -1943,7 +1941,9 @@ impl ScanResultConsumer {
                 job.completed = true;
                 info!(
                     "Scan job {} completed ({}/{} results)",
-                    job_id, job.results_received, job.entity_ids.len()
+                    job_id,
+                    job.results_received,
+                    job.entity_ids.len()
                 );
                 // Clean up streaming state for this job
                 jobs.streamed_entities.retain(|(jid, _)| jid != job_id);
@@ -2004,25 +2004,31 @@ impl ScanResultConsumer {
             );
 
             // Map job IDs to file key for result lookup
-            jobs.enrichment_job_to_file.insert(probe_job_id.clone(), file_key.clone());
-            jobs.enrichment_job_to_file.insert(hash_job_id.clone(), file_key.clone());
+            jobs.enrichment_job_to_file
+                .insert(probe_job_id.clone(), file_key.clone());
+            jobs.enrichment_job_to_file
+                .insert(hash_job_id.clone(), file_key.clone());
 
             // Enqueue probe job (durable Redis list — persists until a worker picks it up)
-            event_bus.enqueue_job(Message::ProbeFileRequest {
-                job_id: probe_job_id,
-                parent_job_id: parent_job_id.to_string(),
-                file_path: file_path_str.clone(),
-                entity_id,
-                scan_type,
-            }).await;
+            event_bus
+                .enqueue_job(Message::ProbeFileRequest {
+                    job_id: probe_job_id,
+                    parent_job_id: parent_job_id.to_string(),
+                    file_path: file_path_str.clone(),
+                    entity_id,
+                    scan_type,
+                })
+                .await;
 
             // Enqueue hash job (separate job — worker does one at a time)
-            event_bus.enqueue_job(Message::HashFileRequest {
-                job_id: hash_job_id,
-                parent_job_id: parent_job_id.to_string(),
-                file_path: file_path_str,
-                entity_id,
-            }).await;
+            event_bus
+                .enqueue_job(Message::HashFileRequest {
+                    job_id: hash_job_id,
+                    parent_job_id: parent_job_id.to_string(),
+                    file_path: file_path_str,
+                    entity_id,
+                })
+                .await;
         }
     }
 
@@ -2038,7 +2044,9 @@ impl ScanResultConsumer {
     ) {
         debug!(
             "[probe] Result: job={}, entity={}, worker={}, file={}",
-            job_id, entity_id, worker_id,
+            job_id,
+            entity_id,
+            worker_id,
             std::path::Path::new(file_path)
                 .file_name()
                 .unwrap_or_default()
@@ -2090,7 +2098,9 @@ impl ScanResultConsumer {
     ) {
         debug!(
             "[hash] Result: job={}, entity={}, worker={}, file={}",
-            job_id, entity_id, worker_id,
+            job_id,
+            entity_id,
+            worker_id,
             std::path::Path::new(file_path)
                 .file_name()
                 .unwrap_or_default()
@@ -2259,7 +2269,9 @@ impl ScanResultConsumer {
     async fn check_enrichment_complete(&self, parent_job_id: &str) {
         let has_pending = {
             let jobs = self.pending_jobs.read().await;
-            jobs.file_jobs.values().any(|fj| fj.parent_job_id == parent_job_id)
+            jobs.file_jobs
+                .values()
+                .any(|fj| fj.parent_job_id == parent_job_id)
         };
 
         if !has_pending {
@@ -2617,20 +2629,18 @@ impl ScanResultConsumer {
                 Ok(Some(mut ef)) => {
                     let new_path = result.dest_path.to_string_lossy().to_string();
                     // Compute relative path if we can determine the series root
-                    let series_repo =
-                        crate::core::datastore::repositories::SeriesRepository::new(
-                            self.db.clone(),
-                        );
-                    let relative = if let Ok(Some(series)) =
-                        series_repo.get_by_id(ef.series_id).await
-                    {
-                        std::path::Path::new(&new_path)
-                            .strip_prefix(&series.path)
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_else(|_| new_path.clone())
-                    } else {
-                        new_path.clone()
-                    };
+                    let series_repo = crate::core::datastore::repositories::SeriesRepository::new(
+                        self.db.clone(),
+                    );
+                    let relative =
+                        if let Ok(Some(series)) = series_repo.get_by_id(ef.series_id).await {
+                            std::path::Path::new(&new_path)
+                                .strip_prefix(&series.path)
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or_else(|_| new_path.clone())
+                        } else {
+                            new_path.clone()
+                        };
 
                     ef.path = new_path;
                     ef.relative_path = relative;
@@ -2649,10 +2659,7 @@ impl ScanResultConsumer {
                     failed += 1;
                 }
                 Err(e) => {
-                    warn!(
-                        "[rename] Failed to fetch episode_file {}: {}",
-                        file_id, e
-                    );
+                    warn!("[rename] Failed to fetch episode_file {}: {}", file_id, e);
                     failed += 1;
                 }
             }
@@ -2711,10 +2718,7 @@ pub fn create_movie_scan_request(
 }
 
 /// Create a scan request for podcast libraries (stub — not yet implemented)
-pub fn create_podcast_scan_request(
-    podcast_ids: Vec<i64>,
-    paths: Vec<String>,
-) -> (String, Message) {
+pub fn create_podcast_scan_request(podcast_ids: Vec<i64>, paths: Vec<String>) -> (String, Message) {
     let job_id = uuid::Uuid::new_v4().to_string();
 
     let message = Message::ScanRequest {

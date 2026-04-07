@@ -391,10 +391,7 @@ pub async fn get_releases(
 }
 
 /// Movie interactive search — searches indexers with movie categories and IMDB ID
-async fn get_movie_releases(
-    state: Arc<AppState>,
-    movie_id: i64,
-) -> Json<Vec<ReleaseResource>> {
+async fn get_movie_releases(state: Arc<AppState>, movie_id: i64) -> Json<Vec<ReleaseResource>> {
     use crate::core::datastore::repositories::MovieRepository;
 
     let movie_repo = MovieRepository::new(state.db.clone());
@@ -424,7 +421,11 @@ async fn get_movie_releases(
     }
 
     let search_service = IndexerSearchService::new(indexers);
-    let year = if movie.year > 0 { Some(movie.year) } else { None };
+    let year = if movie.year > 0 {
+        Some(movie.year)
+    } else {
+        None
+    };
     let releases = match search_service
         .interactive_movie_search(&movie.title, year, movie.imdb_id.as_deref())
         .await
@@ -548,8 +549,15 @@ pub async fn create_release(
 
     // Grab the release using TrackedDownloadService
     let service = TrackedDownloadService::new(state.db.clone(), state.tracked.clone());
-    let content_type = if movie_id.is_some() { "movie" } else { "series" };
-    match service.grab_release(&release, episode_ids.clone(), movie_id, content_type).await {
+    let content_type = if movie_id.is_some() {
+        "movie"
+    } else {
+        "series"
+    };
+    match service
+        .grab_release(&release, episode_ids.clone(), movie_id, content_type)
+        .await
+    {
         Ok(tracked_id) => {
             tracing::info!("Release grabbed and tracked: id={}", tracked_id);
 
@@ -747,10 +755,7 @@ async fn get_query_releases(
         cache.insert_many(&releases);
     }
 
-    let results: Vec<ReleaseResource> = releases
-        .iter()
-        .map(release_to_resource)
-        .collect();
+    let results: Vec<ReleaseResource> = releases.iter().map(release_to_resource).collect();
 
     Json(results)
 }

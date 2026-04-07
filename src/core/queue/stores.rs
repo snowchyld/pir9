@@ -386,7 +386,10 @@ impl TrackedDownloads {
                     podcast_count += 1;
                 }
                 other => {
-                    warn!("Unknown content_type '{}' during migration, skipping", other);
+                    warn!(
+                        "Unknown content_type '{}' during migration, skipping",
+                        other
+                    );
                 }
             }
         }
@@ -421,4 +424,3 @@ struct MigrationRow {
     audiobook_id: Option<i64>,
     content_type: String,
 }
-

@@ -324,9 +324,9 @@ pub struct CommandExecutionOptions {
 impl CommandExecutionOptions {
     /// Get the tracked downloads store, falling back to an empty store.
     pub fn tracked_downloads(&self) -> std::sync::Arc<crate::core::queue::TrackedDownloads> {
-        self.tracked.clone().unwrap_or_else(|| {
-            std::sync::Arc::new(crate::core::queue::TrackedDownloads::empty())
-        })
+        self.tracked
+            .clone()
+            .unwrap_or_else(|| std::sync::Arc::new(crate::core::queue::TrackedDownloads::empty()))
     }
 }
 
@@ -721,7 +721,8 @@ async fn execute_refresh_series(
                         for ep in &current_episodes {
                             if ep.tvdb_id > 0 {
                                 if let Some(&(new_season, new_ep)) = ordering_map.get(&ep.tvdb_id) {
-                                    if new_season != ep.season_number || new_ep != ep.episode_number {
+                                    if new_season != ep.season_number || new_ep != ep.episode_number
+                                    {
                                         remap_plan.push((
                                             ep.id,
                                             new_season,
@@ -789,22 +790,23 @@ async fn execute_refresh_series(
                                 if remapped_ids.contains(&ep.id) {
                                     continue;
                                 }
-                                let (final_season, final_ep) =
-                                    if !claimed.contains(&(ep.season_number, ep.episode_number)) {
-                                        (ep.season_number, ep.episode_number)
-                                    } else {
-                                        // Position stolen by DVD ordering — find next available
-                                        let mut bump = ep.episode_number + 1;
-                                        while claimed.contains(&(ep.season_number, bump)) {
-                                            bump += 1;
-                                        }
-                                        tracing::debug!(
+                                let (final_season, final_ep) = if !claimed
+                                    .contains(&(ep.season_number, ep.episode_number))
+                                {
+                                    (ep.season_number, ep.episode_number)
+                                } else {
+                                    // Position stolen by DVD ordering — find next available
+                                    let mut bump = ep.episode_number + 1;
+                                    while claimed.contains(&(ep.season_number, bump)) {
+                                        bump += 1;
+                                    }
+                                    tracing::debug!(
                                             "Episode id={} displaced from S{:02}E{:02} to S{:02}E{:02} (position taken by {} ordering)",
                                             ep.id, ep.season_number, ep.episode_number,
                                             ep.season_number, bump, series.episode_ordering,
                                         );
-                                        (ep.season_number, bump)
-                                    };
+                                    (ep.season_number, bump)
+                                };
                                 sqlx::query(
                                     "UPDATE episodes SET season_number = $1, episode_number = $2 WHERE id = $3"
                                 )
@@ -912,7 +914,9 @@ async fn execute_refresh_series(
             "name": "RescanSeries",
             "seriesIds": series_ids,
         });
-        if let Err(e) = execute_rescan_series(&rescan_body, db, event_bus, hybrid_event_bus, None).await {
+        if let Err(e) =
+            execute_rescan_series(&rescan_body, db, event_bus, hybrid_event_bus, None).await
+        {
             tracing::warn!("RefreshSeries: rescan failed: {}", e);
         }
     }
@@ -1078,15 +1082,13 @@ async fn execute_refresh_movies(
 
         // Step 2: If we have an imdb_id, fetch images + enrichment via cascade
         if let Some(ref imdb_id) = movie.imdb_id {
-            if let Some(enrichment) =
-                super::movies::fetch_movie_images_and_tmdb_id(imdb_id).await
-            {
+            if let Some(enrichment) = super::movies::fetch_movie_images_and_tmdb_id(imdb_id).await {
                 if enrichment.tmdb_id > 0 && movie.tmdb_id == 0 {
                     movie.tmdb_id = enrichment.tmdb_id;
                 }
                 if !enrichment.images.is_empty() {
-                    let images_json =
-                        serde_json::to_string(&enrichment.images).unwrap_or_else(|_| "[]".to_string());
+                    let images_json = serde_json::to_string(&enrichment.images)
+                        .unwrap_or_else(|_| "[]".to_string());
                     movie.images = images_json;
                     images_found += 1;
                 }
@@ -1101,13 +1103,22 @@ async fn execute_refresh_movies(
                     movie.certification = enrichment.certification;
                 }
                 if movie.release_date.is_none() {
-                    movie.release_date = enrichment.in_cinemas.as_deref().and_then(super::movies::parse_date_prefix);
+                    movie.release_date = enrichment
+                        .in_cinemas
+                        .as_deref()
+                        .and_then(super::movies::parse_date_prefix);
                 }
                 if movie.physical_release_date.is_none() {
-                    movie.physical_release_date = enrichment.physical_release.as_deref().and_then(super::movies::parse_date_prefix);
+                    movie.physical_release_date = enrichment
+                        .physical_release
+                        .as_deref()
+                        .and_then(super::movies::parse_date_prefix);
                 }
                 if movie.digital_release_date.is_none() {
-                    movie.digital_release_date = enrichment.digital_release.as_deref().and_then(super::movies::parse_date_prefix);
+                    movie.digital_release_date = enrichment
+                        .digital_release
+                        .as_deref()
+                        .and_then(super::movies::parse_date_prefix);
                 }
             }
         }
@@ -1611,7 +1622,8 @@ async fn execute_rescan_series_distributed(
     let known_count = known_files.len();
 
     // Create and publish the scan request (series_ids and paths are 1:1 aligned)
-    let (job_id, message) = create_scan_request(valid_series_ids.clone(), paths.clone(), known_files);
+    let (job_id, message) =
+        create_scan_request(valid_series_ids.clone(), paths.clone(), known_files);
 
     tracing::info!(
         "Publishing scan request: job_id={}, series={:?}, paths={}, known_files={}",
@@ -2315,9 +2327,7 @@ async fn execute_season_search(
         );
         return Ok(format!(
             "Season search found {} releases for {} S{:02} but no missing episodes to grab",
-            total_releases,
-            series.title,
-            season_number
+            total_releases, series.title, season_number
         ));
     }
 
@@ -2396,11 +2406,7 @@ async fn execute_season_search(
                     );
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "SeasonSearch: failed to grab '{}': {}",
-                        release.title,
-                        e
-                    );
+                    tracing::warn!("SeasonSearch: failed to grab '{}': {}", release.title, e);
                 }
             }
             break; // Only grab the best matching release
@@ -2562,10 +2568,8 @@ async fn execute_movie_search(
 
     // Get active movie downloads to avoid duplicates
     let active_downloads = tracked_repo.get_all_active().await.unwrap_or_default();
-    let downloading_movie_ids: std::collections::HashSet<i64> = active_downloads
-        .iter()
-        .filter_map(|d| d.movie_id)
-        .collect();
+    let downloading_movie_ids: std::collections::HashSet<i64> =
+        active_downloads.iter().filter_map(|d| d.movie_id).collect();
 
     let mut total_releases = 0;
     let mut grabbed = 0u32;
@@ -2600,7 +2604,11 @@ async fn execute_movie_search(
         );
 
         let search_service = IndexerSearchService::new(enabled_indexers.clone());
-        let year = if movie.year > 0 { Some(movie.year) } else { None };
+        let year = if movie.year > 0 {
+            Some(movie.year)
+        } else {
+            None
+        };
         match search_service
             .movie_search(&movie.title, year, movie.imdb_id.as_deref())
             .await
@@ -2641,10 +2649,7 @@ async fn execute_movie_search(
                                 let is_quality_allowed = profile_items.iter().any(|item| {
                                     item.allowed
                                         && (item.quality.id == release_weight
-                                            || item
-                                                .items
-                                                .iter()
-                                                .any(|q| q.id == release_weight))
+                                            || item.items.iter().any(|q| q.id == release_weight))
                                 });
 
                                 if !is_quality_allowed {
@@ -2701,11 +2706,7 @@ async fn execute_movie_search(
                 }
             }
             Err(e) => {
-                tracing::error!(
-                    "MovieSearch: search failed for '{}': {}",
-                    movie.title,
-                    e
-                );
+                tracing::error!("MovieSearch: search failed for '{}': {}", movie.title, e);
             }
         }
     }
@@ -2847,7 +2848,11 @@ async fn execute_rescan_movie(
         .map_err(|e| format!("Failed to fetch movie: {}", e))?
         .ok_or_else(|| format!("Movie {} not found", movie_id))?;
 
-    tracing::info!("RescanMovie: scanning '{}' locally at {}", movie.title, movie.path);
+    tracing::info!(
+        "RescanMovie: scanning '{}' locally at {}",
+        movie.title,
+        movie.path
+    );
 
     let mut folder_path = movie.path.clone();
 
@@ -3036,7 +3041,7 @@ async fn execute_album_search(
     options: &CommandExecutionOptions,
 ) -> Result<String, String> {
     use crate::core::datastore::repositories::{
-        ArtistRepository, AlbumRepository, IndexerRepository,
+        AlbumRepository, ArtistRepository, IndexerRepository,
     };
     use crate::core::indexers::search::IndexerSearchService;
     use crate::core::queue::TrackedDownloadService;
@@ -3088,7 +3093,10 @@ async fn execute_album_search(
 
         // Use query-based search with music categories (3000 range)
         let music_cats = crate::core::indexers::search::get_music_categories();
-        match search_service.search_by_query_with_categories(&query, None, None, Some(music_cats)).await {
+        match search_service
+            .search_by_query_with_categories(&query, None, None, Some(music_cats))
+            .await
+        {
             Ok(releases) => {
                 tracing::info!(
                     "AlbumSearch: found {} releases for '{}'",
