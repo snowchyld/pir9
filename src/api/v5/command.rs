@@ -138,6 +138,7 @@ pub async fn create_command(
         let media_config = state.config.read().media.clone();
         let command_tokens = state.command_tokens.clone();
         let scan_result_consumer = state.scan_result_consumer.get().cloned();
+        let tracked = state.tracked.clone();
         let cmd_id = id;
         let cmd_name = name.to_string();
         let cmd_body = body.clone();
@@ -169,6 +170,7 @@ pub async fn create_command(
                 cancel_token: Some(token),
                 media_config: Some(media_config),
                 scan_result_consumer,
+                tracked: Some(tracked),
             };
             let result =
                 execute_command_with_options(&cmd_name, &cmd_body, &db, &event_bus, options).await;
@@ -315,6 +317,17 @@ pub struct CommandExecutionOptions {
     pub media_config: Option<crate::core::configuration::MediaConfig>,
     /// Scan result consumer for registering download imports (worker mode)
     pub scan_result_consumer: Option<std::sync::Arc<crate::core::scanner::ScanResultConsumer>>,
+    /// Tracked downloads stores for queue management
+    pub tracked: Option<std::sync::Arc<crate::core::queue::TrackedDownloads>>,
+}
+
+impl CommandExecutionOptions {
+    /// Get the tracked downloads store, falling back to an empty store.
+    pub fn tracked_downloads(&self) -> std::sync::Arc<crate::core::queue::TrackedDownloads> {
+        self.tracked.clone().unwrap_or_else(|| {
+            std::sync::Arc::new(crate::core::queue::TrackedDownloads::empty())
+        })
+    }
 }
 
 /// Execute a command with additional options (for distributed mode and IMDB metadata)
@@ -357,7 +370,7 @@ pub async fn execute_command_with_options(
             )
             .await
         }
-        "RssSync" => execute_rss_sync(body, db, event_bus).await,
+        "RssSync" => execute_rss_sync(body, db, event_bus, &options).await,
         "ApplicationCheckUpdate" => {
             tracing::info!("ApplicationCheckUpdate: no updates available (this is sonarr-rs)");
             Ok("No updates available".to_string())
@@ -389,17 +402,20 @@ pub async fn execute_command_with_options(
             .await
         }
         "RefreshMonitoredDownloads" => {
-            let service = crate::core::queue::TrackedDownloadService::new(db.clone());
+            let service = crate::core::queue::TrackedDownloadService::new(
+                db.clone(),
+                options.tracked_downloads(),
+            );
             match service.reconcile_downloads().await {
                 Ok(count) => Ok(format!("Reconciled {} downloads", count)),
                 Err(e) => Err(format!("Failed to reconcile downloads: {}", e)),
             }
         }
-        "EpisodeSearch" => execute_episode_search(body, db, event_bus).await,
-        "SeasonSearch" => execute_season_search(body, db, event_bus).await,
-        "SeriesSearch" => execute_series_search(body, db, event_bus).await,
-        "MovieSearch" => execute_movie_search(body, db).await,
-        "AlbumSearch" => execute_album_search(body, db).await,
+        "EpisodeSearch" => execute_episode_search(body, db, event_bus, &options).await,
+        "SeasonSearch" => execute_season_search(body, db, event_bus, &options).await,
+        "SeriesSearch" => execute_series_search(body, db, event_bus, &options).await,
+        "MovieSearch" => execute_movie_search(body, db, &options).await,
+        "AlbumSearch" => execute_album_search(body, db, &options).await,
         "MissingEpisodeSearch" => {
             tracing::info!("MissingEpisodeSearch: searching for missing episodes");
             // This would search indexers for all missing episodes
@@ -1781,6 +1797,7 @@ async fn execute_rss_sync(
     _body: &serde_json::Value,
     db: &crate::core::datastore::Database,
     _event_bus: &crate::core::messaging::EventBus,
+    _options: &CommandExecutionOptions,
 ) -> Result<String, String> {
     use crate::core::datastore::repositories::IndexerRepository;
     use crate::core::indexers::rss::RssSyncService;
@@ -1863,6 +1880,7 @@ async fn execute_episode_search(
     body: &serde_json::Value,
     db: &crate::core::datastore::Database,
     event_bus: &crate::core::messaging::EventBus,
+    options: &CommandExecutionOptions,
 ) -> Result<String, String> {
     use crate::core::datastore::repositories::{
         EpisodeRepository, IndexerRepository, QualityProfileRepository, SeriesRepository,
@@ -1921,7 +1939,7 @@ async fn execute_episode_search(
     let series_repo = SeriesRepository::new(db.clone());
     let quality_repo = QualityProfileRepository::new(db.clone());
     let tracked_repo = TrackedDownloadRepository::new(db.clone());
-    let tracked_service = TrackedDownloadService::new(db.clone());
+    let tracked_service = TrackedDownloadService::new(db.clone(), options.tracked_downloads());
 
     // Pre-load quality profiles for fast lookup
     let all_profiles = quality_repo.get_all().await.unwrap_or_default();
@@ -2164,6 +2182,7 @@ async fn execute_season_search(
     body: &serde_json::Value,
     db: &crate::core::datastore::Database,
     event_bus: &crate::core::messaging::EventBus,
+    options: &CommandExecutionOptions,
 ) -> Result<String, String> {
     use crate::core::datastore::repositories::{
         EpisodeRepository, IndexerRepository, QualityProfileRepository, SeriesRepository,
@@ -2322,7 +2341,7 @@ async fn execute_season_search(
                 .iter()
                 .all(|item| !item.allowed || item.quality.id == 0);
 
-        let tracked_service = TrackedDownloadService::new(db.clone());
+        let tracked_service = TrackedDownloadService::new(db.clone(), options.tracked_downloads());
 
         for mut release in releases {
             let release_weight = release.quality.quality.weight();
@@ -2407,8 +2426,9 @@ pub async fn execute_series_search_public(
     body: &serde_json::Value,
     db: &crate::core::datastore::Database,
     event_bus: &crate::core::messaging::EventBus,
+    options: &CommandExecutionOptions,
 ) -> Result<String, String> {
-    execute_series_search(body, db, event_bus).await
+    execute_series_search(body, db, event_bus, options).await
 }
 
 /// Execute SeriesSearch command - search indexers for all missing episodes in a series
@@ -2416,6 +2436,7 @@ async fn execute_series_search(
     body: &serde_json::Value,
     db: &crate::core::datastore::Database,
     event_bus: &crate::core::messaging::EventBus,
+    options: &CommandExecutionOptions,
 ) -> Result<String, String> {
     use crate::core::datastore::repositories::EpisodeRepository;
 
@@ -2474,13 +2495,14 @@ async fn execute_series_search(
 
     // Delegate to EpisodeSearch with the missing episode IDs
     let episode_body = serde_json::json!({ "episodeIds": missing_ids });
-    execute_episode_search(&episode_body, db, event_bus).await
+    execute_episode_search(&episode_body, db, event_bus, options).await
 }
 
 /// Execute MovieSearch command — search indexers for a movie and auto-grab best match
 async fn execute_movie_search(
     body: &serde_json::Value,
     db: &crate::core::datastore::Database,
+    options: &CommandExecutionOptions,
 ) -> Result<String, String> {
     use crate::core::datastore::repositories::{
         IndexerRepository, MovieRepository, QualityProfileRepository, TrackedDownloadRepository,
@@ -2532,7 +2554,7 @@ async fn execute_movie_search(
     let movie_repo = MovieRepository::new(db.clone());
     let quality_repo = QualityProfileRepository::new(db.clone());
     let tracked_repo = TrackedDownloadRepository::new(db.clone());
-    let tracked_service = TrackedDownloadService::new(db.clone());
+    let tracked_service = TrackedDownloadService::new(db.clone(), options.tracked_downloads());
 
     let all_profiles = quality_repo.get_all().await.unwrap_or_default();
     let profiles: std::collections::HashMap<i64, _> =
@@ -3011,6 +3033,7 @@ async fn execute_rescan_movie(
 async fn execute_album_search(
     body: &serde_json::Value,
     db: &crate::core::datastore::Database,
+    options: &CommandExecutionOptions,
 ) -> Result<String, String> {
     use crate::core::datastore::repositories::{
         ArtistRepository, AlbumRepository, IndexerRepository,
@@ -3051,7 +3074,7 @@ async fn execute_album_search(
         .map_err(|e| format!("Failed to fetch indexers: {}", e))?;
 
     let search_service = IndexerSearchService::new(indexers);
-    let tracked_service = TrackedDownloadService::new(db.clone());
+    let tracked_service = TrackedDownloadService::new(db.clone(), options.tracked_downloads());
     let mut grabbed = 0;
 
     for album_id in &album_ids {

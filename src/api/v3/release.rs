@@ -547,7 +547,7 @@ pub async fn create_release(
     };
 
     // Grab the release using TrackedDownloadService
-    let service = TrackedDownloadService::new(state.db.clone());
+    let service = TrackedDownloadService::new(state.db.clone(), state.tracked.clone());
     let content_type = if movie_id.is_some() { "movie" } else { "series" };
     match service.grab_release(&release, episode_ids.clone(), movie_id, content_type).await {
         Ok(tracked_id) => {

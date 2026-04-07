@@ -236,6 +236,8 @@ pub struct ScanResultConsumer {
     ws_event_bus: Option<EventBus>,
     pending_jobs: Arc<RwLock<PendingScanJobs>>,
     media_config: MediaConfig,
+    /// Tracked downloads stores for removing records after import
+    tracked: Option<Arc<crate::core::queue::TrackedDownloads>>,
 }
 
 impl ScanResultConsumer {
@@ -247,6 +249,7 @@ impl ScanResultConsumer {
             ws_event_bus: None,
             pending_jobs: Arc::new(RwLock::new(PendingScanJobs::default())),
             media_config: MediaConfig::default(),
+            tracked: None,
         }
     }
 
@@ -258,6 +261,11 @@ impl ScanResultConsumer {
     /// Set the WebSocket event bus for forwarding scan progress to frontend clients
     pub fn set_ws_event_bus(&mut self, bus: EventBus) {
         self.ws_event_bus = Some(bus);
+    }
+
+    /// Set the tracked downloads store for removing records after import
+    pub fn set_tracked(&mut self, tracked: Arc<crate::core::queue::TrackedDownloads>) {
+        self.tracked = Some(tracked);
     }
 
     /// Get info about currently running scan jobs (for the UI).
@@ -1890,31 +1898,15 @@ impl ScanResultConsumer {
             tracker.download_title, tracker.files_imported, tracker.episodes_linked
         );
 
-        // Mark the tracked download as Imported so it disappears from the queue.
-        // We never remove the download from the client — the user controls seeding.
+        // Remove the tracked download record after successful import.
+        // The download stays in the client (user controls seeding) — we just
+        // stop tracking it in pir9.  The history table already has the
+        // Grabbed/Imported events for the completed tab.
         if tracker.files_imported > 0 && tracker.download_client_id > 0 {
-            use crate::core::datastore::repositories::TrackedDownloadRepository;
-            use crate::core::queue::TrackedDownloadState;
-
-            let repo = TrackedDownloadRepository::new(self.db.clone());
-            if let Ok(Some(td)) = repo
-                .get_by_download_id(tracker.download_client_id, &tracker.download_id)
-                .await
-            {
-                if let Err(e) = repo
-                    .update_status(
-                        td.id,
-                        TrackedDownloadState::Imported as i32,
-                        "[]",
-                        None,
-                    )
-                    .await
-                {
-                    warn!(
-                        "Failed to mark tracked download as imported for '{}': {}",
-                        tracker.download_title, e
-                    );
-                }
+            if let Some(ref tracked) = self.tracked {
+                tracked
+                    .remove_by_download_id(tracker.download_client_id, &tracker.download_id)
+                    .await;
             }
         }
 

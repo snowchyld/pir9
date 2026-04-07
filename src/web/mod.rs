@@ -24,6 +24,7 @@ use crate::core::{
     messaging::{EventBus, HybridEventBus},
     metadata::MetadataService,
     musicbrainz::MusicBrainzClient,
+    queue::TrackedDownloads,
     scanner::ScanResultConsumer,
     scheduler::JobScheduler,
 };
@@ -48,6 +49,8 @@ pub struct AppState {
     pub command_tokens: dashmap::DashMap<i64, tokio_util::sync::CancellationToken>,
     /// Scan result consumer for registering download imports (set in server mode)
     pub scan_result_consumer: tokio::sync::OnceCell<Arc<ScanResultConsumer>>,
+    /// Per-content-type tracked download stores (JSONL-backed, in-memory)
+    pub tracked: Arc<TrackedDownloads>,
 }
 
 impl AppState {
@@ -56,6 +59,7 @@ impl AppState {
         config: AppConfig,
         db: Database,
         scheduler: JobScheduler,
+        tracked: Arc<TrackedDownloads>,
     ) -> anyhow::Result<Arc<Self>> {
         let imdb_client = ImdbClient::from_env();
         let musicbrainz_client = MusicBrainzClient::from_env();
@@ -73,6 +77,7 @@ impl AppState {
             hybrid_event_bus: None,
             command_tokens: dashmap::DashMap::new(),
             scan_result_consumer: tokio::sync::OnceCell::new(),
+            tracked,
         }))
     }
 
@@ -82,6 +87,7 @@ impl AppState {
         config: AppConfig,
         db: Database,
         scheduler: JobScheduler,
+        tracked: Arc<TrackedDownloads>,
         redis_url: &str,
     ) -> anyhow::Result<Arc<Self>> {
         use tracing::info;
@@ -115,6 +121,7 @@ impl AppState {
             hybrid_event_bus: Some(hybrid_bus),
             command_tokens: dashmap::DashMap::new(),
             scan_result_consumer: tokio::sync::OnceCell::new(),
+            tracked,
         }))
     }
 
@@ -124,6 +131,7 @@ impl AppState {
         _config: AppConfig,
         _db: Database,
         _scheduler: JobScheduler,
+        _tracked: Arc<TrackedDownloads>,
         _redis_url: &str,
     ) -> anyhow::Result<Arc<Self>> {
         anyhow::bail!("Redis support requires the 'redis-events' feature (enabled by default). Was this built with --no-default-features?")

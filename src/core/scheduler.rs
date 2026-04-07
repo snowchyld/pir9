@@ -32,6 +32,8 @@ pub struct JobScheduler {
     /// Scan result consumer for registering download imports (set after consumer creation)
     scan_result_consumer:
         Arc<tokio::sync::OnceCell<Arc<crate::core::scanner::ScanResultConsumer>>>,
+    /// Tracked downloads stores (set after load_or_migrate)
+    tracked: Arc<tokio::sync::OnceCell<Arc<crate::core::queue::TrackedDownloads>>>,
 }
 
 impl JobScheduler {
@@ -43,6 +45,7 @@ impl JobScheduler {
             media_config: None,
             hybrid_event_bus: Arc::new(tokio::sync::OnceCell::new()),
             scan_result_consumer: Arc::new(tokio::sync::OnceCell::new()),
+            tracked: Arc::new(tokio::sync::OnceCell::new()),
         })
     }
 
@@ -67,6 +70,11 @@ impl JobScheduler {
         consumer: Arc<crate::core::scanner::ScanResultConsumer>,
     ) {
         let _ = self.scan_result_consumer.set(consumer);
+    }
+
+    /// Set the tracked downloads store (late binding via OnceCell)
+    pub fn set_tracked(&self, tracked: Arc<crate::core::queue::TrackedDownloads>) {
+        let _ = self.tracked.set(tracked);
     }
 
     /// Initialize default scheduled jobs
@@ -167,6 +175,7 @@ impl JobScheduler {
                 let media_config = self.media_config.clone();
                 let hybrid_event_bus = self.hybrid_event_bus.clone();
                 let scan_result_consumer = self.scan_result_consumer.clone();
+                let tracked = self.tracked.clone();
                 tokio::spawn(async move {
                     run_job_loop(
                         job,
@@ -175,6 +184,7 @@ impl JobScheduler {
                         media_config,
                         hybrid_event_bus,
                         scan_result_consumer,
+                        tracked,
                     )
                     .await;
                 });
@@ -205,6 +215,7 @@ impl JobScheduler {
             self.media_config.as_ref(),
             self.hybrid_event_bus.get(),
             self.scan_result_consumer.get(),
+            self.tracked.get(),
         )
         .await?;
 
@@ -232,6 +243,7 @@ async fn run_job_loop(
     scan_result_consumer: Arc<
         tokio::sync::OnceCell<Arc<crate::core::scanner::ScanResultConsumer>>,
     >,
+    tracked: Arc<tokio::sync::OnceCell<Arc<crate::core::queue::TrackedDownloads>>>,
 ) {
     let interval = tokio::time::Duration::from_secs(job.interval_minutes as u64 * 60);
     let mut interval_timer = tokio::time::interval(interval);
@@ -251,6 +263,7 @@ async fn run_job_loop(
             media_config.as_ref(),
             hybrid_event_bus.get(),
             scan_result_consumer.get(),
+            tracked.get(),
         )
         .await
         {
@@ -267,10 +280,11 @@ async fn execute_job_command(
     media_config: Option<&crate::core::configuration::MediaConfig>,
     hybrid_event_bus: Option<&crate::core::messaging::HybridEventBus>,
     scan_result_consumer: Option<&Arc<crate::core::scanner::ScanResultConsumer>>,
+    tracked: Option<&Arc<crate::core::queue::TrackedDownloads>>,
 ) -> Result<()> {
     match command {
         JobCommand::RssSync => {
-            execute_rss_sync(db).await?;
+            execute_rss_sync(db, tracked).await?;
         }
         JobCommand::RefreshSeries => {
             execute_refresh_series(db, metadata_service).await?;
@@ -288,10 +302,10 @@ async fn execute_job_command(
             execute_backup(db).await?;
         }
         JobCommand::ProcessDownloadQueue => {
-            execute_process_download_queue(db).await?;
+            execute_process_download_queue(db, tracked).await?;
         }
         JobCommand::ReconcileDownloads => {
-            execute_reconcile_downloads(db).await?;
+            execute_reconcile_downloads(db, tracked).await?;
         }
         JobCommand::Custom { name, action: _ } => {
             info!("Executing custom job: {}", name);
@@ -307,7 +321,10 @@ async fn execute_job_command(
 // ============================================================================
 
 /// RSS Sync: Fetch RSS feeds from all enabled indexers and auto-grab wanted releases
-async fn execute_rss_sync(db: &Database) -> Result<()> {
+async fn execute_rss_sync(
+    db: &Database,
+    tracked: Option<&Arc<crate::core::queue::TrackedDownloads>>,
+) -> Result<()> {
     info!("Executing RSS sync...");
 
     // Get all enabled indexers
@@ -336,7 +353,10 @@ async fn execute_rss_sync(db: &Database) -> Result<()> {
     let episode_repo = EpisodeRepository::new(db.clone());
     let quality_repo = QualityProfileRepository::new(db.clone());
     let tracked_repo = TrackedDownloadRepository::new(db.clone());
-    let tracked_service = TrackedDownloadService::new(db.clone());
+    let tracked_store = tracked
+        .cloned()
+        .unwrap_or_else(|| Arc::new(crate::core::queue::TrackedDownloads::empty()));
+    let tracked_service = TrackedDownloadService::new(db.clone(), tracked_store);
 
     let all_series = series_repo.get_all().await?;
     let monitored_series: Vec<_> = all_series.into_iter().filter(|s| s.monitored).collect();
@@ -575,9 +595,14 @@ async fn execute_refresh_series(
 }
 
 /// Process Download Queue: Update tracked download statuses and trigger imports
-async fn execute_process_download_queue(db: &Database) -> Result<()> {
-    // Use TrackedDownloadService to process the queue
-    let service = crate::core::queue::TrackedDownloadService::new(db.clone());
+async fn execute_process_download_queue(
+    db: &Database,
+    tracked: Option<&Arc<crate::core::queue::TrackedDownloads>>,
+) -> Result<()> {
+    let tracked = tracked
+        .cloned()
+        .unwrap_or_else(|| Arc::new(crate::core::queue::TrackedDownloads::empty()));
+    let service = crate::core::queue::TrackedDownloadService::new(db.clone(), tracked);
 
     match service.process_queue().await {
         Ok(()) => {
@@ -593,8 +618,14 @@ async fn execute_process_download_queue(db: &Database) -> Result<()> {
 
 /// Reconcile Downloads: Discover externally-added downloads in download clients and match
 /// them to tracked series/movies so they appear in the activity queue
-async fn execute_reconcile_downloads(db: &Database) -> Result<()> {
-    let service = crate::core::queue::TrackedDownloadService::new(db.clone());
+async fn execute_reconcile_downloads(
+    db: &Database,
+    tracked: Option<&Arc<crate::core::queue::TrackedDownloads>>,
+) -> Result<()> {
+    let tracked = tracked
+        .cloned()
+        .unwrap_or_else(|| Arc::new(crate::core::queue::TrackedDownloads::empty()));
+    let service = crate::core::queue::TrackedDownloadService::new(db.clone(), tracked);
 
     match service.reconcile_downloads().await {
         Ok(count) => {

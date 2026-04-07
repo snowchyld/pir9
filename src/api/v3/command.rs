@@ -165,6 +165,7 @@ pub async fn create_command(
         let media_config = state.config.read().media.clone();
         let command_tokens = state.command_tokens.clone();
         let scan_result_consumer = state.scan_result_consumer.get().cloned();
+        let tracked = state.tracked.clone();
         let cmd_id = id;
         let cmd_name = name.to_string();
         let cmd_body = body.clone();
@@ -196,6 +197,7 @@ pub async fn create_command(
                 cancel_token: Some(token),
                 media_config: Some(media_config),
                 scan_result_consumer,
+                tracked: Some(tracked),
             };
             let result = crate::api::v5::command::execute_command_with_options(
                 &cmd_name, &cmd_body, &db, &event_bus, options,

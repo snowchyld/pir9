@@ -513,6 +513,7 @@ async fn add_series(
     let hybrid_bus = state.hybrid_event_bus.clone();
     let consumer = state.scan_result_consumer.get().cloned();
     let event_bus = state.event_bus.clone();
+    let tracked = state.tracked.clone();
     tokio::spawn(async move {
         if let Err(e) = crate::api::v5::series::auto_scan_series(
             id,
@@ -525,10 +526,15 @@ async fn add_series(
         if search_for_missing {
             tracing::info!("Auto-searching missing episodes for series {} (addOptions.searchForMissingEpisodes=true)", id);
             let search_body = serde_json::json!({"seriesId": id});
+            let search_options = crate::api::v5::command::CommandExecutionOptions {
+                tracked: Some(tracked.clone()),
+                ..Default::default()
+            };
             if let Err(e) = crate::api::v5::command::execute_series_search_public(
                 &search_body,
                 &db_clone,
                 &event_bus,
+                &search_options,
             ).await {
                 tracing::error!("Failed to auto-search series {}: {}", id, e);
             }

@@ -485,7 +485,7 @@ fn queue_item_to_resource(item: &crate::core::queue::QueueItem) -> QueueResource
 /// Fetch downloads from all enabled download clients.
 /// Combines tracked downloads (from database) with untracked downloads (direct from clients).
 async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<QueueResource> {
-    let service = TrackedDownloadService::new(state.db.clone());
+    let service = TrackedDownloadService::new(state.db.clone(), state.tracked.clone());
     let client_repo = DownloadClientRepository::new(state.db.clone());
     let series_repo = SeriesRepository::new(state.db.clone());
     let episode_repo = EpisodeRepository::new(state.db.clone());
@@ -1305,7 +1305,7 @@ async fn remove_queue_item(
     Path(id): Path<i64>,
     Query(query): Query<RemoveFromQueueQuery>,
 ) -> Json<QueueActionResponse> {
-    let service = TrackedDownloadService::new(state.db.clone());
+    let service = TrackedDownloadService::new(state.db.clone(), state.tracked.clone());
 
     if id < 10000 {
         if let Err(e) = service
@@ -1401,7 +1401,7 @@ async fn remove_from_queue(
     Query(query): Query<RemoveFromQueueQuery>,
 ) -> Json<QueueActionResponse> {
     // Bulk remove all from queue
-    let service = TrackedDownloadService::new(state.db.clone());
+    let service = TrackedDownloadService::new(state.db.clone(), state.tracked.clone());
     let downloads = fetch_all_downloads(&state, true).await;
 
     for download in &downloads {
@@ -1496,7 +1496,7 @@ async fn grab_release(
     }
 
     // Remove the old tracked download first
-    let service = TrackedDownloadService::new(state.db.clone());
+    let service = TrackedDownloadService::new(state.db.clone(), state.tracked.clone());
     let _ = service.remove(id, false, false).await;
 
     // Grab the best release (first in quality-sorted list)

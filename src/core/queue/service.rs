@@ -1,21 +1,22 @@
 //! Tracked download service
 //! Manages the relationship between pir9 downloads and external download clients
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use chrono::Utc;
 use tracing::{debug, error, info, warn};
 
-use crate::core::datastore::models::TrackedDownloadDbModel;
 use crate::core::datastore::repositories::{
     DownloadClientRepository, EpisodeRepository, MovieRepository, SeriesRepository,
-    TrackedDownloadRepository,
 };
 use crate::core::datastore::Database;
 use crate::core::download::clients::{create_client_from_model, DownloadOptions, DownloadState};
 use crate::core::indexers::ReleaseInfo;
-use crate::core::parser::{parse_title, title_matches_series};
 use crate::core::profiles::qualities::QualityModel;
 
+use super::stores::TrackedDownloads;
+use super::tracked::*;
 use super::{
     Protocol, QueueItem, QueueResult, QueueStatus, StatusMessage, TrackedDownloadState,
     TrackedDownloadStatus,
@@ -24,6 +25,7 @@ use super::{
 /// Service for managing tracked downloads
 pub struct TrackedDownloadService {
     db: Database,
+    tracked: Arc<TrackedDownloads>,
 }
 
 /// Result of attempting to download a torrent file: either raw bytes or a
@@ -41,8 +43,6 @@ enum TorrentDownload {
 fn torrent_bytes_to_magnet(data: &[u8], fallback_name: &str) -> Result<String> {
     use sha1::Digest;
 
-    // Find the `info` key in the top-level dictionary.
-    // Bencode format: d...4:infod...ee where `4:info` is the key.
     let info_key = b"4:info";
     let info_pos = data
         .windows(info_key.len())
@@ -51,26 +51,21 @@ fn torrent_bytes_to_magnet(data: &[u8], fallback_name: &str) -> Result<String> {
 
     let info_start = info_pos + info_key.len();
 
-    // The info value starts at info_start and must be a dictionary ('d').
     if data.get(info_start) != Some(&b'd') {
         anyhow::bail!("Torrent 'info' value is not a dictionary");
     }
 
-    // Walk the bencoded value to find its end.
     let info_end =
         bencode_value_end(data, info_start).context("Failed to parse bencoded info dictionary")?;
     let info_bytes = &data[info_start..info_end];
 
-    // SHA-1 hash the raw bencoded info dictionary
     let hash = sha1::Sha1::digest(info_bytes);
     let hex_hash = hex::encode_upper(hash);
 
-    // Try to extract the `name` field from the info dictionary for the display name.
     let name =
         extract_bencode_string(info_bytes, b"4:name").unwrap_or_else(|| fallback_name.to_string());
     let encoded_name = urlencoding::encode(&name);
 
-    // Try to extract trackers from the top-level `announce` field
     let mut magnet = format!("magnet:?xt=urn:btih:{}&dn={}", hex_hash, encoded_name);
     if let Some(tracker) = extract_bencode_string(data, b"8:announce") {
         magnet.push_str(&format!("&tr={}", urlencoding::encode(&tracker)));
@@ -85,31 +80,25 @@ fn bencode_value_end(data: &[u8], pos: usize) -> Option<usize> {
         return None;
     }
     match data[pos] {
-        // Integer: i<digits>e
         b'i' => {
             let end = data[pos..].iter().position(|&b| b == b'e')?;
             Some(pos + end + 1)
         }
-        // List: l<values>e
         b'l' => {
             let mut cursor = pos + 1;
             while cursor < data.len() && data[cursor] != b'e' {
                 cursor = bencode_value_end(data, cursor)?;
             }
-            Some(cursor + 1) // skip 'e'
+            Some(cursor + 1)
         }
-        // Dictionary: d<key><value>...e
         b'd' => {
             let mut cursor = pos + 1;
             while cursor < data.len() && data[cursor] != b'e' {
-                // key (always a string)
                 cursor = bencode_value_end(data, cursor)?;
-                // value
                 cursor = bencode_value_end(data, cursor)?;
             }
-            Some(cursor + 1) // skip 'e'
+            Some(cursor + 1)
         }
-        // String: <length>:<data>
         b'0'..=b'9' => {
             let colon = data[pos..].iter().position(|&b| b == b':')?;
             let len_str = std::str::from_utf8(&data[pos..pos + colon]).ok()?;
@@ -124,7 +113,6 @@ fn bencode_value_end(data: &[u8], pos: usize) -> Option<usize> {
 fn extract_bencode_string(data: &[u8], key: &[u8]) -> Option<String> {
     let pos = data.windows(key.len()).position(|w| w == key)?;
     let val_start = pos + key.len();
-    // The value should be a string: <len>:<data>
     if val_start >= data.len() || !data[val_start].is_ascii_digit() {
         return None;
     }
@@ -140,12 +128,13 @@ fn extract_bencode_string(data: &[u8], key: &[u8]) -> Option<String> {
 }
 
 impl TrackedDownloadService {
-    pub fn new(db: Database) -> Self {
-        Self { db }
+    pub fn new(db: Database, tracked: Arc<TrackedDownloads>) -> Self {
+        Self { db, tracked }
     }
 
-    /// Track a new download after sending to client
-    /// Returns the tracked download ID
+    /// Track a new download after sending to client.
+    /// Determines the content type and inserts into the appropriate store.
+    /// Returns the tracked download ID.
     pub async fn track_download(
         &self,
         download_id: String,
@@ -156,51 +145,53 @@ impl TrackedDownloadService {
         movie_id: Option<i64>,
         content_type: &str,
     ) -> Result<i64> {
-        let repo = TrackedDownloadRepository::new(self.db.clone());
-
-        // Determine protocol
-        let protocol = match release.protocol {
-            crate::core::indexers::Protocol::Usenet => 1,
-            crate::core::indexers::Protocol::Torrent => 2,
-            crate::core::indexers::Protocol::Unknown => 0,
-        };
-
-        // Serialize quality and languages
         let quality_json =
             serde_json::to_string(&release.quality).unwrap_or_else(|_| "{}".to_string());
-        let languages_json =
-            serde_json::to_string(&release.languages).unwrap_or_else(|_| "[]".to_string());
-        let episode_ids_json =
-            serde_json::to_string(&episode_ids).unwrap_or_else(|_| "[]".to_string());
+        let indexer = Some(release.indexer.clone());
+        let now = Utc::now();
 
-        let tracked = TrackedDownloadDbModel {
-            id: 0, // Will be set by database
-            download_id,
-            download_client_id,
-            series_id: release.series_id.unwrap_or(0),
-            episode_ids: episode_ids_json,
-            title: release.title.clone(),
-            indexer: Some(release.indexer.clone()),
-            size: release.size,
-            protocol,
-            quality: quality_json,
-            languages: languages_json,
-            status: TrackedDownloadState::Downloading as i32,
-            status_messages: "[]".to_string(),
-            error_message: None,
-            output_path: None,
-            is_upgrade,
-            added: Utc::now(),
-            movie_id,
-            artist_id: None,
-            audiobook_id: None,
-            content_type: content_type.to_string(),
+        macro_rules! make_td {
+            ($content:expr) => {
+                TrackedDownload {
+                    id: 0,
+                    download_id: download_id.clone(),
+                    client_id: download_client_id,
+                    content: $content,
+                    title: release.title.clone(),
+                    quality: quality_json.clone(),
+                    indexer: indexer.clone(),
+                    added: now,
+                    is_upgrade,
+                }
+            };
+        }
+
+        let id = match content_type {
+            "movie" => {
+                let movie_id = movie_id.context("movie_id required for movie content type")?;
+                self.tracked.movies.insert(make_td!(MovieRef { movie_id })).await?
+            }
+            "music" => {
+                let artist_id = release.series_id.unwrap_or(0);
+                self.tracked.music.insert(make_td!(MusicRef { artist_id })).await?
+            }
+            "audiobook" => {
+                let audiobook_id = release.series_id.unwrap_or(0);
+                self.tracked.audiobooks.insert(make_td!(AudiobookRef { audiobook_id })).await?
+            }
+            "podcast" => {
+                let podcast_id = release.series_id.unwrap_or(0);
+                self.tracked.podcasts.insert(make_td!(PodcastRef { podcast_id })).await?
+            }
+            _ => {
+                let series_id = release.series_id.unwrap_or(0);
+                self.tracked.series.insert(make_td!(SeriesRef { series_id, episode_ids })).await?
+            }
         };
 
-        let id = repo.insert(&tracked).await?;
         info!(
             "Tracked download created: id={}, title={}, content_type={}",
-            id, tracked.title, content_type
+            id, release.title, content_type
         );
 
         Ok(id)
@@ -211,19 +202,16 @@ impl TrackedDownloadService {
     /// downloads polled from each client (keyed by client_id), so callers can
     /// reuse them without hitting the download clients a second time.
     pub async fn get_queue(&self) -> Result<QueueResult> {
-        let repo = TrackedDownloadRepository::new(self.db.clone());
         let client_repo = DownloadClientRepository::new(self.db.clone());
-        let _series_repo = SeriesRepository::new(self.db.clone());
         let episode_repo = EpisodeRepository::new(self.db.clone());
 
-        // Get all active tracked downloads
-        let tracked = repo.get_all_active().await?;
+        // Get all tracked downloads from in-memory stores (type-erased)
+        let tracked = self.tracked.get_all_any().await;
 
         // Get all download clients for status lookup
         let clients = client_repo.get_all().await?;
 
         // Build client status map: (client_id, download_id) -> DownloadStatus
-        // Also collect raw downloads per client for the QueueResult
         let mut client_status_map = std::collections::HashMap::new();
         let mut client_name_map = std::collections::HashMap::new();
         let mut polled_clients = std::collections::HashSet::new();
@@ -270,29 +258,26 @@ impl TrackedDownloadService {
         let mut queue_items = Vec::new();
 
         for td in tracked {
-            // Parse stored JSON
-            let episode_ids: Vec<i64> = serde_json::from_str(&td.episode_ids).unwrap_or_default();
-            let quality: QualityModel = serde_json::from_str(&td.quality).unwrap_or_default();
-            let status_messages: Vec<StatusMessage> =
-                serde_json::from_str(&td.status_messages).unwrap_or_default();
+            let quality: QualityModel =
+                serde_json::from_str(&td.quality).unwrap_or_default();
 
             // Get live status from download client
             let live_status =
-                client_status_map.get(&(td.download_client_id, td.download_id.clone()));
+                client_status_map.get(&(td.client_id, td.download_id.clone()));
 
             // If the client was successfully polled but the download is gone,
-            // auto-remove the tracked record — there's nothing left to import.
-            if live_status.is_none() && polled_clients.contains(&td.download_client_id) {
+            // auto-remove the tracked record.
+            if live_status.is_none() && polled_clients.contains(&td.client_id) {
                 info!(
                     "Auto-removing tracked download {} '{}' — no longer in download client (client_id={})",
-                    td.id, td.title, td.download_client_id
+                    td.id, td.title, td.client_id
                 );
-                let _ = repo.delete(td.id).await;
+                self.tracked.remove_by_id(td.id).await;
                 continue;
             }
 
-            // Determine queue status and state
-            let (queue_status, tracked_state, size_left, timeleft, estimated_completion) =
+            // Determine queue status and state from live client data
+            let (queue_status, tracked_state, size, size_left, timeleft, estimated_completion, output_path, error_message) =
                 if let Some(live) = live_status {
                     let queue_status = match live.status {
                         DownloadState::Queued => QueueStatus::Queued,
@@ -305,22 +290,15 @@ impl TrackedDownloadService {
                         DownloadState::Warning => QueueStatus::Warning,
                     };
 
-                    // If the DB says "Importing" (user triggered import), preserve
-                    // that state — don't let the live client status override it.
-                    let db_state = TrackedDownloadState::from_i32(td.status);
-                    let tracked_state = if db_state == TrackedDownloadState::Importing {
-                        TrackedDownloadState::Importing
-                    } else {
-                        match live.status {
-                            DownloadState::Queued => TrackedDownloadState::Downloading,
-                            DownloadState::Downloading => TrackedDownloadState::Downloading,
-                            DownloadState::Stalled => TrackedDownloadState::Downloading,
-                            DownloadState::Paused => TrackedDownloadState::Downloading,
-                            DownloadState::Seeding => TrackedDownloadState::ImportPending,
-                            DownloadState::Completed => TrackedDownloadState::ImportPending,
-                            DownloadState::Failed => TrackedDownloadState::Failed,
-                            DownloadState::Warning => TrackedDownloadState::ImportBlocked,
-                        }
+                    let tracked_state = match live.status {
+                        DownloadState::Queued
+                        | DownloadState::Downloading
+                        | DownloadState::Stalled
+                        | DownloadState::Paused => TrackedDownloadState::Downloading,
+                        DownloadState::Seeding
+                        | DownloadState::Completed => TrackedDownloadState::ImportPending,
+                        DownloadState::Failed => TrackedDownloadState::Failed,
+                        DownloadState::Warning => TrackedDownloadState::ImportBlocked,
                     };
 
                     let timeleft = live.eta.map(|secs| {
@@ -337,48 +315,46 @@ impl TrackedDownloadService {
                     (
                         queue_status,
                         tracked_state,
+                        live.size,
                         live.size_left,
                         timeleft,
                         estimated,
+                        live.output_path.clone(),
+                        live.error_message.clone(),
                     )
                 } else {
-                    // Download not found in client - might be removed or client unavailable.
-                    // Infer size_left from the stored status: completed/import-pending means
-                    // nothing left to download, otherwise assume worst-case (full size).
-                    let stored_state = TrackedDownloadState::from_i32(td.status);
-                    let inferred_size_left = match stored_state {
-                        TrackedDownloadState::ImportPending
-                        | TrackedDownloadState::Imported => 0,
-                        _ => td.size,
-                    };
+                    // Download client unavailable — show with zero progress
                     (
                         QueueStatus::DownloadClientUnavailable,
-                        stored_state,
-                        inferred_size_left,
+                        TrackedDownloadState::Downloading,
+                        0i64,
+                        0i64,
+                        None,
+                        None,
                         None,
                         None,
                     )
                 };
 
-            // Get first episode info for display
-            let (resolved_episode_id, season_number, episode_numbers) = if !episode_ids.is_empty() {
-                if let Ok(Some(ep)) = episode_repo.get_by_id(episode_ids[0]).await {
-                    let mut ep_nums: Vec<i32> = vec![ep.episode_number];
-                    for &ep_id in episode_ids.iter().skip(1) {
-                        if let Ok(Some(other_ep)) = episode_repo.get_by_id(ep_id).await {
-                            ep_nums.push(other_ep.episode_number);
+            // Resolve episode info for series downloads
+            let (resolved_episode_id, season_number, episode_numbers) =
+                if !td.episode_ids.is_empty() {
+                    if let Ok(Some(ep)) = episode_repo.get_by_id(td.episode_ids[0]).await {
+                        let mut ep_nums: Vec<i32> = vec![ep.episode_number];
+                        for &ep_id in td.episode_ids.iter().skip(1) {
+                            if let Ok(Some(other_ep)) = episode_repo.get_by_id(ep_id).await {
+                                ep_nums.push(other_ep.episode_number);
+                            }
                         }
+                        (td.episode_ids[0], ep.season_number, ep_nums)
+                    } else {
+                        (0, 0, vec![])
                     }
-                    (episode_ids[0], ep.season_number, ep_nums)
-                } else {
-                    (0, 0, vec![])
-                }
-            } else {
-                // Fallback: parse title to extract episode info when episode_ids is empty
-                let mut fallback = (0i64, 0i32, vec![]);
-                if td.series_id > 0 {
+                } else if td.series_id > 0 {
+                    // Fallback: parse title to extract episode info
+                    use crate::core::parser::parse_title;
+                    let mut fallback = (0i64, 0i32, vec![]);
                     if let Some(info) = parse_title(&td.title) {
-                        // Standard S01E02 matching
                         if let Some(season) = info.season_number {
                             if !info.episode_numbers.is_empty() {
                                 let ep_num = info.episode_numbers[0];
@@ -390,7 +366,6 @@ impl TrackedDownloadService {
                                 }
                             }
                         }
-                        // Anime absolute episode matching
                         if fallback.0 == 0 && !info.absolute_episode_numbers.is_empty() {
                             let abs_num = info.absolute_episode_numbers[0];
                             if let Ok(Some(ep)) = episode_repo
@@ -401,15 +376,15 @@ impl TrackedDownloadService {
                             }
                         }
                     }
-                }
-                fallback
-            };
+                    fallback
+                } else {
+                    (0, 0, vec![])
+                };
 
-            // Check if ALL tracked episodes have files — for multi-episode/season
-            // packs, a single imported episode shouldn't hide the entire download
-            let episode_has_file = if !episode_ids.is_empty() {
+            // Check if ALL tracked episodes have files
+            let episode_has_file = if !td.episode_ids.is_empty() {
                 let mut all_have_files = true;
-                for &ep_id in &episode_ids {
+                for &ep_id in &td.episode_ids {
                     match episode_repo.get_by_id(ep_id).await {
                         Ok(Some(ep)) if ep.has_file => {}
                         _ => {
@@ -423,14 +398,19 @@ impl TrackedDownloadService {
                 false
             };
 
-            let protocol = match td.protocol {
-                1 => Protocol::Usenet,
-                2 => Protocol::Torrent,
-                _ => Protocol::Unknown,
-            };
+            // Determine protocol from client model
+            let protocol = clients
+                .iter()
+                .find(|c| c.id == td.client_id)
+                .map(|c| match c.protocol {
+                    1 => Protocol::Usenet,
+                    2 => Protocol::Torrent,
+                    _ => Protocol::Unknown,
+                })
+                .unwrap_or(Protocol::Unknown);
 
             let client_name = client_name_map
-                .get(&td.download_client_id)
+                .get(&td.client_id)
                 .cloned()
                 .unwrap_or_else(|| "Unknown".to_string());
 
@@ -451,18 +431,26 @@ impl TrackedDownloadService {
                 status: queue_status,
                 tracked_download_status: TrackedDownloadStatus::Ok,
                 tracked_download_state: tracked_state,
-                status_messages,
-                error_message: td.error_message,
+                status_messages: vec![],
+                error_message,
                 download_id: Some(td.download_id),
                 protocol,
                 download_client: client_name,
                 indexer: td.indexer.unwrap_or_default(),
-                output_path: td.output_path,
+                output_path,
                 episode_has_file,
-                movie_id: td.movie_id.unwrap_or(0),
-                artist_id: td.artist_id,
-                audiobook_id: td.audiobook_id,
-                size: td.size,
+                movie_id: td.movie_id,
+                artist_id: if td.artist_id > 0 {
+                    Some(td.artist_id)
+                } else {
+                    None
+                },
+                audiobook_id: if td.audiobook_id > 0 {
+                    Some(td.audiobook_id)
+                } else {
+                    None
+                },
+                size,
                 sizeleft: size_left,
                 timeleft,
                 estimated_completion_time: estimated_completion,
@@ -472,7 +460,7 @@ impl TrackedDownloadService {
                 leechers,
                 seed_count,
                 leech_count,
-                content_type: td.content_type,
+                content_type: td.content_type.to_string(),
             });
         }
 
@@ -482,30 +470,31 @@ impl TrackedDownloadService {
         })
     }
 
-    /// Process the download queue - update statuses and trigger imports
+    /// Process the download queue — poll clients, detect completions,
+    /// auto-clean imported downloads.
+    ///
+    /// Unlike the old DB-backed version, this does NOT persist status or
+    /// output_path — those are derived from live client polling. The only
+    /// mutation is deleting records that are confirmed imported.
     pub async fn process_queue(&self) -> Result<()> {
-        let repo = TrackedDownloadRepository::new(self.db.clone());
         let client_repo = DownloadClientRepository::new(self.db.clone());
 
-        // Get all active tracked downloads
-        let tracked = repo.get_all_active().await?;
+        let tracked = self.tracked.get_all_any().await;
         if tracked.is_empty() {
             return Ok(());
         }
 
         debug!("Processing {} tracked downloads", tracked.len());
 
-        // Get download clients
         let clients = client_repo.get_all().await?;
 
-        for td in tracked {
-            // Find the appropriate client
-            let client_model = match clients.iter().find(|c| c.id == td.download_client_id) {
+        for td in &tracked {
+            let client_model = match clients.iter().find(|c| c.id == td.client_id) {
                 Some(c) => c,
                 None => {
                     warn!(
                         "Download client {} not found for tracked download {}",
-                        td.download_client_id, td.id
+                        td.client_id, td.id
                     );
                     continue;
                 }
@@ -515,7 +504,6 @@ impl TrackedDownloadService {
                 continue;
             }
 
-            // Get client and check download status
             let client = match create_client_from_model(client_model) {
                 Ok(c) => c,
                 Err(e) => {
@@ -527,10 +515,6 @@ impl TrackedDownloadService {
             let live_status = match client.get_download(&td.download_id).await {
                 Ok(Some(status)) => status,
                 Ok(None) => {
-                    // Download not found in client — skip rather than delete.
-                    // The client may still be initializing (e.g. qBittorrent returns
-                    // empty results briefly after restart). The reconciliation job
-                    // and cleanup_imported_downloads() handle actual cleanup.
                     debug!(
                         "Download {} ('{}') not found in client {}, skipping",
                         td.download_id, td.title, client_model.name
@@ -543,66 +527,25 @@ impl TrackedDownloadService {
                 }
             };
 
-            // Update output path if available
-            if let Some(ref output_path) = live_status.output_path {
-                if td.output_path.as_deref() != Some(output_path) {
-                    repo.update_output_path(td.id, output_path).await?;
-                }
-            }
-
-            // Check for state transitions
-            let current_state = TrackedDownloadState::from_i32(td.status);
-
+            // Check for completion — if target media already imported, remove tracking
             match live_status.status {
                 DownloadState::Completed | DownloadState::Seeding => {
-                    if current_state == TrackedDownloadState::Downloading {
-                        info!("Download completed: {} ({})", td.title, td.download_id);
-
-                        // Check if the target already has files (imported via another
-                        // path like RescanSeries/RescanMovie or manual import). If so,
-                        // skip ImportPending entirely and remove the tracked record.
-                        let already_imported = self
-                            .check_already_imported(&td)
-                            .await;
-
-                        if already_imported {
-                            info!(
-                                "Download '{}' already imported, removing from tracking",
-                                td.title
-                            );
-                            let _ = repo.delete(td.id).await;
-                            continue;
-                        }
-
-                        // Update to ImportPending
-                        repo.update_status(
-                            td.id,
-                            TrackedDownloadState::ImportPending as i32,
-                            "[]",
-                            None,
-                        )
-                        .await?;
+                    let already_imported = self.check_already_imported(td).await;
+                    if already_imported {
+                        info!(
+                            "Download '{}' already imported, removing from tracking",
+                            td.title
+                        );
+                        self.tracked.remove_by_id(td.id).await;
                     }
                 }
                 DownloadState::Failed => {
-                    if current_state != TrackedDownloadState::Failed {
-                        error!(
-                            "Download failed: {} - {:?}",
-                            td.title, live_status.error_message
-                        );
-
-                        repo.update_status(
-                            td.id,
-                            TrackedDownloadState::Failed as i32,
-                            "[]",
-                            live_status.error_message.as_deref(),
-                        )
-                        .await?;
-                    }
+                    error!(
+                        "Download failed: {} - {:?}",
+                        td.title, live_status.error_message
+                    );
                 }
-                _ => {
-                    // Still downloading or queued - no action needed
-                }
+                _ => {}
             }
         }
 
@@ -615,79 +558,79 @@ impl TrackedDownloadService {
     }
 
     /// Check if the target movie/episode already has imported files.
-    ///
-    /// Returns true if the media is already in the library, meaning the tracked
-    /// download can be cleaned up without going through ImportPending.
-    async fn check_already_imported(&self, td: &TrackedDownloadDbModel) -> bool {
-        use crate::core::datastore::repositories::{MovieFileRepository, EpisodeRepository as EpRepo};
+    async fn check_already_imported(&self, td: &AnyTrackedDownload) -> bool {
+        use crate::core::datastore::repositories::{
+            EpisodeRepository as EpRepo, MovieFileRepository,
+        };
 
         // Movie check
-        if let Some(movie_id) = td.movie_id {
+        if td.movie_id > 0 {
             let movie_file_repo = MovieFileRepository::new(self.db.clone());
-            if let Ok(Some(_)) = movie_file_repo.get_by_movie_id(movie_id).await {
+            if let Ok(Some(_)) = movie_file_repo.get_by_movie_id(td.movie_id).await {
                 return true;
             }
         }
 
         // Episode check
-        if td.series_id > 0 {
-            let episode_ids: Vec<i64> =
-                serde_json::from_str(&td.episode_ids).unwrap_or_default();
-            if !episode_ids.is_empty() {
-                let ep_repo = EpRepo::new(self.db.clone());
-                for &ep_id in &episode_ids {
-                    match ep_repo.get_by_id(ep_id).await {
-                        Ok(Some(ep)) if ep.has_file => {}
-                        _ => return false,
-                    }
+        if td.series_id > 0 && !td.episode_ids.is_empty() {
+            let ep_repo = EpRepo::new(self.db.clone());
+            for &ep_id in &td.episode_ids {
+                match ep_repo.get_by_id(ep_id).await {
+                    Ok(Some(ep)) if ep.has_file => {}
+                    _ => return false,
                 }
-                return true;
             }
+            return true;
         }
 
         false
     }
 
     /// Auto-remove tracked downloads whose target media has been fully imported.
-    ///
-    /// For each completed/importPending tracked download, checks if the target
-    /// (movie or episode) already has an imported file with a stored hash. If the
-    /// source file at `output_path` still exists, computes its BLAKE3 hash and
-    /// compares with the stored destination hash. On match the tracked download
-    /// record is deleted from pir9's database — the torrent itself is **never**
-    /// removed from the download client (qBittorrent etc.).
     pub async fn cleanup_imported_downloads(&self) -> Result<usize> {
         use crate::core::datastore::repositories::{EpisodeFileRepository, MovieFileRepository};
 
-        let repo = TrackedDownloadRepository::new(self.db.clone());
         let episode_repo = EpisodeRepository::new(self.db.clone());
         let episode_file_repo = EpisodeFileRepository::new(self.db.clone());
         let movie_file_repo = MovieFileRepository::new(self.db.clone());
 
-        // Query only ImportPending (2) and Imported (4) records directly.
-        // Previously this used get_all_active() (status < 4) which could
-        // never return Imported records — making the Imported cleanup dead code.
-        let candidates = repo.get_import_candidates().await?;
+        // Get all tracked downloads across all stores
+        let all_tracked = self.tracked.get_all_any().await;
         let mut cleaned = 0usize;
 
-        for td in &candidates {
+        // Build download client status map for output_path lookups
+        let client_repo = DownloadClientRepository::new(self.db.clone());
+        let clients = client_repo.get_all().await?;
+        let mut output_paths: std::collections::HashMap<(i64, String), String> =
+            std::collections::HashMap::new();
 
-            // Need an output_path to locate the source file
-            let output_path = match td.output_path.as_deref() {
-                Some(p) if !p.is_empty() => p,
+        for client_model in clients.iter().filter(|c| c.enable) {
+            if let Ok(client) = create_client_from_model(client_model) {
+                if let Ok(downloads) = client.get_downloads().await {
+                    for dl in downloads {
+                        if let Some(ref path) = dl.output_path {
+                            output_paths
+                                .insert((client_model.id, dl.id.clone()), path.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        for td in &all_tracked {
+            // Get output_path from live client data
+            let output_path = match output_paths.get(&(td.client_id, td.download_id.clone())) {
+                Some(p) if !p.is_empty() => p.as_str(),
                 _ => continue,
             };
 
             // --- Movie path ---
-            if let Some(movie_id) = td.movie_id {
-                let dest_file = match movie_file_repo.get_by_movie_id(movie_id).await {
+            if td.movie_id > 0 {
+                let dest_file = match movie_file_repo.get_by_movie_id(td.movie_id).await {
                     Ok(Some(f)) => f,
                     _ => continue,
                 };
 
-                // Movie already has an imported file — try hash verification first,
-                // but fall back to has_file if hash is unavailable (pre-v0.21.0 imports
-                // or failed FFmpeg probes).
                 let dest_hash = dest_file
                     .file_hash
                     .as_deref()
@@ -695,7 +638,6 @@ impl TrackedDownloadService {
                     .map(|h| h.to_string());
 
                 if let Some(ref dest_hash) = dest_hash {
-                    // Hash available — try source verification
                     if let Some(source_file) = find_largest_video_file(output_path).await {
                         match crate::core::mediafiles::compute_file_hash(&source_file).await {
                             Ok(source_hash) if source_hash == *dest_hash => {
@@ -703,7 +645,7 @@ impl TrackedDownloadService {
                                     "Auto-clean: movie download '{}' verified (hash match), removing from tracking",
                                     td.title
                                 );
-                                let _ = repo.delete(td.id).await;
+                                self.tracked.remove_by_id(td.id).await;
                                 cleaned += 1;
                                 continue;
                             }
@@ -716,47 +658,36 @@ impl TrackedDownloadService {
                             }
                             Err(e) => {
                                 debug!(
-                                    "Auto-clean: could not hash source for '{}': {}, falling back to has_file check",
+                                    "Auto-clean: could not hash source for '{}': {}, falling back",
                                     td.title, e
                                 );
-                                // Fall through to has_file check below
                             }
                         }
                     }
-                    // Source file gone but dest hash exists — movie is imported, clean up
                     info!(
                         "Auto-clean: movie download '{}' — file imported (source gone or unreadable), removing from tracking",
                         td.title
                     );
-                    let _ = repo.delete(td.id).await;
+                    self.tracked.remove_by_id(td.id).await;
                     cleaned += 1;
                 } else {
-                    // No hash available but movie has a file — import succeeded, clean up
                     info!(
                         "Auto-clean: movie download '{}' — file exists in library (no hash to verify), removing from tracking",
                         td.title
                     );
-                    let _ = repo.delete(td.id).await;
+                    self.tracked.remove_by_id(td.id).await;
                     cleaned += 1;
                 }
                 continue;
             }
 
             // --- Series / Anime path ---
-            if td.series_id > 0 {
-                let episode_ids: Vec<i64> =
-                    serde_json::from_str(&td.episode_ids).unwrap_or_default();
-                if episode_ids.is_empty() {
-                    continue;
-                }
-
-                // Check all matched episodes have files — track hash availability
-                // separately so we can still clean up when hashes are missing.
+            if td.series_id > 0 && !td.episode_ids.is_empty() {
                 let mut all_have_files = true;
                 let mut all_have_hashes = true;
-                let mut single_ep_hash: Option<(i64, String)> = None; // (file_id, hash)
+                let mut single_ep_hash: Option<(i64, String)> = None;
 
-                for &ep_id in &episode_ids {
+                for &ep_id in &td.episode_ids {
                     let ep = match episode_repo.get_by_id(ep_id).await {
                         Ok(Some(e)) => e,
                         _ => {
@@ -776,12 +707,9 @@ impl TrackedDownloadService {
                                     .as_deref()
                                     .is_some_and(|h| !h.is_empty()) =>
                             {
-                                // Track hash for single-episode source verification
-                                if episode_ids.len() == 1 {
-                                    single_ep_hash = Some((
-                                        file_id,
-                                        ef.file_hash.unwrap().clone(),
-                                    ));
+                                if td.episode_ids.len() == 1 {
+                                    single_ep_hash =
+                                        Some((file_id, ef.file_hash.unwrap().clone()));
                                 }
                             }
                             _ => {
@@ -794,7 +722,6 @@ impl TrackedDownloadService {
                 }
 
                 if all_have_files && all_have_hashes {
-                    // All episodes have files with hashes — try source hash verification
                     if let Some((_, ref dest_hash)) = single_ep_hash {
                         if let Some(source_file) = find_largest_video_file(output_path).await {
                             match crate::core::mediafiles::compute_file_hash(&source_file).await {
@@ -803,7 +730,7 @@ impl TrackedDownloadService {
                                         "Auto-clean: episode download '{}' verified (hash match), removing from tracking",
                                         td.title
                                     );
-                                    let _ = repo.delete(td.id).await;
+                                    self.tracked.remove_by_id(td.id).await;
                                     cleaned += 1;
                                     continue;
                                 }
@@ -819,84 +746,93 @@ impl TrackedDownloadService {
                                         "Auto-clean: could not hash source for '{}': {}, falling back",
                                         td.title, e
                                     );
-                                    // Fall through to has_file cleanup
                                 }
                             }
                         }
                     } else {
-                        // Season pack: all episodes have verified files + hashes
                         info!(
                             "Auto-clean: season pack '{}' — all {} episodes imported (hash-verified), removing from tracking",
                             td.title,
-                            episode_ids.len()
+                            td.episode_ids.len()
                         );
-                        let _ = repo.delete(td.id).await;
+                        self.tracked.remove_by_id(td.id).await;
                         cleaned += 1;
                         continue;
                     }
                 }
 
-                // Fallback: all episodes have files but some/all lack hashes.
-                // has_file=true is sufficient evidence that the import succeeded.
                 if all_have_files {
                     info!(
                         "Auto-clean: download '{}' — all {} episodes have files (no hash to verify), removing from tracking",
                         td.title,
-                        episode_ids.len()
+                        td.episode_ids.len()
                     );
-                    let _ = repo.delete(td.id).await;
+                    self.tracked.remove_by_id(td.id).await;
                     cleaned += 1;
                 }
             }
         }
 
         if cleaned > 0 {
-            info!("Auto-clean: removed {} imported downloads from tracking", cleaned);
+            info!(
+                "Auto-clean: removed {} imported downloads from tracking",
+                cleaned
+            );
         }
         Ok(cleaned)
     }
 
     /// Remove a download from queue
     pub async fn remove(&self, id: i64, remove_from_client: bool, blocklist: bool) -> Result<()> {
-        let repo = TrackedDownloadRepository::new(self.db.clone());
         let client_repo = DownloadClientRepository::new(self.db.clone());
 
-        // Get the tracked download
-        let tracked = repo
-            .get_by_id(id)
-            .await?
+        // Find the tracked download across all stores
+        let td = self
+            .tracked
+            .find_by_id(id)
+            .await
             .context("Tracked download not found")?;
 
         // Remove from download client if requested
         if remove_from_client {
-            let client_model = client_repo.get_by_id(tracked.download_client_id).await?;
+            let client_model = client_repo.get_by_id(td.client_id).await?;
             if let Some(model) = client_model {
                 if let Ok(client) = create_client_from_model(&model) {
-                    if let Err(e) = client.remove(&tracked.download_id, true).await {
+                    if let Err(e) = client.remove(&td.download_id, true).await {
                         warn!("Failed to remove download from client: {}", e);
                     }
                 }
             }
         }
 
-        // Add to blocklist if requested
         if blocklist {
             // TODO: Add to blocklist table
-            info!("Would add to blocklist: {}", tracked.title);
+            info!("Would add to blocklist: {}", td.title);
         }
 
         if remove_from_client {
-            // Full removal: delete the tracking record entirely
-            repo.delete(id).await?;
-            info!("Removed tracked download: {} ({})", tracked.title, id);
+            // Full removal: delete tracking record
+            self.tracked.remove_by_id(id).await;
+            info!("Removed tracked download: {} ({})", td.title, id);
         } else {
-            // Soft removal: mark as Ignored so it appears on the Completed tab
-            // instead of vanishing. User can clear it from there.
-            repo.update_status(id, TrackedDownloadState::Ignored as i32, "[]", None)
-                .await?;
+            // Soft removal: add to suppressed list so it doesn't reappear
+            // as an untracked download
+            let suppressed = TrackedDownload {
+                id: 0,
+                download_id: td.download_id.clone(),
+                client_id: td.client_id,
+                content: SuppressedRef,
+                title: td.title.clone(),
+                quality: String::new(),
+                indexer: None,
+                added: Utc::now(),
+                is_upgrade: false,
+            };
+            let _ = self.tracked.suppressed.insert(suppressed).await;
+            self.tracked.remove_by_id(id).await;
             info!(
-                "Marked tracked download as ignored: {} ({})",
-                tracked.title, id
+                "Suppressed tracked download: {} ({})",
+                td.title, id
             );
         }
 
@@ -904,7 +840,6 @@ impl TrackedDownloadService {
     }
 
     /// Grab a release and send to download client.
-    /// Pass `movie_id` for movie releases to select the correct download category.
     pub async fn grab_release(
         &self,
         release: &ReleaseInfo,
@@ -914,7 +849,6 @@ impl TrackedDownloadService {
     ) -> Result<i64> {
         let client_repo = DownloadClientRepository::new(self.db.clone());
 
-        // Get enabled download clients for this protocol
         let clients = client_repo.get_all().await?;
 
         let protocol_num = match release.protocol {
@@ -923,22 +857,17 @@ impl TrackedDownloadService {
             crate::core::indexers::Protocol::Unknown => 0,
         };
 
-        // Find the best client for this protocol (highest priority = lowest number)
         let client_model = clients
             .iter()
             .filter(|c| c.enable && c.protocol == protocol_num)
             .min_by_key(|c| c.priority)
             .context("No enabled download client for this protocol")?;
 
-        // Create the download client
         let client = create_client_from_model(client_model)?;
 
-        // Read the category from client settings based on content type.
-        // Each content type has its own category key. Falls back to "category", then "sonarr".
         let settings = serde_json::from_str::<serde_json::Value>(&client_model.settings)
             .unwrap_or(serde_json::json!({}));
 
-        // Determine category key from content_type hint in release, or movie_id presence
         let category_key = if movie_id.is_some() {
             "movieCategory"
         } else if release.indexer == "music" {
@@ -961,11 +890,7 @@ impl TrackedDownloadService {
             tags: vec![],
         };
 
-        // Send to download client
-        // Prefer magnet links — they go directly to qBittorrent without needing
-        // the download client to reach the indexer/Prowlarr. Construct a magnet
-        // from info_hash if no explicit magnet_url is provided. Also check
-        // download_url itself — some indexers put the magnet URI there.
+        // Prefer magnet links
         let magnet = release
             .magnet_url
             .as_deref()
@@ -989,8 +914,6 @@ impl TrackedDownloadService {
             info!("Adding magnet to {}: {}", client_model.name, release.title);
             client.add_from_magnet(magnet, options).await?
         } else if let Some(ref url) = release.download_url {
-            // No magnet available — download the torrent file through pir9 and
-            // send bytes to the client so qBittorrent doesn't need to reach the indexer.
             if release.protocol == crate::core::indexers::Protocol::Torrent {
                 info!(
                     "Downloading torrent file for {}: {}",
@@ -1005,7 +928,6 @@ impl TrackedDownloadService {
                         client.add_from_magnet(&magnet, options).await?
                     }
                     TorrentDownload::File(bytes) => {
-                        // Convert .torrent → magnet so we always use magnets
                         let magnet = torrent_bytes_to_magnet(&bytes, &release.title)?;
                         info!(
                             "Adding magnet (from .torrent, {} bytes) to {}: {}",
@@ -1031,7 +953,7 @@ impl TrackedDownloadService {
                 client_model.id,
                 release,
                 episode_ids,
-                false, // TODO: Determine if upgrade
+                false,
                 movie_id,
                 content_type,
             )
@@ -1043,17 +965,12 @@ impl TrackedDownloadService {
     /// Reconcile untracked downloads from all clients.
     ///
     /// Scans every enabled download client, parses torrent/NZB names, matches
-    /// them to series and episodes in the database, and creates
-    /// `TrackedDownloadDbModel` entries so the downloads appear in the queue
-    /// with proper metadata and are excluded from Wanted/Missing.
-    ///
-    /// Returns the number of newly tracked downloads.
+    /// them to series and episodes in the database, and creates tracked download
+    /// entries so the downloads appear in the queue with proper metadata.
     pub async fn reconcile_downloads(&self) -> Result<usize> {
-        let repo = TrackedDownloadRepository::new(self.db.clone());
         let client_repo = DownloadClientRepository::new(self.db.clone());
         let series_repo = SeriesRepository::new(self.db.clone());
         let episode_repo = EpisodeRepository::new(self.db.clone());
-
         let movie_repo = MovieRepository::new(self.db.clone());
 
         let clients = client_repo.get_all().await?;
@@ -1062,18 +979,21 @@ impl TrackedDownloadService {
 
         let mut reconciled = 0usize;
 
-        // Purge tracked downloads with fake qbt-* UUIDs. These were created
-        // before the info_hash extraction fix and can never match a real torrent
-        // in qBittorrent. Deleting them lets the reconciliation below re-create
-        // them with the correct info_hash as download_id.
-        let active = repo.get_all_active().await?;
-        for td in active.iter().filter(|t| t.download_id.starts_with("qbt-")) {
+        // Purge tracked downloads with fake qbt-* UUIDs
+        let series_items = self.tracked.series.get_all().await;
+        for td in series_items
+            .iter()
+            .filter(|t| t.download_id.starts_with("qbt-"))
+        {
             info!(
                 "Purging stale tracked download with fake ID: {} ({})",
                 td.download_id, td.title
             );
-            repo.delete(td.id).await?;
+            self.tracked.series.remove(td.id).await;
         }
+
+        // Collect all known download IDs for dedup
+        let known_ids = self.tracked.all_download_ids().await;
 
         for client_model in clients.iter().filter(|c| c.enable) {
             let client = match create_client_from_model(client_model) {
@@ -1099,16 +1019,13 @@ impl TrackedDownloadService {
             };
 
             for dl in downloads {
-                // Skip if already tracked
-                if repo
-                    .get_by_download_id(client_model.id, &dl.id)
-                    .await?
-                    .is_some()
-                {
+                // Skip if already tracked (in any store, including suppressed)
+                if known_ids.contains(&(client_model.id, dl.id.clone())) {
                     continue;
                 }
 
                 // Parse the download name
+                use crate::core::parser::{parse_title, title_matches_series};
                 let parsed = match parse_title(&dl.name) {
                     Some(info) => info,
                     None => {
@@ -1123,11 +1040,8 @@ impl TrackedDownloadService {
                         || title_matches_series(&parsed, &s.clean_title)
                 });
 
-                // Serialize quality/languages (shared by both series and movie paths)
                 let quality_json =
                     serde_json::to_string(&parsed.quality).unwrap_or_else(|_| "{}".to_string());
-                let languages_json =
-                    serde_json::to_string(&parsed.languages).unwrap_or_else(|_| "[]".to_string());
 
                 if let Some(series) = matched_series {
                     // --- Series match path ---
@@ -1151,34 +1065,22 @@ impl TrackedDownloadService {
                         continue;
                     }
 
-                    let episode_ids_json =
-                        serde_json::to_string(&episode_ids).unwrap_or_else(|_| "[]".to_string());
-
-                    let tracked = TrackedDownloadDbModel {
+                    let td = TrackedDownload {
                         id: 0,
                         download_id: dl.id.clone(),
-                        download_client_id: client_model.id,
-                        series_id: series.id,
-                        episode_ids: episode_ids_json,
+                        client_id: client_model.id,
+                        content: SeriesRef {
+                            series_id: series.id,
+                            episode_ids: episode_ids.clone(),
+                        },
                         title: dl.name.clone(),
-                        indexer: None,
-                        size: dl.size,
-                        protocol: client_model.protocol,
                         quality: quality_json,
-                        languages: languages_json,
-                        status: TrackedDownloadState::Downloading as i32,
-                        status_messages: "[]".to_string(),
-                        error_message: None,
-                        output_path: dl.output_path.clone(),
-                        is_upgrade: false,
+                        indexer: None,
                         added: Utc::now(),
-                        movie_id: None,
-                        artist_id: None,
-                        audiobook_id: None,
-                        content_type: if series.series_type == 2 { "anime".to_string() } else { "series".to_string() },
+                        is_upgrade: false,
                     };
 
-                    match repo.insert(&tracked).await {
+                    match self.tracked.series.insert(td).await {
                         Ok(id) => {
                             info!(
                                 "Reconciled download: id={}, '{}' → {} S{:02}E{} (episodes: {:?})",
@@ -1208,8 +1110,6 @@ impl TrackedDownloadService {
                     use crate::core::parser::normalize_title;
                     let name_normalized = normalize_title(&dl.name);
 
-                    // Use longest matching title to avoid "The Avengers"
-                    // matching before "The Avengers Age of Ultron"
                     let matched_movie = all_movies
                         .iter()
                         .filter(|m| {
@@ -1218,54 +1118,41 @@ impl TrackedDownloadService {
                         })
                         .max_by_key(|m| normalize_title(&m.clean_title).len());
 
-                    match matched_movie {
-                        Some(movie) => {
-                            let tracked = TrackedDownloadDbModel {
-                                id: 0,
-                                download_id: dl.id.clone(),
-                                download_client_id: client_model.id,
-                                series_id: 0,
-                                episode_ids: "[]".to_string(),
-                                title: dl.name.clone(),
-                                indexer: None,
-                                size: dl.size,
-                                protocol: client_model.protocol,
-                                quality: quality_json,
-                                languages: languages_json,
-                                status: TrackedDownloadState::Downloading as i32,
-                                status_messages: "[]".to_string(),
-                                error_message: None,
-                                output_path: dl.output_path.clone(),
-                                is_upgrade: false,
-                                added: Utc::now(),
-                                movie_id: Some(movie.id),
-                                artist_id: None,
-                                audiobook_id: None,
-                                content_type: "movie".to_string(),
-                            };
+                    if let Some(movie) = matched_movie {
+                        let td = TrackedDownload {
+                            id: 0,
+                            download_id: dl.id.clone(),
+                            client_id: client_model.id,
+                            content: MovieRef {
+                                movie_id: movie.id,
+                            },
+                            title: dl.name.clone(),
+                            quality: quality_json,
+                            indexer: None,
+                            added: Utc::now(),
+                            is_upgrade: false,
+                        };
 
-                            match repo.insert(&tracked).await {
-                                Ok(id) => {
-                                    info!(
-                                        "Reconciled movie download: id={}, '{}' → {}",
-                                        id, dl.name, movie.title,
-                                    );
-                                    reconciled += 1;
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        "Reconcile: failed to insert tracked download for '{}': {}",
-                                        dl.name, e
-                                    );
-                                }
+                        match self.tracked.movies.insert(td).await {
+                            Ok(id) => {
+                                info!(
+                                    "Reconciled movie download: id={}, '{}' → {}",
+                                    id, dl.name, movie.title,
+                                );
+                                reconciled += 1;
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Reconcile: failed to insert tracked download for '{}': {}",
+                                    dl.name, e
+                                );
                             }
                         }
-                        None => {
-                            debug!(
-                                "Reconcile: no series or movie match for '{}'",
-                                dl.name
-                            );
-                        }
+                    } else {
+                        debug!(
+                            "Reconcile: no series or movie match for '{}'",
+                            dl.name
+                        );
                     }
                 }
             }
@@ -1273,7 +1160,6 @@ impl TrackedDownloadService {
 
         info!("Reconcile downloads complete: {} newly tracked", reconciled);
 
-        // Auto-clean tracked downloads that have already been imported
         if let Err(e) = self.cleanup_imported_downloads().await {
             warn!("Reconcile: auto-clean failed: {}", e);
         }
@@ -1282,8 +1168,6 @@ impl TrackedDownloadService {
     }
 
     /// Download a torrent file from a URL, manually following redirects with logging.
-    /// If a redirect leads to a `magnet:` URI, returns `TorrentDownload::Magnet`
-    /// instead of trying to HTTP GET the magnet.
     async fn download_torrent_file(url: &str) -> Result<TorrentDownload> {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
@@ -1313,7 +1197,6 @@ impl TrackedDownloadService {
                         &loc[..loc.len().min(200)]
                     );
 
-                    // Magnet redirect — return it directly, don't try to HTTP GET it
                     if loc.starts_with("magnet:") {
                         info!("Redirect resolved to magnet URI");
                         return Ok(TorrentDownload::Magnet(loc.to_string()));
@@ -1390,8 +1273,6 @@ impl TrackedDownloadState {
 }
 
 /// Find the largest video file at a path (file or directory, max depth 2).
-/// Returns `None` if the path doesn't exist or contains no video files.
-/// Uses `spawn_blocking` since this is filesystem I/O (may be NFS-mounted).
 async fn find_largest_video_file(path: &str) -> Option<std::path::PathBuf> {
     use crate::core::scanner::is_video_file;
     let path = std::path::PathBuf::from(path);
@@ -1401,7 +1282,6 @@ async fn find_largest_video_file(path: &str) -> Option<std::path::PathBuf> {
             return None;
         }
 
-        // Single file: return it if it's a video
         if path.is_file() {
             return if is_video_file(&path) {
                 Some(path)
@@ -1410,7 +1290,6 @@ async fn find_largest_video_file(path: &str) -> Option<std::path::PathBuf> {
             };
         }
 
-        // Directory: walk up to depth 2, return largest video file
         let mut best: Option<(std::path::PathBuf, u64)> = None;
 
         fn walk(

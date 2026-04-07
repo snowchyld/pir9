@@ -225,7 +225,7 @@ fn queue_item_to_resource(
 /// Fetch downloads from all enabled download clients
 /// Combines tracked downloads (from database) with untracked downloads (direct from clients)
 async fn fetch_all_downloads(state: &AppState, include_unknown: bool) -> Vec<QueueResource> {
-    let service = TrackedDownloadService::new(state.db.clone());
+    let service = TrackedDownloadService::new(state.db.clone(), state.tracked.clone());
     let client_repo = DownloadClientRepository::new(state.db.clone());
     let series_repo = SeriesRepository::new(state.db.clone());
     let episode_repo = EpisodeRepository::new(state.db.clone());
@@ -545,7 +545,7 @@ pub async fn delete_queue_item(
     Path(id): Path<i32>,
     Query(query): Query<DeleteQueueQuery>,
 ) -> Json<serde_json::Value> {
-    let service = TrackedDownloadService::new(state.db.clone());
+    let service = TrackedDownloadService::new(state.db.clone(), state.tracked.clone());
     let _tracked_repo = TrackedDownloadRepository::new(state.db.clone());
 
     // Check if this is a tracked download (ID < 10000)
@@ -608,7 +608,7 @@ pub async fn delete_queue_bulk(
     State(state): State<Arc<AppState>>,
     Json(body): Json<BulkDeleteRequest>,
 ) -> Json<serde_json::Value> {
-    let service = TrackedDownloadService::new(state.db.clone());
+    let service = TrackedDownloadService::new(state.db.clone(), state.tracked.clone());
 
     for id in &body.ids {
         // Check if this is a tracked download (ID < 10000)

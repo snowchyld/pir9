@@ -3,8 +3,17 @@
 //! Manages pending and active downloads
 
 pub mod service;
+pub mod store;
+pub mod stores;
+pub mod tracked;
 
 pub use service::TrackedDownloadService;
+pub use stores::TrackedDownloads;
+
+/// IDs below this threshold are tracked downloads (persisted in JSONL stores).
+/// IDs at or above this threshold are untracked downloads synthesized from
+/// live download client polling.
+pub const UNTRACKED_ID_BASE: i64 = 1_000_000;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

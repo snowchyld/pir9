@@ -166,22 +166,6 @@ async fn run_server_mode(args: &Args) -> Result<()> {
         }
     }
 
-    // Log tracked download count — don't process yet.
-    // Download clients (qBittorrent etc.) may still be initializing and return
-    // empty results, which would cause process_queue() to delete all tracked
-    // records. The first scheduled ProcessDownloadQueue (1 min) handles it.
-    {
-        use crate::core::datastore::repositories::TrackedDownloadRepository;
-        let repo = TrackedDownloadRepository::new(database.clone());
-        match repo.get_all_active().await {
-            Ok(active) => info!(
-                "Startup: {} active tracked downloads in database",
-                active.len()
-            ),
-            Err(e) => warn!("Startup: failed to check tracked downloads: {}", e),
-        }
-    }
-
     // Initialize job scheduler with metadata service for IMDB-enriched refreshes
     let mut scheduler =
         JobScheduler::new(database.clone()).context("Failed to initialize job scheduler")?;
@@ -195,6 +179,13 @@ async fn run_server_mode(args: &Args) -> Result<()> {
         scheduler.set_media_config(config.media.clone());
     }
 
+    // Load tracked downloads from JSONL files (or migrate from DB on first run)
+    let tracked = crate::core::queue::TrackedDownloads::load_or_migrate(
+        &config.paths.data_dir,
+        &database,
+    )
+    .await?;
+
     // Create application state (with Redis event bus if in server mode)
     let state = if args.mode == RunMode::Server {
         let redis_url = args
@@ -202,15 +193,23 @@ async fn run_server_mode(args: &Args) -> Result<()> {
             .as_ref()
             .expect("Redis URL validated in args.validate()");
         info!("Initializing distributed scanning mode with Redis");
-        let state =
-            AppState::new_with_redis(config.clone(), database.clone(), scheduler, redis_url)
-                .await?;
+        let state = AppState::new_with_redis(
+            config.clone(),
+            database.clone(),
+            scheduler,
+            tracked,
+            redis_url,
+        )
+        .await?;
         info!("Distributed scanning enabled - file scans will be delegated to workers");
         state
     } else {
         info!("Running in standalone mode - file scans will be performed locally");
-        AppState::new(config.clone(), database.clone(), scheduler)?
+        AppState::new(config.clone(), database.clone(), scheduler, tracked)?
     };
+
+    // Wire scheduler with tracked downloads store
+    state.scheduler.set_tracked(state.tracked.clone());
 
     // Start notification service event listener
     {
@@ -269,6 +268,7 @@ async fn run_server_mode(args: &Args) -> Result<()> {
                 hybrid_bus.clone(),
             );
             consumer_inner.set_media_config(media_config);
+            consumer_inner.set_tracked(state.tracked.clone());
             // Bridge scan progress to WebSocket event bus so frontend gets real-time updates
             consumer_inner.set_ws_event_bus(state.event_bus.clone());
             let consumer = std::sync::Arc::new(consumer_inner);
