@@ -294,6 +294,20 @@ export function useQueueQuery() {
 }
 
 /**
+ * Create a query for a specific content type queue
+ */
+export function useContentQueueQuery(contentType: string) {
+  return createQuery({
+    queryKey: ['/queue', contentType],
+    queryFn: () =>
+      http.get<import('./http').QueueResponse>(`/queue/${contentType}`, {
+        params: { pageSize: 10000 },
+      }),
+    refetchInterval: 5000,
+  });
+}
+
+/**
  * Create a query for system status
  */
 export function useSystemStatusQuery() {

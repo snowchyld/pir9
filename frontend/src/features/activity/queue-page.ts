@@ -4,7 +4,12 @@
 
 import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { http, type QueueItem, type QueueResponse } from '../../core/http';
-import { createMutation, invalidateQueries, useQueueQuery } from '../../core/query';
+import {
+  createMutation,
+  invalidateQueries,
+  useContentQueueQuery,
+  useQueueQuery,
+} from '../../core/query';
 import { navigate } from '../../router';
 import { showError, showSuccess } from '../../stores/app.store';
 import type { QueueMatchDialog } from './queue-match-dialog';
@@ -37,6 +42,13 @@ let savedActiveTab: ContentTab = 'all';
 @customElement('queue-page')
 export class QueuePage extends BaseComponent {
   private queueQuery = useQueueQuery();
+  // Per-content queries — used when a specific tab is active
+  private seriesQuery = useContentQueueQuery('series');
+  private moviesQuery = useContentQueueQuery('movies');
+  private animeQuery = useContentQueueQuery('anime');
+  private musicQuery = useContentQueueQuery('music');
+  private audiobooksQuery = useContentQueueQuery('audiobooks');
+  private podcastsQuery = useContentQueueQuery('podcasts');
   private sortKey: QueueSortKey = savedSortKey;
   private sortDirection: 'asc' | 'desc' = savedSortDirection;
   private activeTab: ContentTab = savedActiveTab;
@@ -85,6 +97,13 @@ export class QueuePage extends BaseComponent {
     this.watch(this.queueQuery.data);
     this.watch(this.queueQuery.isLoading);
     this.watch(this.queueQuery.isError);
+    // Watch per-content query data so tab content updates on poll
+    this.watch(this.seriesQuery.data);
+    this.watch(this.moviesQuery.data);
+    this.watch(this.animeQuery.data);
+    this.watch(this.musicQuery.data);
+    this.watch(this.audiobooksQuery.data);
+    this.watch(this.podcastsQuery.data);
   }
 
   // Suppress re-renders while the match dialog is open so the 5s poll
@@ -101,17 +120,17 @@ export class QueuePage extends BaseComponent {
     const isLoading = this.queueQuery.isLoading.value;
     const isError = this.queueQuery.isError.value;
 
-    // Count per content type
-    const showsCount = allItems.filter((i) => this.isShow(i)).length;
-    const moviesCount = allItems.filter((i) => this.isMovie(i)).length;
-    const animeCount = allItems.filter((i) => i.contentType === 'anime').length;
-    const musicCount = allItems.filter((i) => i.contentType === 'music').length;
-    const audiobooksCount = allItems.filter((i) => i.contentType === 'audiobook').length;
-    const podcastsCount = allItems.filter((i) => i.contentType === 'podcast').length;
+    // Get per-content counts from dedicated endpoints (more accurate than client-side filtering)
+    const showsCount = (this.seriesQuery.data.value as QueueResponse | undefined)?.totalRecords ?? allItems.filter((i) => this.isShow(i)).length;
+    const moviesCount = (this.moviesQuery.data.value as QueueResponse | undefined)?.totalRecords ?? allItems.filter((i) => this.isMovie(i)).length;
+    const animeCount = (this.animeQuery.data.value as QueueResponse | undefined)?.totalRecords ?? allItems.filter((i) => i.contentType === 'anime').length;
+    const musicCount = (this.musicQuery.data.value as QueueResponse | undefined)?.totalRecords ?? allItems.filter((i) => i.contentType === 'music').length;
+    const audiobooksCount = (this.audiobooksQuery.data.value as QueueResponse | undefined)?.totalRecords ?? allItems.filter((i) => i.contentType === 'audiobook').length;
+    const podcastsCount = (this.podcastsQuery.data.value as QueueResponse | undefined)?.totalRecords ?? allItems.filter((i) => i.contentType === 'podcast').length;
     const completedCount = completedItems.length;
 
-    // Filter by active tab
-    const items = this.activeTab === 'completed' ? completedItems : this.filterByTab(allItems);
+    // Use per-content endpoint data when a specific tab is active
+    const items = this.getTabItems(allItems, completedItems);
 
     return html`
       <div class="queue-page">
@@ -1030,6 +1049,40 @@ export class QueuePage extends BaseComponent {
     if (ct === 'series') return true;
     // Legacy fallback: if no content type, check for series match
     return item.seriesId != null && item.seriesId > 0;
+  }
+
+  /** Get items for the active tab — uses per-content endpoint data when available */
+  private getTabItems(allItems: QueueItem[], completedItems: QueueItem[]): QueueItem[] {
+    switch (this.activeTab) {
+      case 'completed':
+        return completedItems;
+      case 'shows': {
+        const r = this.seriesQuery.data.value as QueueResponse | undefined;
+        return r?.records ?? allItems.filter((i) => this.isShow(i));
+      }
+      case 'movies': {
+        const r = this.moviesQuery.data.value as QueueResponse | undefined;
+        return r?.records ?? allItems.filter((i) => this.isMovie(i));
+      }
+      case 'anime': {
+        const r = this.animeQuery.data.value as QueueResponse | undefined;
+        return r?.records ?? allItems.filter((i) => i.contentType === 'anime');
+      }
+      case 'music': {
+        const r = this.musicQuery.data.value as QueueResponse | undefined;
+        return r?.records ?? allItems.filter((i) => i.contentType === 'music');
+      }
+      case 'audiobooks': {
+        const r = this.audiobooksQuery.data.value as QueueResponse | undefined;
+        return r?.records ?? allItems.filter((i) => i.contentType === 'audiobook');
+      }
+      case 'podcasts': {
+        const r = this.podcastsQuery.data.value as QueueResponse | undefined;
+        return r?.records ?? allItems.filter((i) => i.contentType === 'podcast');
+      }
+      default:
+        return allItems;
+    }
   }
 
   private filterByTab(items: QueueItem[]): QueueItem[] {

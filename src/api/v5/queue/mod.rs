@@ -1,6 +1,7 @@
 //! Queue API endpoints (v5)
 
 mod common;
+mod content_endpoints;
 mod fetch;
 mod files;
 mod grab;
@@ -59,4 +60,11 @@ pub fn routes() -> Router<Arc<AppState>> {
             axum::routing::put(match_handler::update_match),
         )
         .route("/{id}/files", get(files::get_queue_files))
+        // Per-content-type endpoints
+        .route("/series", get(content_endpoints::list_series_queue))
+        .route("/movies", get(content_endpoints::list_movies_queue))
+        .route("/anime", get(content_endpoints::list_anime_queue))
+        .route("/music", get(content_endpoints::list_music_queue))
+        .route("/audiobooks", get(content_endpoints::list_audiobooks_queue))
+        .route("/podcasts", get(content_endpoints::list_podcasts_queue))
 }
