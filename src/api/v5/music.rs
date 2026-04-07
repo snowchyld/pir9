@@ -741,6 +741,7 @@ async fn upsert_albums_from_musicbrainz(
             }
         } else {
             // Insert new album
+            let slug = generate_slug(&clean);
             let db_album = AlbumDbModel {
                 id: 0,
                 artist_id,
@@ -755,6 +756,7 @@ async fn upsert_albums_from_musicbrainz(
                 monitored: should_monitor,
                 added: Utc::now(),
                 last_info_sync: Some(Utc::now()),
+                title_slug: slug,
             };
 
             if let Err(e) = album_repo.insert(&db_album).await {
@@ -1219,15 +1221,27 @@ async fn bulk_load_album_stats(
 /// Get a single album by ID (enriched with MusicBrainz metadata)
 async fn get_album(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
+    Path(id_or_slug): Path<String>,
 ) -> Result<Json<AlbumResponse>, ApiError> {
     let repo = AlbumRepository::new(state.db.clone());
 
-    let album = repo
-        .get_by_id(id)
+    // Try numeric id first, then slug lookup (needs artist context from query)
+    let album = if let Ok(id) = id_or_slug.parse::<i64>() {
+        repo.get_by_id(id).await
+            .map_err(|e| ApiError::Internal(format!("Failed to fetch album: {}", e)))?
+            .ok_or(ApiError::NotFound)?
+    } else {
+        // Slug lookup — search all albums for this slug
+        let all = sqlx::query_as::<_, AlbumDbModel>(
+            "SELECT * FROM albums WHERE title_slug = $1 LIMIT 1",
+        )
+        .bind(&id_or_slug)
+        .fetch_optional(state.db.pool())
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch album: {}", e)))?
         .ok_or(ApiError::NotFound)?;
+        all
+    };
 
     let mut response = AlbumResponse::from(album);
     enrich_album_response(&mut response, &state.db).await;
@@ -1870,6 +1884,7 @@ pub struct AlbumResponse {
     pub artist_id: i64,
     pub title: String,
     pub clean_title: String,
+    pub title_slug: String,
     pub album_type: String,
     pub secondary_types: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1904,7 +1919,12 @@ impl From<AlbumDbModel> for AlbumResponse {
             id: a.id,
             artist_id: a.artist_id,
             title: a.title,
-            clean_title: a.clean_title,
+            clean_title: a.clean_title.clone(),
+            title_slug: if a.title_slug.is_empty() {
+                generate_slug(&a.clean_title)
+            } else {
+                a.title_slug
+            },
             album_type: a.album_type,
             secondary_types,
             release_date: a.release_date.map(|d| d.to_string()),
@@ -2081,7 +2101,9 @@ const ARTIST_IMAGE_CACHE_DAYS: u64 = 30;
 /// Results are cached to a JSON file per artist for 30 days.
 /// `artist_id` is used to generate local `/MediaCover/Artists/{id}/` URLs.
 pub async fn fetch_fanart_artist_images(mbid: &str, artist_id: Option<i64>) -> Vec<ArtistImage> {
-    // Check disk cache first
+    // Check disk cache first — but only if we don't need to rewrite URLs.
+    // When artist_id is provided, we need local /MediaCover/ URLs, so if the
+    // cache has remote URLs we must re-fetch from Fanart.tv.
     let cache_dir = std::path::Path::new(ARTIST_IMAGE_CACHE_DIR);
     let cache_file = cache_dir.join(format!("{}.json", mbid));
 
@@ -2091,7 +2113,13 @@ pub async fn fetch_fanart_artist_images(mbid: &str, artist_id: Option<i64>) -> V
             if age < std::time::Duration::from_secs(ARTIST_IMAGE_CACHE_DAYS * 86400) {
                 if let Ok(data) = tokio::fs::read_to_string(&cache_file).await {
                     if let Ok(cached) = serde_json::from_str::<Vec<ArtistImage>>(&data) {
-                        return cached;
+                        // If artist_id is provided, check if cached URLs are already local
+                        let needs_rewrite = artist_id.is_some()
+                            && cached.iter().any(|i| i.url.starts_with("http"));
+                        if !needs_rewrite {
+                            return cached;
+                        }
+                        // Fall through to re-fetch and rewrite with local URLs
                     }
                 }
             }

@@ -3595,9 +3595,10 @@ impl AlbumRepository {
             r#"
             INSERT INTO albums (
                 artist_id, musicbrainz_id, title, clean_title, album_type,
-                secondary_types, release_date, genres, images, monitored, added, last_info_sync
+                secondary_types, release_date, genres, images, monitored, added, last_info_sync,
+                title_slug
             ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
             ) RETURNING id
             "#,
         )
@@ -3613,9 +3614,22 @@ impl AlbumRepository {
         .bind(album.monitored)
         .bind(album.added)
         .bind(album.last_info_sync)
+        .bind(&album.title_slug)
         .fetch_one(pool)
         .await?;
         Ok(row.0)
+    }
+
+    pub async fn get_by_slug(&self, artist_id: i64, slug: &str) -> Result<Option<super::models::AlbumDbModel>> {
+        let pool = self.db.pool();
+        let album = sqlx::query_as::<_, super::models::AlbumDbModel>(
+            "SELECT * FROM albums WHERE artist_id = $1 AND title_slug = $2 LIMIT 1",
+        )
+        .bind(artist_id)
+        .bind(slug)
+        .fetch_optional(pool)
+        .await?;
+        Ok(album)
     }
 
     pub async fn update(&self, album: &super::models::AlbumDbModel) -> Result<()> {
@@ -3625,8 +3639,8 @@ impl AlbumRepository {
             UPDATE albums SET
                 artist_id = $1, musicbrainz_id = $2, title = $3, clean_title = $4,
                 album_type = $5, secondary_types = $6, release_date = $7, genres = $8,
-                images = $9, monitored = $10, last_info_sync = $11
-            WHERE id = $12
+                images = $9, monitored = $10, last_info_sync = $11, title_slug = $12
+            WHERE id = $13
             "#,
         )
         .bind(album.artist_id)
@@ -3640,6 +3654,7 @@ impl AlbumRepository {
         .bind(&album.images)
         .bind(album.monitored)
         .bind(album.last_info_sync)
+        .bind(&album.title_slug)
         .bind(album.id)
         .execute(pool)
         .await?;

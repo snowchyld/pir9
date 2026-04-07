@@ -72,35 +72,45 @@ export class AlbumDetailPage extends BaseComponent {
   private releasesQuery: ReturnType<typeof createQuery<MbRelease[]>> | null = null;
 
   static get observedAttributes(): string[] {
-    return ['albumid', 'titleslug'];
+    return ['albumslug', 'titleslug'];
   }
 
-  private createQueries(id: number): void {
+  private createQueries(idOrSlug: string): void {
     this.albumQuery = createQuery({
-      queryKey: ['/album', id],
-      queryFn: () => http.get<Album>(`/album/${id}`),
+      queryKey: ['/album', idOrSlug],
+      queryFn: () => http.get<Album>(`/album/${idOrSlug}`),
     });
 
-    this.tracksQuery = createQuery({
-      queryKey: ['/track', { albumId: id }],
-      queryFn: () => http.get<Track[]>('/track', { params: { albumId: id } }),
-    });
+    // Tracks need numeric albumId — fetch after album loads
+    // (set up in the watch below)
 
     this.watch(this.albumQuery.data, () => {
       this.requestUpdate();
-      // Load releases when album data arrives (need musicbrainzId)
       const album = this.albumQuery?.data.value;
-      if (album?.musicbrainzId && !this.releasesQuery) {
-        this.releasesQuery = createQuery({
-          queryKey: ['/musicbrainz/albums', album.musicbrainzId, 'releases'],
-          queryFn: () =>
-            http.get<MbRelease[]>(`/musicbrainz/albums/${album.musicbrainzId}/releases`),
-        });
-        this.watch(this.releasesQuery.data, () => this.requestUpdate());
+      if (album) {
+        this.albumId.set(album.id);
+
+        // Load tracks using numeric id
+        if (!this.tracksQuery) {
+          this.tracksQuery = createQuery({
+            queryKey: ['/track', { albumId: album.id }],
+            queryFn: () => http.get<Track[]>('/track', { params: { albumId: album.id } }),
+          });
+          this.watch(this.tracksQuery.data, () => this.requestUpdate());
+        }
+
+        // Load releases when musicbrainzId is available
+        if (album.musicbrainzId && !this.releasesQuery) {
+          this.releasesQuery = createQuery({
+            queryKey: ['/musicbrainz/albums', album.musicbrainzId, 'releases'],
+            queryFn: () =>
+              http.get<MbRelease[]>(`/musicbrainz/albums/${album.musicbrainzId}/releases`),
+          });
+          this.watch(this.releasesQuery.data, () => this.requestUpdate());
+        }
       }
     });
     this.watch(this.albumQuery.isLoading, () => this.requestUpdate());
-    this.watch(this.tracksQuery.data, () => this.requestUpdate());
   }
 
   protected onInit(): void {
@@ -114,24 +124,20 @@ export class AlbumDetailPage extends BaseComponent {
   }
 
   protected onMount(): void {
-    const idAttr = this.getAttribute('albumid');
-    const slug = this.getAttribute('titleslug');
-    if (slug) this.artistSlug.set(slug);
-    if (idAttr) {
-      const id = Number.parseInt(idAttr, 10);
-      if (!Number.isNaN(id)) {
-        this.albumId.set(id);
-        this.createQueries(id);
-      }
+    const albumSlug = this.getAttribute('albumslug');
+    const artistSlug = this.getAttribute('titleslug');
+    if (artistSlug) this.artistSlug.set(artistSlug);
+    if (albumSlug) {
+      this.createQueries(albumSlug);
     }
 
     // Also load artist data for back-navigation context
-    if (slug) {
+    if (artistSlug) {
       this.artistQuery = createQuery({
-        queryKey: ['/artist/lookup', slug],
+        queryKey: ['/artist/lookup', artistSlug],
         queryFn: async () => {
           const list = await http.get<Artist[]>('/artist');
-          return list?.find((a) => a.titleSlug === slug) ?? null;
+          return list?.find((a) => a.titleSlug === artistSlug) ?? null;
         },
       });
       this.watch(this.artistQuery.data, () => this.requestUpdate());
@@ -140,12 +146,8 @@ export class AlbumDetailPage extends BaseComponent {
 
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
     if (newValue && newValue !== oldValue && this._isConnected) {
-      if (name === 'albumid') {
-        const id = Number.parseInt(newValue, 10);
-        if (!Number.isNaN(id)) {
-          this.albumId.set(id);
-          this.createQueries(id);
-        }
+      if (name === 'albumslug') {
+        this.createQueries(newValue);
       }
       if (name === 'titleslug') {
         this.artistSlug.set(newValue);

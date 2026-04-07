@@ -128,7 +128,7 @@ export const routes: Route[] = [
     load: artistDetail,
   },
   {
-    path: '/music/:titleSlug/album/:albumId',
+    path: '/music/:titleSlug/album/:albumSlug',
     component: 'album-detail-page',
     title: 'Album',
     load: albumDetail,

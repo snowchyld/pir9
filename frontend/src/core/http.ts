@@ -392,7 +392,7 @@ export interface QueueItem {
   seriesId?: number | null;
   episodeId?: number | null;
   movieId?: number | null;
-  contentType?: 'series' | 'movie' | 'anime';
+  contentType?: 'series' | 'movie' | 'anime' | 'music' | 'audiobook' | 'podcast';
   title: string;
   status: string;
   trackedDownloadStatus: string;
@@ -537,14 +537,20 @@ export interface Album {
   id: number;
   artistId: number;
   title: string;
+  titleSlug: string;
   releaseDate?: string;
   albumType: string;
+  secondaryTypes: string[];
   monitored: boolean;
+  musicbrainzId?: string;
+  genres: string[];
+  tags?: string[];
+  rating?: number;
+  ratingCount?: number;
+  overview?: string;
   statistics?: {
-    trackCount: number;
-    trackFileCount: number;
     totalTrackCount: number;
-    sizeOnDisk: number;
+    trackFileCount: number;
     percentOfTracks: number;
   };
   images: SeriesImage[];

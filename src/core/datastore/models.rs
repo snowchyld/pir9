@@ -473,6 +473,7 @@ pub struct AlbumDbModel {
     pub monitored: bool,
     pub added: DateTime<Utc>,
     pub last_info_sync: Option<DateTime<Utc>>,
+    pub title_slug: String,
 }
 
 /// Track database model (music domain)
