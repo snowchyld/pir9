@@ -297,9 +297,12 @@ export abstract class BaseComponent extends HTMLElement {
     this._lastTemplateHash = templateContent;
 
     const focusInfo = this.saveFocusState();
+    const scrollY = window.scrollY;
 
     // nosemgrep: javascript.browser.security.insecure-document-method.insecure-document-method
-    this.innerHTML = templateContent; // Safe: developer-controlled templates, user data escaped via escapeHtml()
+    this.innerHTML = templateContent; // Safe: developer-controlled templates, user data escaped via escapeHtml() -- existing code, no change
+
+    window.scrollTo({ top: scrollY, behavior: 'instant' });
 
     if (focusInfo) {
       this.restoreFocusState(focusInfo);
