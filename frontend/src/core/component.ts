@@ -2,11 +2,12 @@
  * Base Web Component class using Light DOM
  * Provides template rendering, attribute observation, and lifecycle hooks
  *
- * SECURITY NOTE: The render() method uses innerHTML with developer-controlled
- * templates (from the template() method). User data should be escaped before
- * interpolation - use the html() and escapeHtml() helpers for safe templating.
+ * Uses morphdom for efficient DOM diffing — only changed nodes are updated,
+ * preserving focus, scroll position, form state, and CSS transitions.
+ * User data should be escaped before interpolation — use escapeHtml().
  */
 
+import morphdom from 'morphdom';
 import { effect, type Watchable } from './reactive';
 
 type Constructor<T = object> = new (...args: unknown[]) => T;
@@ -272,106 +273,34 @@ export abstract class BaseComponent extends HTMLElement {
   }
 
   /**
-   * Render the component
-   * Uses developer-controlled template() output to update the DOM.
-   * User data must be escaped via html() or escapeHtml().
-   *
-   * Preserves focus and cursor position across re-renders by saving
-   * the active element's selector and selection state before updating,
-   * then restoring it after.
-   */
-  /**
-   * Render the component.
-   * Uses developer-controlled template() output to update the DOM.
-   * Skips DOM update if template output is identical (prevents unnecessary reflows).
-   * User data must be escaped via html() or escapeHtml().
+   * Render the component using morphdom for efficient DOM diffing.
+   * First render uses innerHTML for speed; subsequent renders morph
+   * only changed nodes, preserving focus, scroll, and form state.
+   * Skips entirely when template output is identical (string comparison).
    */
   private render(): void {
     // Templates are author-controlled; user data must use escapeHtml() — see file header.
     const templateContent = this.template();
 
-    // Skip DOM update if template output hasn't changed — prevents unnecessary reflows
+    // Skip DOM update if template output hasn't changed
     if (templateContent === this._lastTemplateHash) {
       return;
     }
     this._lastTemplateHash = templateContent;
 
-    const focusInfo = this.saveFocusState();
-    const scrollY = window.scrollY;
-
-    // nosemgrep: javascript.browser.security.insecure-document-method.insecure-document-method
-    this.innerHTML = templateContent; // Safe: developer-controlled templates, user data escaped via escapeHtml() -- existing code, no change
-
-    window.scrollTo({ top: scrollY, behavior: 'instant' });
-
-    if (focusInfo) {
-      this.restoreFocusState(focusInfo);
+    if (this.childNodes.length === 0) {
+      // First render — no existing DOM to preserve, innerHTML is fastest
+      // nosemgrep: javascript.browser.security.insecure-document-method.insecure-document-method
+      this.innerHTML = templateContent; // Safe: developer-controlled templates, user data escaped via escapeHtml()
+    } else {
+      // Subsequent renders — morph only changed nodes
+      const wrapper = document.createElement(this.tagName);
+      // nosemgrep: javascript.browser.security.insecure-document-method.insecure-document-method
+      wrapper.innerHTML = templateContent; // Safe: developer-controlled templates, user data escaped via escapeHtml()
+      morphdom(this, wrapper, { childrenOnly: true });
     }
 
     this.onUpdate();
-  }
-
-  /**
-   * Save the currently focused element's info if it's inside this component
-   */
-  private saveFocusState(): {
-    selector: string;
-    selectionStart: number | null;
-    selectionEnd: number | null;
-    scrollTop: number;
-  } | null {
-    const active = document.activeElement;
-    if (!active || !this.contains(active) || active === this) return null;
-
-    // Build a selector to find the element after re-render
-    const tag = active.tagName.toLowerCase();
-    const classes = active.className ? `.${active.className.trim().split(/\s+/).join('.')}` : '';
-    const type = active.getAttribute('type');
-    const name = active.getAttribute('name');
-    const placeholder = active.getAttribute('placeholder');
-
-    let selector = tag;
-    if (classes) selector += classes;
-    if (type) selector += `[type="${type}"]`;
-    if (name) selector += `[name="${name}"]`;
-    if (placeholder) selector += `[placeholder="${placeholder}"]`;
-
-    const inputEl = active as HTMLInputElement | HTMLTextAreaElement;
-
-    return {
-      selector,
-      selectionStart: inputEl.selectionStart ?? null,
-      selectionEnd: inputEl.selectionEnd ?? null,
-      scrollTop: inputEl.scrollTop ?? 0,
-    };
-  }
-
-  /**
-   * Restore focus to the matching element after re-render
-   */
-  private restoreFocusState(info: {
-    selector: string;
-    selectionStart: number | null;
-    selectionEnd: number | null;
-    scrollTop: number;
-  }): void {
-    const el = this.querySelector<HTMLElement>(info.selector);
-    if (!el) return;
-
-    el.focus();
-
-    // Restore cursor/selection position for text inputs
-    const inputEl = el as HTMLInputElement | HTMLTextAreaElement;
-    if (info.selectionStart !== null && typeof inputEl.setSelectionRange === 'function') {
-      try {
-        inputEl.setSelectionRange(info.selectionStart, info.selectionEnd ?? info.selectionStart);
-      } catch {
-        // setSelectionRange throws on non-text inputs (email, number, etc.)
-      }
-    }
-    if (info.scrollTop) {
-      inputEl.scrollTop = info.scrollTop;
-    }
   }
 
   /**
