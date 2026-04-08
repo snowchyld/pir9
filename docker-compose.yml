@@ -1,18 +1,17 @@
 # Docker Compose for pir9
-# Multi-container deployment with PostgreSQL, Redis, and IMDB service
+# Multi-container deployment with external PostgreSQL, Redis, and services
 #
 # Usage:
 #   docker compose up -d          # Start all services
 #   docker compose up -d --build  # Rebuild and start
 #   docker compose down           # Stop all services
 #
+# Database: External PostgreSQL 18 at 10.0.0.20:5433
+#   Databases: pir9, pir9_imdb, pir9_musicbrainz (see ADR-006)
+#
 # Environment variables (create .env file or export):
 #   PUID, PGID          - User/Group IDs for file permissions
 #   TZ                  - Timezone (e.g., America/New_York)
-#   PIR9_DB_CONNECTION  - Database connection string
-#   POSTGRES_USER       - PostgreSQL username (default: pir9)
-#   POSTGRES_PASSWORD   - PostgreSQL password (default: pir9)
-#   POSTGRES_DB         - PostgreSQL database name (default: pir9)
 #   PIR9_IMDB_ENABLED   - Enable IMDB service integration (default: true)
 
 
@@ -86,7 +85,7 @@ services:
       - PIR9_PORT=8989
       - PIR9_BIND=0.0.0.0
       - PIR9_DB_TYPE=postgres
-      - PIR9_DB_CONNECTION=postgresql://${POSTGRES_USER:-pir9}:${POSTGRES_PASSWORD:-pir9}@postgres:5432/${POSTGRES_DB:-pir9}
+      - PIR9_DB_CONNECTION=postgresql://pir9:pir9@10.0.0.20:5433/pir9
       - PIR9_IMDB_SERVICE_URL=http://imdb:8990
       - PIR9_IMDB_ENABLED=${PIR9_IMDB_ENABLED:-true}
       - PIR9_MB_URL=http://musicbrainz:8991
@@ -96,8 +95,6 @@ services:
       - TZ=${TZ:-UTC}
     depends_on:
       redis:
-        condition: service_healthy
-      postgres:
         condition: service_healthy
       imdb:
         condition: service_healthy
@@ -136,53 +133,8 @@ services:
       retries: 3
 
   # ============================================================================
-  # PostgreSQL - Main application database
-  # ============================================================================
-  postgres:
-    image: postgres:16-alpine
-    container_name: pir9-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-pir9}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pir9}
-      POSTGRES_DB: ${POSTGRES_DB:-pir9}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    ports:
-      - "5434:5432"  # External 5434 to avoid conflicts
-    networks:
-      - pir9-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pir9}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # ============================================================================
-  # PostgreSQL - IMDB database (separate from main app)
-  # ============================================================================
-  postgres-imdb:
-    image: postgres:16-alpine
-    container_name: pir9-postgres-imdb
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-pir9}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pir9}
-      POSTGRES_DB: pir9_imdb
-    volumes:
-      - postgres-imdb-data:/var/lib/postgresql/data
-    ports:
-      - "5435:5432"  # External 5435 for IMDB database
-    networks:
-      - pir9-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pir9} -d pir9_imdb"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # ============================================================================
   # IMDB Service - Manages IMDB dataset sync and lookups
+  # Database: External PostgreSQL at 10.0.0.20:5433/pir9_imdb
   # ============================================================================
   imdb:
     build:
@@ -201,11 +153,8 @@ services:
     environment:
       - RUST_LOG=info,pir9_imdb=debug
       - PIR9_IMDB_PORT=8990
-      - PIR9_IMDB_DB_URL=postgresql://${POSTGRES_USER:-pir9}:${POSTGRES_PASSWORD:-pir9}@postgres-imdb:5432/pir9_imdb
+      - PIR9_IMDB_DB_URL=postgresql://pir9:pir9@10.0.0.20:5433/pir9_imdb
       - PIR9_TMDB_API_KEY=${PIR9_TMDB_API_KEY:-}
-    depends_on:
-      postgres-imdb:
-        condition: service_healthy
     networks:
       - pir9-network
     healthcheck:
@@ -216,35 +165,8 @@ services:
       start_period: 10s
 
   # ============================================================================
-  # PostgreSQL - MusicBrainz database
-  # ============================================================================
-  postgres-musicbrainz:
-    image: postgres:16-alpine
-    container_name: pir9-postgres-musicbrainz
-    restart: unless-stopped
-    command: >
-      postgres
-      -c max_wal_size=4GB
-      -c checkpoint_completion_target=0.9
-      -c wal_buffers=64MB
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-pir9}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pir9}
-      POSTGRES_DB: pir9_musicbrainz
-    volumes:
-      - postgres-musicbrainz-data:/var/lib/postgresql/data
-    ports:
-      - "5436:5432"
-    networks:
-      - pir9-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pir9} -d pir9_musicbrainz"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # ============================================================================
   # MusicBrainz Service - Manages MusicBrainz dataset sync and lookups
+  # Database: External PostgreSQL at 10.0.0.20:5433/pir9_musicbrainz
   # ============================================================================
   musicbrainz:
     build:
@@ -265,10 +187,7 @@ services:
       - PGID=${PGID:-1000}
       - RUST_LOG=info,pir9_musicbrainz=debug
       - PIR9_MB_PORT=8991
-      - PIR9_MB_DB_URL=postgresql://${POSTGRES_USER:-pir9}:${POSTGRES_PASSWORD:-pir9}@postgres-musicbrainz:5432/pir9_musicbrainz
-    depends_on:
-      postgres-musicbrainz:
-        condition: service_healthy
+      - PIR9_MB_DB_URL=postgresql://pir9:pir9@10.0.0.20:5433/pir9_musicbrainz
     networks:
       - pir9-network
     healthcheck:
@@ -328,9 +247,6 @@ services:
       - pir9-network
 
 volumes:
-  postgres-data:
-  postgres-imdb-data:
-  postgres-musicbrainz-data:
   redis-data:
   coverart-cache:
 

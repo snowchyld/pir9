@@ -34,27 +34,6 @@ impl<T> BaseRepository<T> {
     }
 }
 
-/// Unit of work for transactions
-pub struct UnitOfWork {
-    db: Database,
-}
-
-impl UnitOfWork {
-    pub fn new(db: Database) -> Self {
-        Self { db }
-    }
-
-    pub async fn commit(&self) -> Result<()> {
-        // Commit transaction
-        Ok(())
-    }
-
-    pub async fn rollback(&self) -> Result<()> {
-        // Rollback transaction
-        Ok(())
-    }
-}
-
 /// Repository for tags
 pub struct TagRepository {
     db: Database,

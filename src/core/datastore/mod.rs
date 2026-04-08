@@ -48,12 +48,6 @@ impl Database {
         &self.pool
     }
 
-    /// Legacy method for compatibility during refactor
-    /// TODO: Remove once all repositories are updated
-    pub fn postgres(&self) -> Option<&Pool<Postgres>> {
-        Some(&self.pool)
-    }
-
     /// Check database connectivity
     pub async fn health_check(&self) -> Result<bool> {
         sqlx::query("SELECT 1").fetch_one(&self.pool).await?;
@@ -61,23 +55,3 @@ impl Database {
     }
 }
 
-/// Unit of work pattern for transactions
-pub struct UnitOfWork {
-    database: Database,
-}
-
-impl UnitOfWork {
-    pub fn new(database: Database) -> Self {
-        Self { database }
-    }
-
-    pub async fn commit(&mut self) -> Result<()> {
-        // Transaction commit logic
-        Ok(())
-    }
-
-    pub async fn rollback(&mut self) -> Result<()> {
-        // Transaction rollback logic
-        Ok(())
-    }
-}
