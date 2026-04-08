@@ -623,21 +623,20 @@ async fn start_process(
 ) -> impl IntoResponse {
     let datasets = body.map(|b| b.datasets.clone()).unwrap_or_default();
 
-    // Process runs independently — only check if full sync is running
-    let handle_guard = state.sync_handle.lock().await;
+    // Check if a sync is already running
+    let mut handle_guard = state.sync_handle.lock().await;
     if let Some(ref handle) = *handle_guard {
         if !handle.join_handle.is_finished() {
             return (
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({
-                    "error": "A full sync is already running — wait for it to complete",
+                    "error": "A sync or process is already running — wait for it to complete",
                     "status": "running"
                 })),
             )
                 .into_response();
         }
     }
-    drop(handle_guard);
 
     let token = CancellationToken::new();
     let db = state.db.clone();
@@ -669,7 +668,12 @@ async fn start_process(
         }
     });
 
-    drop(join_handle); // Fire and forget
+    // Store handle so cancel_sync and get_sync_status can track this task
+    *handle_guard = Some(SyncHandle {
+        cancel_token: token,
+        join_handle,
+    });
+    drop(handle_guard);
 
     (
         StatusCode::ACCEPTED,

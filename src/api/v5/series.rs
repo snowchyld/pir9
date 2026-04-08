@@ -54,18 +54,147 @@ async fn list_series(
     State(state): State<Arc<AppState>>,
     Query(_query): Query<SeriesListQuery>,
 ) -> Result<Json<Vec<SeriesResponse>>, ApiError> {
+    use sqlx::Row;
+    use std::collections::HashMap;
+
     let repo = SeriesRepository::new(state.db.clone());
+    let pool = state.db.pool();
 
     let db_series = repo
         .get_all()
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch series: {}", e)))?;
 
+    // Batch fetch: season stats for ALL series in one query (replaces N+1)
+    let season_rows = sqlx::query(
+        r#"
+        SELECT
+            e.series_id,
+            e.season_number,
+            COUNT(DISTINCT e.id)::int as total_episode_count,
+            COUNT(DISTINCT CASE WHEN e.monitored = true THEN e.id END)::int as episode_count,
+            COUNT(DISTINCT CASE WHEN e.has_file = true AND e.monitored = true THEN e.id END)::int as episode_file_count,
+            MAX(CASE WHEN e.monitored = true THEN 1 ELSE 0 END)::int as monitored,
+            COALESCE(SUM(ef.size), 0)::bigint as size_on_disk
+        FROM episodes e
+        LEFT JOIN episode_files ef ON ef.id = e.episode_file_id
+        GROUP BY e.series_id, e.season_number
+        ORDER BY e.series_id, e.season_number
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    // Group season rows by series_id
+    let mut season_map: HashMap<i64, Vec<&sqlx::postgres::PgRow>> = HashMap::new();
+    for row in &season_rows {
+        let series_id: i64 = row.try_get("series_id").unwrap_or(0);
+        season_map.entry(series_id).or_default().push(row);
+    }
+
+    // Batch fetch: next/previous airing for ALL series in one query
+    let now = chrono::Utc::now();
+    let airing_rows = sqlx::query(
+        r#"
+        SELECT
+            series_id,
+            MIN(CASE WHEN air_date_utc > $1 THEN air_date_utc END) as next_airing,
+            MAX(CASE WHEN air_date_utc <= $1 THEN air_date_utc END) as previous_airing
+        FROM episodes
+        WHERE air_date_utc IS NOT NULL
+        GROUP BY series_id
+        "#,
+    )
+    .bind(now)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut airing_map: HashMap<i64, (Option<String>, Option<String>)> = HashMap::new();
+    for row in &airing_rows {
+        let series_id: i64 = row.try_get("series_id").unwrap_or(0);
+        let next = row
+            .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("next_airing")
+            .ok()
+            .flatten()
+            .map(|dt| dt.to_rfc3339());
+        let prev = row
+            .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("previous_airing")
+            .ok()
+            .flatten()
+            .map(|dt| dt.to_rfc3339());
+        airing_map.insert(series_id, (next, prev));
+    }
+
+    // Build responses using pre-fetched data
     let mut series_list = Vec::with_capacity(db_series.len());
     for s in db_series {
         let mut response = SeriesResponse::from(s);
-        // Enrich with seasons and statistics
-        enrich_series_response(&mut response, &state.db).await;
+        let id = response.id;
+
+        // Apply season stats from batch
+        let mut total_episodes = 0i32;
+        let mut total_episode_files = 0i32;
+        let mut total_all_episodes = 0i32;
+        let mut total_size: i64 = 0;
+
+        if let Some(rows) = season_map.get(&id) {
+            response.seasons = rows
+                .iter()
+                .map(|row| {
+                    let total_episode_count: i32 =
+                        row.try_get("total_episode_count").unwrap_or(0);
+                    let episode_count: i32 = row.try_get("episode_count").unwrap_or(0);
+                    let episode_file_count: i32 =
+                        row.try_get("episode_file_count").unwrap_or(0);
+                    let size_on_disk: i64 = row.try_get("size_on_disk").unwrap_or(0);
+                    total_all_episodes += total_episode_count;
+                    total_episodes += episode_count;
+                    total_episode_files += episode_file_count;
+                    total_size += size_on_disk;
+
+                    SeasonResource {
+                        season_number: row.try_get("season_number").unwrap_or(0),
+                        monitored: row.try_get::<i32, _>("monitored").unwrap_or(0) == 1,
+                        statistics: Some(SeasonStatistics {
+                            episode_file_count,
+                            episode_count,
+                            total_episode_count,
+                            percent_of_episodes: if episode_count > 0 {
+                                (episode_file_count as f64 / episode_count as f64) * 100.0
+                            } else {
+                                0.0
+                            },
+                            size_on_disk,
+                        }),
+                    }
+                })
+                .collect();
+        }
+
+        // Apply airing data from batch
+        if let Some((next, prev)) = airing_map.get(&id) {
+            response.next_airing = next.clone();
+            response.previous_airing = prev.clone();
+        }
+
+        // Compute statistics
+        let percent = if total_episodes > 0 {
+            (total_episode_files as f64 / total_episodes as f64) * 100.0
+        } else {
+            0.0
+        };
+        response.statistics = Some(SeriesStatistics {
+            season_count: response.seasons.len() as i32,
+            episode_file_count: total_episode_files,
+            episode_count: total_episodes,
+            total_episode_count: total_all_episodes,
+            size_on_disk: total_size,
+            release_groups: vec![],
+            percent_of_episodes: percent,
+        });
+
         series_list.push(response);
     }
 

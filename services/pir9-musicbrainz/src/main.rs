@@ -599,8 +599,13 @@ async fn start_download(
         }
     });
 
-    // Fire and forget — download runs in background
-    drop(join_handle);
+    // Store handle so cancel can reach it
+    let mut handle_guard = state.sync_handle.lock().await;
+    *handle_guard = Some(SyncHandle {
+        cancel_token: token,
+        join_handle,
+    });
+    drop(handle_guard);
 
     (
         StatusCode::ACCEPTED,
