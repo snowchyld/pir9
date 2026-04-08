@@ -40,7 +40,7 @@ impl From<crate::core::datastore::repositories::CommandDbModel> for CommandResou
     fn from(cmd: crate::core::datastore::repositories::CommandDbModel) -> Self {
         let body: serde_json::Value = cmd
             .body
-            .as_deref()
+            .as_ref()
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or(serde_json::json!({}));
 

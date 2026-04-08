@@ -1699,7 +1699,7 @@ pub struct CommandDbModel {
     pub name: String,
     pub command_name: String,
     pub message: Option<String>,
-    pub body: Option<String>,
+    pub body: Option<crate::core::datastore::models::JsonString>,
     pub priority: String,
     pub status: String,
     pub result: Option<String>,
@@ -1750,6 +1750,11 @@ impl CommandRepository {
         // Set send_updates_to_client=true for manual commands to enable UI updates
         let send_updates = trigger == "manual";
 
+        // Parse body as JSON for JSONB column (falls back to JSON null)
+        let body_json: serde_json::Value = body
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
         let pool = self.db.pool();
         let row: (i64,) = sqlx::query_as(
             r#"
@@ -1760,7 +1765,7 @@ impl CommandRepository {
         )
         .bind(name)
         .bind(command_name)
-        .bind(body)
+        .bind(&body_json)
         .bind(now)
         .bind(trigger)
         .bind(now)
