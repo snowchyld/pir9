@@ -2010,9 +2010,9 @@ pub async fn auto_scan_series(
                         date_added: Utc::now(),
                         scene_name: Some(file_name.to_string()),
                         release_group: parse_release_group(file_name),
-                        quality: quality_str,
-                        languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
-                        media_info,
+                        quality: quality_str.into(),
+                        languages: r#"[{"id":1,"name":"English"}]"#.to_string().into(),
+                        media_info: media_info.map(Into::into),
                         original_file_path: Some(file_path_str.clone()),
                         file_hash,
                     };

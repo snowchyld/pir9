@@ -185,8 +185,8 @@ fn resource_to_model(resource: &NotificationResource) -> NotificationDbModel {
         on_manual_interaction_required: resource.on_manual_interaction_required,
         on_application_update: resource.on_application_update,
         include_health_warnings: resource.include_health_warnings,
-        settings,
-        tags,
+        settings: settings.into(),
+        tags: tags.into(),
     }
 }
 

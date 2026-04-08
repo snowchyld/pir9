@@ -68,8 +68,8 @@ async fn create_download_client(
         name: body.name,
         implementation: body.implementation,
         config_contract: body.config_contract,
-        settings,
-        tags,
+        settings: settings.into(),
+        tags: tags.into(),
         remove_completed_downloads: true,
         remove_failed_downloads: true,
     };
@@ -108,10 +108,10 @@ async fn update_download_client(
         model.priority = priority;
     }
     if let Some(fields) = body.fields {
-        model.settings = fields_to_settings(&fields);
+        model.settings = fields_to_settings(&fields).into();
     }
     if let Some(tags) = body.tags {
-        model.tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
+        model.tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string()).into();
     }
 
     repo.update(&model)

@@ -219,8 +219,8 @@ async fn create_podcast(
     );
 
     let genres_json =
-        serde_json::to_string(&feed_metadata.categories).unwrap_or_else(|_| "[]".to_string());
-    let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
+        serde_json::to_string(&feed_metadata.categories).unwrap_or_else(|_| "[]".to_string()).into();
+    let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string()).into();
 
     // Build images from feed
     let images: Vec<PodcastImage> = feed_metadata
@@ -233,7 +233,7 @@ async fn create_podcast(
             }]
         })
         .unwrap_or_default();
-    let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+    let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string()).into();
 
     let db_podcast = PodcastDbModel {
         id: 0,
@@ -348,7 +348,7 @@ async fn update_podcast(
         podcast.path = path;
     }
     if let Some(tags) = update.tags {
-        podcast.tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
+        podcast.tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string()).into();
     }
 
     repo.update(&podcast)
@@ -468,11 +468,11 @@ async fn refresh_podcast(
             url: image_url.clone(),
             remote_url: Some(image_url.clone()),
         }];
-        podcast.images = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+        podcast.images = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string()).into();
     }
     if !feed_metadata.categories.is_empty() {
         podcast.genres =
-            serde_json::to_string(&feed_metadata.categories).unwrap_or_else(|_| "[]".to_string());
+            serde_json::to_string(&feed_metadata.categories).unwrap_or_else(|_| "[]".to_string()).into();
     }
 
     podcast.last_info_sync = Some(Utc::now());

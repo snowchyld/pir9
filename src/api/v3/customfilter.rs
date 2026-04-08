@@ -112,7 +112,7 @@ fn resource_to_db(resource: &CustomFilterResource, id: Option<i64>) -> CustomFil
         id: id.unwrap_or(0),
         filter_type: resource.filter_type.clone(),
         label: resource.label.clone(),
-        filters: serde_json::to_string(&resource.filters).unwrap_or_else(|_| "[]".to_string()),
+        filters: serde_json::to_string(&resource.filters).unwrap_or_else(|_| "[]".to_string()).into(),
     }
 }
 

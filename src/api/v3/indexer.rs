@@ -167,8 +167,8 @@ fn resource_to_db(resource: &IndexerResource, id: Option<i64>) -> IndexerDbModel
         protocol,
         priority: resource.priority,
         download_client_id: resource.download_client_id as i64,
-        settings: serde_json::to_string(&settings).unwrap_or_default(),
-        tags: serde_json::to_string(&resource.tags).unwrap_or_default(),
+        settings: serde_json::to_string(&settings).unwrap_or_default().into(),
+        tags: serde_json::to_string(&resource.tags).unwrap_or_default().into(),
     }
 }
 

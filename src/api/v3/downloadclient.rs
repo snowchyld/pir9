@@ -152,8 +152,8 @@ fn resource_to_db(resource: &DownloadClientResource, id: Option<i64>) -> Downloa
         name: resource.name.clone(),
         implementation: resource.implementation.clone(),
         config_contract: resource.config_contract.clone(),
-        settings: serde_json::to_string(&settings).unwrap_or_default(),
-        tags: serde_json::to_string(&resource.tags).unwrap_or_default(),
+        settings: serde_json::to_string(&settings).unwrap_or_default().into(),
+        tags: serde_json::to_string(&resource.tags).unwrap_or_default().into(),
         remove_completed_downloads: resource.remove_completed_downloads,
         remove_failed_downloads: resource.remove_failed_downloads,
     }

@@ -504,9 +504,9 @@ impl JobTrackerService {
                     date_added: Utc::now(),
                     scene_name: Some(file.filename.clone()),
                     release_group: file.release_group.clone(),
-                    quality: quality_json.to_string(),
-                    languages: languages_json.to_string(),
-                    media_info,
+                    quality: quality_json.to_string().into(),
+                    languages: languages_json.to_string().into(),
+                    media_info: media_info.map(Into::into),
                     original_file_path: Some(file_path_str.clone()),
                     file_hash,
                 };

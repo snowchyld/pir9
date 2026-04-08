@@ -101,7 +101,7 @@ fn resource_to_db(resource: &CustomFormatResource, id: Option<i64>) -> CustomFor
         name: resource.name.clone(),
         include_custom_format_when_renaming: resource.include_custom_format_when_renaming,
         specifications: serde_json::to_string(&resource.specifications)
-            .unwrap_or_else(|_| "[]".to_string()),
+            .unwrap_or_else(|_| "[]".to_string()).into(),
     }
 }
 

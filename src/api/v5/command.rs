@@ -1089,7 +1089,7 @@ async fn execute_refresh_movies(
                 if !enrichment.images.is_empty() {
                     let images_json = serde_json::to_string(&enrichment.images)
                         .unwrap_or_else(|_| "[]".to_string());
-                    movie.images = images_json;
+                    movie.images = images_json.into();
                     images_found += 1;
                 }
                 // Fill metadata gaps from Radarr enrichment
@@ -1437,9 +1437,9 @@ async fn execute_rescan_series(
                         date_added: Utc::now(),
                         scene_name: Some(file_name.to_string()),
                         release_group,
-                        quality: quality_json.to_string(),
-                        languages: languages_json.to_string(),
-                        media_info,
+                        quality: quality_json.to_string().into(),
+                        languages: languages_json.to_string().into(),
+                        media_info: media_info.map(Into::into),
                         original_file_path: Some(file_path_str.clone()),
                         file_hash,
                     };
@@ -1600,8 +1600,8 @@ async fn execute_rescan_series_distributed(
                                 f.path.clone(),
                                 KnownFileInfo {
                                     size: f.size,
-                                    media_info: f.media_info.clone(),
-                                    quality: Some(f.quality.clone()),
+                                    media_info: f.media_info.as_ref().map(|m| m.0.clone()),
+                                    quality: Some(f.quality.0.clone()),
                                     file_hash: f.file_hash.clone(),
                                 },
                             );
@@ -2794,8 +2794,8 @@ async fn execute_rescan_movie(
                             mf.path.clone(),
                             crate::core::messaging::KnownFileInfo {
                                 size: mf.size,
-                                media_info: mf.media_info.clone(),
-                                quality: Some(mf.quality.clone()),
+                                media_info: mf.media_info.as_ref().map(|m| m.0.clone()),
+                                quality: Some(mf.quality.0.clone()),
                                 file_hash: mf.file_hash.clone(),
                             },
                         );
@@ -2978,14 +2978,15 @@ async fn execute_rescan_movie(
         movie_file.media_info = media_info_result
             .as_ref()
             .ok()
-            .and_then(|info| serde_json::to_string(info).ok());
+            .and_then(|info| serde_json::to_string(info).ok())
+            .map(Into::into);
 
         // Derive quality from actual resolution
         if let Ok(ref info) = media_info_result {
             let quality =
                 crate::core::mediafiles::derive_quality_from_media(info, &movie_file.path);
             movie_file.quality =
-                serde_json::to_string(&quality).unwrap_or_else(|_| movie_file.quality.clone());
+                serde_json::to_string(&quality).unwrap_or_else(|_| movie_file.quality.0.clone()).into();
         }
 
         // BLAKE3 file hash

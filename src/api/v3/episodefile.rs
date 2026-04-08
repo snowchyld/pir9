@@ -231,8 +231,8 @@ pub async fn update_episode_file(
     // Update fields
     file.release_group = body.release_group.clone();
     file.scene_name = body.scene_name.clone();
-    file.quality = serde_json::to_string(&body.quality).unwrap_or_default();
-    file.languages = serde_json::to_string(&body.languages).unwrap_or_default();
+    file.quality = serde_json::to_string(&body.quality).unwrap_or_default().into();
+    file.languages = serde_json::to_string(&body.languages).unwrap_or_default().into();
 
     repo.update(&file)
         .await

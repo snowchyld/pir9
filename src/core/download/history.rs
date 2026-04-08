@@ -92,15 +92,15 @@ impl HistoryService {
                 episode_id: Some(episode_id),
                 movie_id: None,
                 source_title: release.title.clone(),
-                quality: quality_json.clone(),
-                languages: languages_json.clone(),
-                custom_formats: "[]".to_string(),
+                quality: quality_json.clone().into(),
+                languages: languages_json.clone().into(),
+                custom_formats: "[]".to_string().into(),
                 custom_format_score: 0,
                 quality_cutoff_not_met: false,
                 date: Utc::now(),
                 download_id: release.download_url.clone(),
                 event_type: HistoryEventType::Grabbed.to_db_int(),
-                data: data.to_string(),
+                data: data.to_string().into(),
             };
             repo.insert(&model).await?;
         }
@@ -125,15 +125,15 @@ impl HistoryService {
                 episode_id: Some(episode_id),
                 movie_id: None,
                 source_title: String::new(),
-                quality: "{}".to_string(),
-                languages: "[]".to_string(),
-                custom_formats: "[]".to_string(),
+                quality: "{}".to_string().into(),
+                languages: "[]".to_string().into(),
+                custom_formats: "[]".to_string().into(),
                 custom_format_score: 0,
                 quality_cutoff_not_met: false,
                 date: Utc::now(),
                 download_id: Some(download_id.to_string()),
                 event_type: HistoryEventType::DownloadFailed.to_db_int(),
-                data: data.to_string(),
+                data: data.to_string().into(),
             };
             repo.insert(&model).await?;
         }
@@ -161,15 +161,15 @@ impl HistoryService {
                 episode_id: Some(episode_id),
                 movie_id: None,
                 source_title: String::new(),
-                quality: "{}".to_string(),
-                languages: "[]".to_string(),
-                custom_formats: "[]".to_string(),
+                quality: "{}".to_string().into(),
+                languages: "[]".to_string().into(),
+                custom_formats: "[]".to_string().into(),
                 custom_format_score: 0,
                 quality_cutoff_not_met: false,
                 date: Utc::now(),
                 download_id: None,
                 event_type: HistoryEventType::DownloadFolderImported.to_db_int(),
-                data: data.to_string(),
+                data: data.to_string().into(),
             };
             repo.insert(&model).await?;
         }

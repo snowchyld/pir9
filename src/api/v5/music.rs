@@ -424,9 +424,9 @@ async fn create_artist(
     let full_path = options.get_full_path();
     let root_folder_path = options.get_root_folder_path();
 
-    let genres_json = serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string());
-    let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
-    let images_json = serde_json::to_string(&options.images).unwrap_or_else(|_| "[]".to_string());
+    let genres_json = serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string()).into();
+    let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string()).into();
+    let images_json = serde_json::to_string(&options.images).unwrap_or_else(|_| "[]".to_string()).into();
 
     let db_artist = ArtistDbModel {
         id: 0,
@@ -497,7 +497,7 @@ async fn create_artist(
     if let Some(ref mbid) = created.musicbrainz_id {
         let images = fetch_fanart_artist_images(mbid, Some(id)).await;
         if !images.is_empty() {
-            created.images = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+            created.images = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string()).into();
         }
     }
 
@@ -543,7 +543,7 @@ async fn update_artist(
         artist.path = path;
     }
     if let Some(tags) = update.tags {
-        artist.tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
+        artist.tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string()).into();
     }
 
     repo.update(&artist)
@@ -660,7 +660,7 @@ async fn refresh_artist_metadata(artist: &mut ArtistDbModel, mbid: &str, state: 
                 }
                 if !mb_artist.genres.is_empty() {
                     artist.genres = serde_json::to_string(&mb_artist.genres)
-                        .unwrap_or_else(|_| "[]".to_string());
+                        .unwrap_or_else(|_| "[]".to_string()).into();
                 }
                 tracing::info!("Updated artist metadata from MusicBrainz: {}", artist.name);
             }
@@ -676,7 +676,7 @@ async fn refresh_artist_metadata(artist: &mut ArtistDbModel, mbid: &str, state: 
     // Refresh images from Fanart.tv (with local MediaCover URLs)
     let images = fetch_fanart_artist_images(mbid, Some(artist.id)).await;
     if !images.is_empty() {
-        artist.images = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+        artist.images = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string()).into();
         tracing::info!(
             "Updated {} Fanart.tv images for artist: {}",
             images.len(),
@@ -712,11 +712,11 @@ async fn upsert_albums_from_musicbrainz(artist_id: i64, mbid: &str, state: &AppS
     for mb_album in &mb_albums {
         // Build cover art URL from cover-art-cache service (via nginx proxy)
         let cover_images = build_album_cover_images(&mb_album.mbid);
-        let images_json = serde_json::to_string(&cover_images).unwrap_or_else(|_| "[]".to_string());
+        let images_json = serde_json::to_string(&cover_images).unwrap_or_else(|_| "[]".to_string()).into();
         let genres_json =
-            serde_json::to_string(&mb_album.genres).unwrap_or_else(|_| "[]".to_string());
+            serde_json::to_string(&mb_album.genres).unwrap_or_else(|_| "[]".to_string()).into();
         let secondary_types_json =
-            serde_json::to_string(&mb_album.secondary_types).unwrap_or_else(|_| "[]".to_string());
+            serde_json::to_string(&mb_album.secondary_types).unwrap_or_else(|_| "[]".to_string()).into();
         let release_date = mb_album
             .release_date
             .as_deref()
@@ -1037,8 +1037,8 @@ async fn scan_artist_audio_files(
                 relative_path,
                 path: file_path.clone(),
                 size: *size,
-                quality: serde_json::json!({ "codec": ext }).to_string(),
-                media_info: Some(media_info.to_string()),
+                quality: serde_json::json!({ "codec": ext }).to_string().into(),
+                media_info: Some(media_info.to_string().into()),
                 date_added: Utc::now(),
             };
 
@@ -1510,8 +1510,8 @@ async fn rescan_album(
                     relative_path,
                     path: file_path.clone(),
                     size: *size,
-                    quality: serde_json::json!({ "codec": ext }).to_string(),
-                    media_info: Some(media_info.to_string()),
+                    quality: serde_json::json!({ "codec": ext }).to_string().into(),
+                    media_info: Some(media_info.to_string().into()),
                     date_added: Utc::now(),
                 };
 

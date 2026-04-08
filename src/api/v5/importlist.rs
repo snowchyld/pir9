@@ -98,7 +98,7 @@ fn resource_to_model(resource: &ImportListResource) -> ImportListDbModel {
         content_type: resource.content_type.clone(),
         sync_interval_hours: resource.sync_interval_hours,
         last_synced_at: resource.last_synced_at,
-        tags,
+        tags: tags.into(),
     }
 }
 

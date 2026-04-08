@@ -5,6 +5,103 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
+/// A String that SQLx can decode from JSONB columns.
+///
+/// PostgreSQL JSONB columns can't be directly decoded into `String` by SQLx
+/// (String only supports TEXT/VARCHAR/etc). This newtype transparently converts
+/// JSONB → String on read and String → JSONB on write, so all existing code
+/// that uses `serde_json::from_str(&field)` / `serde_json::to_string()` works
+/// unchanged.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct JsonString(pub String);
+
+impl JsonString {
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+}
+
+// Deref to str so &JsonString → &str — from_str(&field) works unchanged.
+// We deref to str (not String) so .clone() on JsonString returns JsonString, not String.
+impl std::ops::Deref for JsonString {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for JsonString {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<JsonString> for String {
+    fn from(js: JsonString) -> String {
+        js.0
+    }
+}
+
+impl AsRef<str> for JsonString {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<str> for JsonString {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl std::fmt::Display for JsonString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+// SQLx: Tell SQLx this type maps to JSONB
+impl sqlx::Type<sqlx::Postgres> for JsonString {
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        sqlx::postgres::PgTypeInfo::with_name("jsonb")
+    }
+
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        *ty == sqlx::postgres::PgTypeInfo::with_name("jsonb")
+            || *ty == sqlx::postgres::PgTypeInfo::with_name("json")
+            || <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
+}
+
+// SQLx: Decode JSONB as String (Postgres sends JSONB as text over the wire with a version byte prefix)
+impl sqlx::Decode<'_, sqlx::Postgres> for JsonString {
+    fn decode(value: sqlx::postgres::PgValueRef<'_>) -> Result<Self, sqlx::error::BoxDynError> {
+        // Try decoding as serde_json::Value first (JSONB binary format), then stringify
+        let val = <serde_json::Value as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
+        Ok(JsonString(val.to_string()))
+    }
+}
+
+// SQLx: Encode String as JSONB
+impl sqlx::Encode<'_, sqlx::Postgres> for JsonString {
+    fn encode_by_ref(
+        &self,
+        buf: &mut sqlx::postgres::PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        // Parse the string as JSON and encode as JSONB
+        let val: serde_json::Value = serde_json::from_str(&self.0)
+            .unwrap_or(serde_json::Value::String(self.0.clone()));
+        <serde_json::Value as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&val, buf)
+    }
+}
+
+impl sqlx::postgres::PgHasArrayType for JsonString {
+    fn array_type_info() -> sqlx::postgres::PgTypeInfo {
+        sqlx::postgres::PgTypeInfo::with_name("_jsonb")
+    }
+}
+
 /// Series database model
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct SeriesDbModel {
@@ -82,9 +179,9 @@ pub struct EpisodeFileDbModel {
     pub date_added: DateTime<Utc>,
     pub scene_name: Option<String>,
     pub release_group: Option<String>,
-    pub quality: String,            // JSON serialized
-    pub languages: String,          // JSON serialized
-    pub media_info: Option<String>, // JSON serialized
+    pub quality: JsonString, // JSONB
+    pub languages: JsonString, // JSONB
+    pub media_info: Option<JsonString>, // JSONB
     pub original_file_path: Option<String>,
     pub file_hash: Option<String>, // BLAKE3 content hash
 }
@@ -112,9 +209,9 @@ pub struct MovieDbModel {
     pub runtime: i32,
     pub studio: Option<String>,
     pub certification: Option<String>,
-    pub genres: String, // JSON serialized
-    pub tags: String,   // JSON serialized
-    pub images: String, // JSON serialized
+    pub genres: JsonString, // JSONB
+    pub tags: JsonString, // JSONB
+    pub images: JsonString, // JSONB
     pub has_file: bool,
     pub movie_file_id: Option<i64>,
     pub added: DateTime<Utc>,
@@ -134,9 +231,9 @@ pub struct MovieFileDbModel {
     pub date_added: DateTime<Utc>,
     pub scene_name: Option<String>,
     pub release_group: Option<String>,
-    pub quality: String,            // JSON serialized
-    pub languages: String,          // JSON serialized
-    pub media_info: Option<String>, // JSON serialized
+    pub quality: JsonString, // JSONB
+    pub languages: JsonString, // JSONB
+    pub media_info: Option<JsonString>, // JSONB
     pub original_file_path: Option<String>,
     pub edition: Option<String>,
     pub file_hash: Option<String>, // BLAKE3 content hash
@@ -171,8 +268,8 @@ pub struct IndexerDbModel {
     pub protocol: i32,
     pub priority: i32,
     pub download_client_id: i64,
-    pub settings: String, // JSON serialized
-    pub tags: String,     // JSON serialized
+    pub settings: JsonString, // JSONB
+    pub tags: JsonString, // JSONB
 }
 
 /// Download client database model
@@ -185,8 +282,8 @@ pub struct DownloadClientDbModel {
     pub name: String,
     pub implementation: String,
     pub config_contract: String,
-    pub settings: String, // JSON serialized
-    pub tags: String,     // JSON serialized
+    pub settings: JsonString, // JSONB
+    pub tags: JsonString, // JSONB
     pub remove_completed_downloads: bool,
     pub remove_failed_downloads: bool,
 }
@@ -210,8 +307,8 @@ pub struct NotificationDbModel {
     pub on_manual_interaction_required: bool,
     pub on_application_update: bool,
     pub include_health_warnings: bool,
-    pub settings: String, // JSON serialized
-    pub tags: String,     // JSON serialized
+    pub settings: JsonString, // JSONB
+    pub tags: JsonString, // JSONB
 }
 
 /// Quality profile database model
@@ -221,10 +318,10 @@ pub struct QualityProfileDbModel {
     pub name: String,
     pub upgrade_allowed: bool,
     pub cutoff: i32,
-    pub items: String, // JSON serialized
+    pub items: JsonString, // JSONB
     pub min_format_score: i32,
     pub cutoff_format_score: i32,
-    pub format_items: String, // JSON serialized
+    pub format_items: JsonString, // JSONB
 }
 
 /// Language profile database model
@@ -234,7 +331,7 @@ pub struct LanguageProfileDbModel {
     pub name: String,
     pub upgrade_allowed: bool,
     pub cutoff: i32,
-    pub languages: String, // JSON serialized
+    pub languages: JsonString, // JSONB
 }
 
 /// Delay profile database model
@@ -248,7 +345,7 @@ pub struct DelayProfileDbModel {
     pub torrent_delay: i32,
     pub bypass_if_highest_quality: bool,
     pub bypass_if_above_custom_format_score: i32,
-    pub tags: String, // JSON serialized
+    pub tags: JsonString, // JSONB
     pub order: i32,
 }
 
@@ -258,7 +355,7 @@ pub struct CustomFormatDbModel {
     pub id: i64,
     pub name: String,
     pub include_custom_format_when_renaming: bool,
-    pub specifications: String, // JSON serialized
+    pub specifications: JsonString, // JSONB
 }
 
 /// Tag database model
@@ -276,15 +373,15 @@ pub struct HistoryDbModel {
     pub episode_id: Option<i64>,
     pub movie_id: Option<i64>,
     pub source_title: String,
-    pub quality: String,        // JSON serialized
-    pub languages: String,      // JSON serialized
-    pub custom_formats: String, // JSON serialized
+    pub quality: JsonString, // JSONB
+    pub languages: JsonString, // JSONB
+    pub custom_formats: JsonString, // JSONB
     pub custom_format_score: i32,
     pub quality_cutoff_not_met: bool,
     pub date: DateTime<Utc>,
     pub download_id: Option<String>,
     pub event_type: i32,
-    pub data: String, // JSON serialized
+    pub data: JsonString, // JSONB
 }
 
 /// Blocklist database model
@@ -292,11 +389,11 @@ pub struct HistoryDbModel {
 pub struct BlocklistDbModel {
     pub id: i64,
     pub series_id: i64,
-    pub episode_ids: String, // JSON serialized
+    pub episode_ids: JsonString, // JSONB
     pub source_title: String,
-    pub quality: String,        // JSON serialized
-    pub languages: String,      // JSON serialized
-    pub custom_formats: String, // JSON serialized
+    pub quality: JsonString, // JSONB
+    pub languages: JsonString, // JSONB
+    pub custom_formats: JsonString, // JSONB
     pub custom_format_score: i32,
     pub protocol: i32,
     pub indexer: String,
@@ -310,7 +407,7 @@ pub struct CustomFilterDbModel {
     pub id: i64,
     pub filter_type: String,
     pub label: String,
-    pub filters: String, // JSON serialized
+    pub filters: JsonString, // JSONB
 }
 
 /// Remote path mapping database model
@@ -330,7 +427,7 @@ pub struct RootFolderDbModel {
     pub accessible: bool,
     pub free_space: Option<i64>,
     pub total_space: Option<i64>,
-    pub unmapped_folders: Option<String>, // JSON serialized
+    pub unmapped_folders: Option<JsonString>, // JSONB
     pub content_type: String,
 }
 
@@ -395,7 +492,7 @@ pub struct ImportListDbModel {
     pub content_type: String,
     pub sync_interval_hours: i32,
     pub last_synced_at: Option<DateTime<Utc>>,
-    pub tags: String,
+    pub tags: JsonString, // JSONB
 }
 
 /// Release profile database model
@@ -405,12 +502,12 @@ pub struct ReleaseProfileDbModel {
     pub id: i64,
     pub name: String,
     pub enabled: bool,
-    pub required: String,  // JSON array of required terms
-    pub ignored: String,   // JSON array of ignored terms
-    pub preferred: String, // JSON array of {key: term, value: score}
+    pub required: JsonString, // JSONB array of required terms
+    pub ignored: JsonString, // JSONB array of ignored terms
+    pub preferred: JsonString, // JSONB array of {key: term, value: score}
     pub include_preferred_when_renaming: bool,
     pub indexer_id: i64,
-    pub tags: String,
+    pub tags: JsonString, // JSONB
 }
 
 /// Artist database model (music domain)
@@ -424,9 +521,9 @@ pub struct ArtistDbModel {
     pub overview: Option<String>,
     pub artist_type: String,
     pub status: String,
-    pub genres: String, // JSON serialized
-    pub images: String, // JSON serialized
-    pub tags: String,   // JSON serialized
+    pub genres: JsonString, // JSONB
+    pub images: JsonString, // JSONB
+    pub tags: JsonString, // JSONB
     pub path: String,
     pub root_folder_path: String,
     pub quality_profile_id: i64,
@@ -445,10 +542,10 @@ pub struct AlbumDbModel {
     pub title: String,
     pub clean_title: String,
     pub album_type: String,
-    pub secondary_types: String, // JSON serialized array of secondary types
+    pub secondary_types: JsonString, // JSONB array of secondary types
     pub release_date: Option<NaiveDate>,
-    pub genres: String, // JSON serialized
-    pub images: String, // JSON serialized
+    pub genres: JsonString, // JSONB
+    pub images: JsonString, // JSONB
     pub monitored: bool,
     pub added: DateTime<Utc>,
     pub last_info_sync: Option<DateTime<Utc>>,
@@ -480,8 +577,8 @@ pub struct TrackFileDbModel {
     pub relative_path: String,
     pub path: String,
     pub size: i64,
-    pub quality: String,            // JSON serialized
-    pub media_info: Option<String>, // JSON serialized
+    pub quality: JsonString, // JSONB
+    pub media_info: Option<JsonString>, // JSONB
     pub date_added: DateTime<Utc>,
 }
 
@@ -496,9 +593,9 @@ pub struct PodcastDbModel {
     pub author: Option<String>,
     pub feed_url: String,
     pub website_url: Option<String>,
-    pub genres: String, // JSON serialized
-    pub images: String, // JSON serialized
-    pub tags: String,   // JSON serialized
+    pub genres: JsonString, // JSONB
+    pub images: JsonString, // JSONB
+    pub tags: JsonString, // JSONB
     pub path: String,
     pub root_folder_path: String,
     pub quality_profile_id: i64,
@@ -535,8 +632,8 @@ pub struct PodcastFileDbModel {
     pub relative_path: String,
     pub path: String,
     pub size: i64,
-    pub quality: String,            // JSON serialized
-    pub media_info: Option<String>, // JSON serialized
+    pub quality: JsonString, // JSONB
+    pub media_info: Option<JsonString>, // JSONB
     pub date_added: DateTime<Utc>,
 }
 
@@ -555,9 +652,9 @@ pub struct AudiobookDbModel {
     pub asin: Option<String>,
     pub duration_ms: Option<i64>,
     pub release_date: Option<NaiveDate>,
-    pub genres: String, // JSON serialized
-    pub images: String, // JSON serialized
-    pub tags: String,   // JSON serialized
+    pub genres: JsonString, // JSONB
+    pub images: JsonString, // JSONB
+    pub tags: JsonString, // JSONB
     pub path: String,
     pub root_folder_path: String,
     pub quality_profile_id: i64,
@@ -589,7 +686,7 @@ pub struct AudiobookFileDbModel {
     pub relative_path: String,
     pub path: String,
     pub size: i64,
-    pub quality: String,            // JSON serialized
-    pub media_info: Option<String>, // JSON serialized
+    pub quality: JsonString, // JSONB
+    pub media_info: Option<JsonString>, // JSONB
     pub date_added: DateTime<Utc>,
 }

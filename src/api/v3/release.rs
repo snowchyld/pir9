@@ -572,9 +572,9 @@ pub async fn create_release(
                     episode_id: None,
                     movie_id: Some(mid),
                     source_title: release.title.clone(),
-                    quality: serde_json::to_string(&release.quality).unwrap_or_default(),
-                    languages: serde_json::to_string(&release.languages).unwrap_or_default(),
-                    custom_formats: "[]".to_string(),
+                    quality: serde_json::to_string(&release.quality).unwrap_or_default().into(),
+                    languages: serde_json::to_string(&release.languages).unwrap_or_default().into(),
+                    custom_formats: "[]".to_string().into(),
                     custom_format_score: 0,
                     quality_cutoff_not_met: false,
                     date: Utc::now(),
@@ -586,7 +586,7 @@ pub async fn create_release(
                         "size": release.size,
                         "downloadClient": "auto",
                     })
-                    .to_string(),
+                    .to_string().into(),
                 };
 
                 if let Err(e) = history_repo.insert(&history).await {
@@ -602,9 +602,9 @@ pub async fn create_release(
                         episode_id: Some(episode_id),
                         movie_id: None,
                         source_title: release.title.clone(),
-                        quality: serde_json::to_string(&release.quality).unwrap_or_default(),
-                        languages: serde_json::to_string(&release.languages).unwrap_or_default(),
-                        custom_formats: "[]".to_string(),
+                        quality: serde_json::to_string(&release.quality).unwrap_or_default().into(),
+                        languages: serde_json::to_string(&release.languages).unwrap_or_default().into(),
+                        custom_formats: "[]".to_string().into(),
                         custom_format_score: 0,
                         quality_cutoff_not_met: false,
                         date: Utc::now(),
@@ -616,7 +616,7 @@ pub async fn create_release(
                             "size": release.size,
                             "downloadClient": "auto",
                         })
-                        .to_string(),
+                        .to_string().into(),
                     };
 
                     if let Err(e) = history_repo.insert(&history).await {

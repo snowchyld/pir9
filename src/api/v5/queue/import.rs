@@ -283,11 +283,11 @@ pub(super) async fn import_queue_item(
                 // Media analysis: probe with FFmpeg + BLAKE3 hash (same as folder import)
                 let file_path = std::path::Path::new(&movie_file.path);
                 if let Ok(info) = crate::core::mediafiles::MediaAnalyzer::analyze(file_path).await {
-                    movie_file.media_info = serde_json::to_string(&info).ok();
+                    movie_file.media_info = serde_json::to_string(&info).ok().map(Into::into);
                     let quality =
                         crate::core::mediafiles::derive_quality_from_media(&info, &movie_file.path);
                     movie_file.quality = serde_json::to_string(&quality)
-                        .unwrap_or_else(|_| movie_file.quality.clone());
+                        .unwrap_or_else(|_| movie_file.quality.0.clone()).into();
                 }
                 movie_file.file_hash = crate::core::mediafiles::compute_file_hash(file_path)
                     .await
@@ -536,8 +536,8 @@ pub(super) async fn import_queue_item(
                     relative_path,
                     path: dest_path_str,
                     size: *size,
-                    quality: serde_json::json!({ "codec": ext }).to_string(),
-                    media_info: Some(serde_json::json!({ "audio_format": ext }).to_string()),
+                    quality: serde_json::json!({ "codec": ext }).to_string().into(),
+                    media_info: Some(serde_json::json!({ "audio_format": ext }).to_string().into()),
                     date_added: chrono::Utc::now(),
                 };
 
@@ -701,8 +701,8 @@ pub(super) async fn import_queue_item(
                     relative_path: filename.clone(),
                     path: dest_path_str,
                     size: *size,
-                    quality: serde_json::json!({ "codec": ext }).to_string(),
-                    media_info: Some(serde_json::json!({ "audio_format": ext }).to_string()),
+                    quality: serde_json::json!({ "codec": ext }).to_string().into(),
+                    media_info: Some(serde_json::json!({ "audio_format": ext }).to_string().into()),
                     date_added: chrono::Utc::now(),
                 };
 

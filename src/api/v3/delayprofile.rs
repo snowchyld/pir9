@@ -78,7 +78,7 @@ fn resource_to_db(resource: &DelayProfileResource, id: Option<i64>) -> DelayProf
         torrent_delay: resource.torrent_delay,
         bypass_if_highest_quality: resource.bypass_if_highest_quality,
         bypass_if_above_custom_format_score: resource.minimum_custom_format_score,
-        tags: serde_json::to_string(&resource.tags).unwrap_or_else(|_| "[]".to_string()),
+        tags: serde_json::to_string(&resource.tags).unwrap_or_else(|_| "[]".to_string()).into(),
         order: resource.order,
     }
 }

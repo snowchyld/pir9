@@ -421,8 +421,8 @@ async fn add_movie(
         _ => 0,
     };
 
-    let genres_json = serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string());
-    let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
+    let genres_json = serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string()).into();
+    let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string()).into();
 
     // Fetch enrichment from cascade (Radarr metadata + images)
     let enrichment = if let Some(ref imdb_id) = options.imdb_id {
@@ -439,7 +439,7 @@ async fn add_movie(
     } else {
         options.images.clone()
     };
-    let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+    let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string()).into();
 
     let tmdb_id = if options.tmdb_id > 0 {
         options.tmdb_id

@@ -197,8 +197,8 @@ async fn create_movie(
         _ => 0, // TBA
     };
 
-    let genres_json = serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string());
-    let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
+    let genres_json = serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string()).into();
+    let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string()).into();
 
     // Fetch enrichment from cascade (Radarr metadata + images)
     let enrichment = if let Some(ref imdb_id) = options.imdb_id {
@@ -216,7 +216,7 @@ async fn create_movie(
     } else {
         options.images.clone()
     };
-    let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+    let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string()).into();
 
     // Use TMDB ID from request if provided, otherwise use resolved from enrichment
     let tmdb_id = if options.tmdb_id > 0 {
@@ -354,7 +354,7 @@ async fn update_movie(
         movie.path = path;
     }
     if let Some(tags) = update.tags {
-        movie.tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
+        movie.tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string()).into();
     }
 
     repo.update(&movie)
@@ -451,7 +451,7 @@ async fn rematch_movie(
             }
             if !imdb_movie.genres.is_empty() {
                 movie.genres =
-                    serde_json::to_string(&imdb_movie.genres).unwrap_or_else(|_| "[]".to_string());
+                    serde_json::to_string(&imdb_movie.genres).unwrap_or_else(|_| "[]".to_string()).into();
             }
             movie.imdb_rating = imdb_movie.rating.map(|r| r as f32);
             movie.imdb_votes = imdb_movie.votes.map(|v| v as i32);
@@ -465,7 +465,7 @@ async fn rematch_movie(
         }
         if !enrichment.images.is_empty() {
             movie.images =
-                serde_json::to_string(&enrichment.images).unwrap_or_else(|_| "[]".to_string());
+                serde_json::to_string(&enrichment.images).unwrap_or_else(|_| "[]".to_string()).into();
         }
         // Fill metadata gaps from Radarr enrichment
         if movie.overview.is_none() {
@@ -1708,9 +1708,9 @@ async fn import_movies(
 
         let year = resolved_year.unwrap_or(0);
         let genres_json =
-            serde_json::to_string(&resolved_genres).unwrap_or_else(|_| "[]".to_string());
+            serde_json::to_string(&resolved_genres).unwrap_or_else(|_| "[]".to_string()).into();
         let tags_json = serde_json::to_string(&import_req.tags.unwrap_or_default())
-            .unwrap_or_else(|_| "[]".to_string());
+            .unwrap_or_else(|_| "[]".to_string()).into();
 
         // Fetch enrichment from cascade (Radarr metadata + images)
         let enrichment = match import_req.images {
@@ -1732,7 +1732,7 @@ async fn import_movies(
                 .unwrap_or_default(),
         };
         let import_tmdb_id = enrichment.as_ref().map(|e| e.tmdb_id).unwrap_or(0);
-        let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+        let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string()).into();
 
         // Merge enrichment metadata — request/IMDB fields take priority
         let import_overview =
@@ -1883,13 +1883,14 @@ async fn import_movies(
                 movie_file.media_info = media_info_result
                     .as_ref()
                     .ok()
-                    .and_then(|info| serde_json::to_string(info).ok());
+                    .and_then(|info| serde_json::to_string(info).ok())
+                    .map(Into::into);
 
                 // Derive quality from actual resolution (not filename)
                 if let Ok(ref info) = media_info_result {
                     let quality = derive_quality_from_media(info, &movie_file.path);
                     movie_file.quality = serde_json::to_string(&quality)
-                        .unwrap_or_else(|_| movie_file.quality.clone());
+                        .unwrap_or_else(|_| movie_file.quality.to_string()).into();
                 }
 
                 // BLAKE3 file hash
@@ -1994,8 +1995,8 @@ pub(super) fn scan_movie_folder(folder_path: &str, movie_id: i64) -> Option<Movi
             scene_name: Some(file_name.to_string()),
             release_group,
             quality: serde_json::to_string(&quality)
-                .unwrap_or_else(|_| r#"{"quality":{"id":1,"name":"HDTV-720p"}}"#.to_string()),
-            languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
+                .unwrap_or_else(|_| r#"{"quality":{"id":1,"name":"HDTV-720p"}}"#.to_string()).into(),
+            languages: r#"[{"id":1,"name":"English"}]"#.to_string().into(),
             media_info: None,
             original_file_path: Some(root.to_string_lossy().to_string()),
             edition: None,
@@ -2060,8 +2061,8 @@ pub(super) fn scan_movie_folder(folder_path: &str, movie_id: i64) -> Option<Movi
             scene_name: Some(file_name.to_string()),
             release_group,
             quality: serde_json::to_string(&quality)
-                .unwrap_or_else(|_| r#"{"quality":{"id":1,"name":"HDTV-720p"}}"#.to_string()),
-            languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
+                .unwrap_or_else(|_| r#"{"quality":{"id":1,"name":"HDTV-720p"}}"#.to_string()).into(),
+            languages: r#"[{"id":1,"name":"English"}]"#.to_string().into(),
             media_info: None,
             original_file_path: Some(file_path.to_string_lossy().to_string()),
             edition: None,

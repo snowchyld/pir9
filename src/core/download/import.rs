@@ -842,7 +842,8 @@ impl ImportService {
         let media_info = media_info_result
             .as_ref()
             .ok()
-            .and_then(|info| serde_json::to_string(info).ok());
+            .and_then(|info| serde_json::to_string(info).ok())
+            .map(Into::into);
 
         // Derive quality from actual resolution when available, fallback to parsed
         let quality_str = match &media_info_result {
@@ -866,8 +867,8 @@ impl ImportService {
             date_added: Utc::now(),
             scene_name: Some(download_title.to_string()),
             release_group: parsed_info.release_group.clone(),
-            quality: quality_str,
-            languages: serde_json::to_string(&parsed_info.languages).unwrap_or_default(),
+            quality: quality_str.into(),
+            languages: serde_json::to_string(&parsed_info.languages).unwrap_or_default().into(),
             media_info,
             original_file_path: Some(source_file.to_string_lossy().to_string()),
             file_hash,
@@ -1006,15 +1007,15 @@ impl ImportService {
                 episode_id: Some(*episode_id),
                 movie_id: None,
                 source_title: source_title.to_string(),
-                quality: serde_json::to_string(quality).unwrap_or_default(),
-                languages: "[]".to_string(),
-                custom_formats: "[]".to_string(),
+                quality: serde_json::to_string(quality).unwrap_or_default().into(),
+                languages: "[]".to_string().into(),
+                custom_formats: "[]".to_string().into(),
                 custom_format_score: 0,
                 quality_cutoff_not_met: false,
                 date: Utc::now(),
                 download_id: Some(download_id.to_string()),
                 event_type: 3, // DownloadImported
-                data: "{}".to_string(),
+                data: "{}".to_string().into(),
             };
 
             history_repo.insert(&history).await?;

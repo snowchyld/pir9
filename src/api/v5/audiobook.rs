@@ -229,10 +229,10 @@ async fn create_audiobook(
         sanitize_filename::sanitize(&title)
     );
 
-    let genres_json = serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string());
-    let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
+    let genres_json = serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string()).into();
+    let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string()).into();
     let images = build_images_from_url(&options.image_url, None);
-    let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+    let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string()).into();
 
     let db_audiobook = AudiobookDbModel {
         id: 0,
@@ -335,7 +335,7 @@ async fn update_audiobook(
         audiobook.path = path;
     }
     if let Some(tags) = update.tags {
-        audiobook.tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
+        audiobook.tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string()).into();
     }
     if let Some(author) = update.author {
         audiobook.author = Some(author);
@@ -456,7 +456,7 @@ async fn refresh_audiobook(
         // Update images if we found a cover
         if best.image_url.is_some() {
             let images = build_images_from_url(&best.image_url, Some(id));
-            audiobook.images = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+            audiobook.images = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string()).into();
         }
 
         // Fill in missing metadata from lookup
@@ -472,7 +472,7 @@ async fn refresh_audiobook(
             serde_json::from_str(&audiobook.genres).unwrap_or_default();
         if current_genres.is_empty() && !best.genres.is_empty() {
             audiobook.genres =
-                serde_json::to_string(&best.genres).unwrap_or_else(|_| "[]".to_string());
+                serde_json::to_string(&best.genres).unwrap_or_else(|_| "[]".to_string()).into();
         }
     }
 

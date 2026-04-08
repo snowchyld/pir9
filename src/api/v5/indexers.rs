@@ -69,8 +69,8 @@ async fn create_indexer(
         protocol: body.protocol.unwrap_or(0),
         priority: body.priority.unwrap_or(25),
         download_client_id: body.download_client_id.unwrap_or(0),
-        settings,
-        tags,
+        settings: settings.into(),
+        tags: tags.into(),
     };
 
     let id = repo
@@ -110,10 +110,10 @@ async fn update_indexer(
         model.enable_interactive_search = v;
     }
     if let Some(fields) = body.fields {
-        model.settings = fields_to_settings(&fields);
+        model.settings = fields_to_settings(&fields).into();
     }
     if let Some(tags) = body.tags {
-        model.tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
+        model.tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string()).into();
     }
 
     repo.update(&model)
