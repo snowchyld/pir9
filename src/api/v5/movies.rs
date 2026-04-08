@@ -209,7 +209,10 @@ async fn create_movie(
 
     // Use images from request; if empty, use enrichment images
     let images = if options.images.is_empty() {
-        enrichment.as_ref().map(|e| e.images.clone()).unwrap_or_default()
+        enrichment
+            .as_ref()
+            .map(|e| e.images.clone())
+            .unwrap_or_default()
     } else {
         options.images.clone()
     };
@@ -223,18 +226,38 @@ async fn create_movie(
     };
 
     // Merge enrichment metadata — request fields take priority, enrichment fills gaps
-    let overview = options.overview.clone().or_else(|| enrichment.as_ref().and_then(|e| e.overview.clone()));
-    let studio = options.studio.clone().or_else(|| enrichment.as_ref().and_then(|e| e.studio.clone()));
-    let certification = options.certification.clone().or_else(|| enrichment.as_ref().and_then(|e| e.certification.clone()));
-    let physical_release_date = enrichment.as_ref().and_then(|e| e.physical_release.as_deref()).and_then(parse_date_prefix);
-    let digital_release_date = enrichment.as_ref().and_then(|e| e.digital_release.as_deref()).and_then(parse_date_prefix);
+    let overview = options
+        .overview
+        .clone()
+        .or_else(|| enrichment.as_ref().and_then(|e| e.overview.clone()));
+    let studio = options
+        .studio
+        .clone()
+        .or_else(|| enrichment.as_ref().and_then(|e| e.studio.clone()));
+    let certification = options
+        .certification
+        .clone()
+        .or_else(|| enrichment.as_ref().and_then(|e| e.certification.clone()));
+    let physical_release_date = enrichment
+        .as_ref()
+        .and_then(|e| e.physical_release.as_deref())
+        .and_then(parse_date_prefix);
+    let digital_release_date = enrichment
+        .as_ref()
+        .and_then(|e| e.digital_release.as_deref())
+        .and_then(parse_date_prefix);
 
     // For release_date, use request value if provided, otherwise enrichment's inCinemas
     let release_date = options
         .release_date
         .as_deref()
         .and_then(parse_date_prefix)
-        .or_else(|| enrichment.as_ref().and_then(|e| e.in_cinemas.as_deref()).and_then(parse_date_prefix));
+        .or_else(|| {
+            enrichment
+                .as_ref()
+                .and_then(|e| e.in_cinemas.as_deref())
+                .and_then(parse_date_prefix)
+        });
 
     let db_movie = MovieDbModel {
         id: 0,
@@ -441,7 +464,8 @@ async fn rematch_movie(
             movie.tmdb_id = enrichment.tmdb_id;
         }
         if !enrichment.images.is_empty() {
-            movie.images = serde_json::to_string(&enrichment.images).unwrap_or_else(|_| "[]".to_string());
+            movie.images =
+                serde_json::to_string(&enrichment.images).unwrap_or_else(|_| "[]".to_string());
         }
         // Fill metadata gaps from Radarr enrichment
         if movie.overview.is_none() {
@@ -457,10 +481,16 @@ async fn rematch_movie(
             movie.release_date = enrichment.in_cinemas.as_deref().and_then(parse_date_prefix);
         }
         if movie.physical_release_date.is_none() {
-            movie.physical_release_date = enrichment.physical_release.as_deref().and_then(parse_date_prefix);
+            movie.physical_release_date = enrichment
+                .physical_release
+                .as_deref()
+                .and_then(parse_date_prefix);
         }
         if movie.digital_release_date.is_none() {
-            movie.digital_release_date = enrichment.digital_release.as_deref().and_then(parse_date_prefix);
+            movie.digital_release_date = enrichment
+                .digital_release
+                .as_deref()
+                .and_then(parse_date_prefix);
         }
     }
 
@@ -861,11 +891,7 @@ async fn fetch_fanart_images(id: &str) -> Option<Vec<MovieImage>> {
         tracing::debug!("Fanart.tv returned no images for {}", id);
         None
     } else {
-        tracing::debug!(
-            "Fanart.tv provided {} image types for {}",
-            images.len(),
-            id
-        );
+        tracing::debug!("Fanart.tv provided {} image types for {}", images.len(), id);
         Some(images)
     }
 }
@@ -890,8 +916,11 @@ static IMDB_CLIENT: once_cell::sync::Lazy<crate::core::imdb::ImdbClient> =
 
 /// TMDB API key from `PIR9_TMDB_API_KEY` environment variable.
 /// Empty strings are treated as absent to avoid 401 errors.
-static TMDB_API_KEY: once_cell::sync::Lazy<Option<String>> =
-    once_cell::sync::Lazy::new(|| std::env::var("PIR9_TMDB_API_KEY").ok().filter(|s| !s.is_empty()));
+static TMDB_API_KEY: once_cell::sync::Lazy<Option<String>> = once_cell::sync::Lazy::new(|| {
+    std::env::var("PIR9_TMDB_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty())
+});
 
 /// Shared HTTP client for TMDB requests.
 static TMDB_HTTP_CLIENT: once_cell::sync::Lazy<reqwest::Client> =
@@ -943,13 +972,14 @@ pub struct TmdbGenre {
 pub async fn fetch_tmdb_movie_by_id(tmdb_id: i64) -> Option<TmdbMovieDetail> {
     let url = format!("https://api.themoviedb.org/3/movie/{}", tmdb_id);
 
-    let resp = tmdb_get(&url)?
-        .send()
-        .await
-        .ok()?;
+    let resp = tmdb_get(&url)?.send().await.ok()?;
 
     if !resp.status().is_success() {
-        tracing::debug!("TMDB movie lookup returned {} for tmdb_id={}", resp.status(), tmdb_id);
+        tracing::debug!(
+            "TMDB movie lookup returned {} for tmdb_id={}",
+            resp.status(),
+            tmdb_id
+        );
         return None;
     }
 
@@ -1066,15 +1096,13 @@ pub async fn fetch_movie_images_and_tmdb_id(imdb_id: &str) -> Option<MovieEnrich
 /// Parse a date from a string, tolerating ISO 8601 datetime format (e.g. "2024-03-15T00:00:00Z")
 /// by extracting just the first 10 characters (YYYY-MM-DD prefix).
 pub fn parse_date_prefix(s: &str) -> Option<NaiveDate> {
-    NaiveDate::parse_from_str(s, "%Y-%m-%d")
-        .ok()
-        .or_else(|| {
-            if s.len() >= 10 {
-                NaiveDate::parse_from_str(&s[..10], "%Y-%m-%d").ok()
-            } else {
-                None
-            }
-        })
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").ok().or_else(|| {
+        if s.len() >= 10 {
+            NaiveDate::parse_from_str(&s[..10], "%Y-%m-%d").ok()
+        } else {
+            None
+        }
+    })
 }
 
 pub fn clean_title(title: &str) -> String {
@@ -1698,18 +1726,33 @@ async fn import_movies(
 
         let images = match import_req.images {
             Some(ref imgs) if !imgs.is_empty() => imgs.clone(),
-            _ => enrichment.as_ref().map(|e| e.images.clone()).unwrap_or_default(),
+            _ => enrichment
+                .as_ref()
+                .map(|e| e.images.clone())
+                .unwrap_or_default(),
         };
         let import_tmdb_id = enrichment.as_ref().map(|e| e.tmdb_id).unwrap_or(0);
         let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
 
         // Merge enrichment metadata — request/IMDB fields take priority
-        let import_overview = resolved_overview.or_else(|| enrichment.as_ref().and_then(|e| e.overview.clone()));
-        let import_studio = import_req.studio.or_else(|| enrichment.as_ref().and_then(|e| e.studio.clone()));
+        let import_overview =
+            resolved_overview.or_else(|| enrichment.as_ref().and_then(|e| e.overview.clone()));
+        let import_studio = import_req
+            .studio
+            .or_else(|| enrichment.as_ref().and_then(|e| e.studio.clone()));
         let import_certification = enrichment.as_ref().and_then(|e| e.certification.clone());
-        let import_release_date = enrichment.as_ref().and_then(|e| e.in_cinemas.as_deref()).and_then(parse_date_prefix);
-        let import_physical_release = enrichment.as_ref().and_then(|e| e.physical_release.as_deref()).and_then(parse_date_prefix);
-        let import_digital_release = enrichment.as_ref().and_then(|e| e.digital_release.as_deref()).and_then(parse_date_prefix);
+        let import_release_date = enrichment
+            .as_ref()
+            .and_then(|e| e.in_cinemas.as_deref())
+            .and_then(parse_date_prefix);
+        let import_physical_release = enrichment
+            .as_ref()
+            .and_then(|e| e.physical_release.as_deref())
+            .and_then(parse_date_prefix);
+        let import_digital_release = enrichment
+            .as_ref()
+            .and_then(|e| e.digital_release.as_deref())
+            .and_then(parse_date_prefix);
 
         let db_movie = MovieDbModel {
             id: 0,
@@ -1785,12 +1828,11 @@ async fn import_movies(
         // otherwise fall back to local FFmpeg probe + BLAKE3 hash over NFS.
         let dispatched_to_worker = if let Some(ref hybrid_bus) = state.hybrid_event_bus {
             if hybrid_bus.is_redis_enabled() {
-                let (job_id, message) =
-                    crate::core::scanner::create_movie_scan_request(
-                        vec![movie_id],
-                        vec![full_path.clone()],
-                        std::collections::HashMap::new(),
-                    );
+                let (job_id, message) = crate::core::scanner::create_movie_scan_request(
+                    vec![movie_id],
+                    vec![full_path.clone()],
+                    std::collections::HashMap::new(),
+                );
                 if let Some(consumer) = state.scan_result_consumer.get() {
                     consumer
                         .register_job(
@@ -1822,7 +1864,8 @@ async fn import_movies(
                     if existing_files.iter().any(|f| f.path == movie_file.path) {
                         tracing::info!(
                             "Movie import: file already tracked for movie {}: {}",
-                            movie_id, movie_file.path
+                            movie_id,
+                            movie_file.path
                         );
                         if let Ok(Some(created)) = repo.get_by_id(movie_id).await {
                             let mut response = MovieResponse::from(created);

@@ -10,8 +10,9 @@ use axum::{
 use serde::Serialize;
 
 use super::fetch::fetch_all_downloads;
-use crate::core::datastore::repositories::{DownloadClientRepository, TrackedDownloadRepository};
+use crate::core::datastore::repositories::DownloadClientRepository;
 use crate::core::download::clients::create_client_from_model;
+use crate::core::queue::UNTRACKED_ID_BASE;
 use crate::web::AppState;
 
 #[derive(Debug, Serialize)]
@@ -27,15 +28,14 @@ pub(super) async fn get_queue_files(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Vec<QueueFileResource>>, StatusCode> {
-    let td_repo = TrackedDownloadRepository::new(state.db.clone());
     let client_repo = DownloadClientRepository::new(state.db.clone());
 
     // Resolve download_id and client for this queue item
-    let (download_id, client_id) = if id < 10000 {
+    let (download_id, client_id) = if id < UNTRACKED_ID_BASE {
         // Tracked download
-        match td_repo.get_by_id(id).await {
-            Ok(Some(td)) => (td.download_id, td.download_client_id),
-            _ => return Err(StatusCode::NOT_FOUND),
+        match state.tracked.find_by_id(id).await {
+            Some(td) => (td.download_id, td.client_id),
+            None => return Err(StatusCode::NOT_FOUND),
         }
     } else {
         // Untracked download — find from live queue data

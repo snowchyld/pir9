@@ -136,12 +136,10 @@ impl SeriesRepository {
                         "Series update: tvdb_id {} conflicts with series id={} '{}', clearing conflicting tvdb_id",
                         series.tvdb_id, existing.id, existing.title
                     );
-                    let _ = sqlx::query(
-                        "UPDATE series SET tvdb_id = 0 WHERE id = $1",
-                    )
-                    .bind(existing.id)
-                    .execute(pool)
-                    .await;
+                    let _ = sqlx::query("UPDATE series SET tvdb_id = 0 WHERE id = $1")
+                        .bind(existing.id)
+                        .execute(pool)
+                        .await;
                 }
             }
         }
@@ -269,7 +267,9 @@ impl SeriesRepository {
             images: Vec::new(),
             ratings: None,
             use_scene_numbering: row.try_get("use_scene_numbering")?,
-            episode_ordering: row.try_get::<String, _>("episode_ordering").unwrap_or_else(|_| "aired".to_string()),
+            episode_ordering: row
+                .try_get::<String, _>("episode_ordering")
+                .unwrap_or_else(|_| "aired".to_string()),
             seasons: Vec::new(),
             tags: HashSet::new(),
             statistics: None,

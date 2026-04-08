@@ -97,7 +97,14 @@ struct PaginationLinks {
 }
 
 /// Valid TVDB season types for episode ordering
-pub const VALID_ORDERINGS: &[&str] = &["aired", "dvd", "absolute", "alternate", "regional", "altdvd"];
+pub const VALID_ORDERINGS: &[&str] = &[
+    "aired",
+    "dvd",
+    "absolute",
+    "alternate",
+    "regional",
+    "altdvd",
+];
 
 /// Map our ordering names to TVDB v4 season type slugs
 fn ordering_to_season_type(ordering: &str) -> &str {
@@ -116,7 +123,9 @@ impl TvdbClient {
     /// Create a client from the `PIR9_TVDB_API_KEY` environment variable.
     /// Returns a client with `is_enabled() == false` if the key is not set.
     pub fn from_env() -> Self {
-        let api_key = std::env::var("PIR9_TVDB_API_KEY").ok().filter(|k| !k.is_empty());
+        let api_key = std::env::var("PIR9_TVDB_API_KEY")
+            .ok()
+            .filter(|k| !k.is_empty());
         if api_key.is_some() {
             info!("TVDB v4 client enabled");
         } else {
@@ -173,7 +182,10 @@ impl TvdbClient {
             anyhow::bail!("TVDB login failed with status: {}", resp.status());
         }
 
-        let login: LoginResponse = resp.json().await.context("Failed to parse TVDB login response")?;
+        let login: LoginResponse = resp
+            .json()
+            .await
+            .context("Failed to parse TVDB login response")?;
 
         let token = login
             .data
@@ -245,8 +257,10 @@ impl TvdbClient {
                 );
             }
 
-            let paginated: PaginatedResponse =
-                resp.json().await.context("Failed to parse TVDB episodes response")?;
+            let paginated: PaginatedResponse = resp
+                .json()
+                .await
+                .context("Failed to parse TVDB episodes response")?;
 
             if let Some(data) = paginated.data {
                 if let Some(episodes) = data.episodes {

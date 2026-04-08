@@ -10,9 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::core::datastore::models::EpisodeDbModel;
-use crate::core::datastore::repositories::{
-    EpisodeRepository, SeriesRepository, TrackedDownloadRepository,
-};
+use crate::core::datastore::repositories::{EpisodeRepository, SeriesRepository};
 use crate::web::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -108,15 +106,13 @@ pub async fn get_wanted_missing(
 
     let episode_repo = EpisodeRepository::new(state.db.clone());
     let series_repo = SeriesRepository::new(state.db.clone());
-    let tracked_repo = TrackedDownloadRepository::new(state.db.clone());
-
     // Exclude episodes that are actively downloading (pushed into SQL for correct pagination)
-    let exclude_ids: Vec<i64> = tracked_repo
-        .get_all_active()
+    let exclude_ids: Vec<i64> = state
+        .tracked
+        .get_all_any()
         .await
-        .unwrap_or_default()
         .iter()
-        .flat_map(|d| serde_json::from_str::<Vec<i64>>(&d.episode_ids).unwrap_or_default())
+        .flat_map(|d| d.episode_ids.iter().copied())
         .collect();
 
     let (episodes, total) = match episode_repo

@@ -7,12 +7,12 @@ use chrono::Utc;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use crate::core::datastore::Database;
-use crate::core::messaging::{EventBus, Message};
 use crate::core::audiobooks::{
     models::*,
-    repositories::{AudiobookRepository, AudiobookChapterRepository},
+    repositories::{AudiobookChapterRepository, AudiobookRepository},
 };
+use crate::core::datastore::Database;
+use crate::core::messaging::{EventBus, Message};
 
 /// Service for managing audiobooks
 pub struct AudiobookService {

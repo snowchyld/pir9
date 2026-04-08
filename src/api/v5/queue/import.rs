@@ -16,7 +16,6 @@ use crate::core::datastore::repositories::{
 };
 use crate::core::download::clients::create_client_from_model;
 use crate::core::parser::normalize_title;
-use crate::core::queue::TrackedDownloadState;
 use crate::web::AppState;
 
 /// POST /api/v5/queue/{id}/import
@@ -26,8 +25,8 @@ pub(super) async fn import_queue_item(
     Path(id): Path<i64>,
     body: axum::body::Bytes,
 ) -> Json<QueueActionResponse> {
-    use crate::core::datastore::repositories::TrackedDownloadRepository;
     use crate::core::download::import::ImportService;
+    use crate::core::queue::UNTRACKED_ID_BASE;
 
     // Parse optional overrides, explicit series ID, force-reimport, and skip list from request body
     let (overrides, explicit_series_id, force_reimport, skip_files): (
@@ -59,11 +58,10 @@ pub(super) async fn import_queue_item(
         }
     };
 
-    let td_repo = TrackedDownloadRepository::new(state.db.clone());
     let client_repo = DownloadClientRepository::new(state.db.clone());
     let import_service = ImportService::new(state.db.clone(), state.config.read().media.clone());
 
-    // Find the download — either tracked (id < 10000) or untracked
+    // Find the download — either tracked (id < UNTRACKED_ID_BASE) or untracked
     let (
         download_id,
         download_client_id,
@@ -71,18 +69,30 @@ pub(super) async fn import_queue_item(
         tracked_movie_id,
         tracked_artist_id,
         tracked_audiobook_id,
-    ) = if id < 10000 {
-        // Tracked download — look up from DB
-        match td_repo.get_by_id(id).await {
-            Ok(Some(td)) => (
+    ) = if id < UNTRACKED_ID_BASE {
+        // Tracked download — look up from in-memory stores
+        match state.tracked.find_by_id(id).await {
+            Some(td) => (
                 td.download_id,
-                td.download_client_id,
+                td.client_id,
                 td.title,
-                td.movie_id,
-                td.artist_id,
-                td.audiobook_id,
+                if td.movie_id > 0 {
+                    Some(td.movie_id)
+                } else {
+                    None
+                },
+                if td.artist_id > 0 {
+                    Some(td.artist_id)
+                } else {
+                    None
+                },
+                if td.audiobook_id > 0 {
+                    Some(td.audiobook_id)
+                } else {
+                    None
+                },
             ),
-            _ => {
+            None => {
                 tracing::warn!("Import: tracked download {} not found", id);
                 return Json(QueueActionResponse { success: false });
             }
@@ -193,13 +203,6 @@ pub(super) async fn import_queue_item(
                     _ => title.clone(),
                 };
 
-                // Mark tracked download as Importing so the queue UI shows import progress
-                if id < 10000 {
-                    let _ = td_repo
-                        .update_status(id, TrackedDownloadState::Importing as i32, "[]", None)
-                        .await;
-                }
-
                 let job_id = uuid::Uuid::new_v4().to_string();
                 let message = crate::core::messaging::Message::ScanRequest {
                     job_id: job_id.clone(),
@@ -257,6 +260,7 @@ pub(super) async fn import_queue_item(
         };
 
         let db = state.db.clone();
+        let tracked = state.tracked.clone();
         let movie_title = movie.title.clone();
         let dl_title = title.clone();
         tokio::spawn(async move {
@@ -308,13 +312,9 @@ pub(super) async fn import_queue_item(
                             movie_file.path,
                         );
 
-                        // Delete tracked download — the import is complete and the
-                        // record no longer needs to linger. Leaving it as status=4
-                        // caused the torrent to re-appear as "untracked" because
-                        // get_all_active() (status < 4) excluded it from suppression.
-                        if id < 10000 {
-                            let td_repo = TrackedDownloadRepository::new(db);
-                            let _ = td_repo.delete(id).await;
+                        // Delete tracked download — import is complete
+                        if id < UNTRACKED_ID_BASE {
+                            tracked.remove_by_id(id).await;
                         }
                     }
                     Err(e) => {
@@ -353,6 +353,7 @@ pub(super) async fn import_queue_item(
         };
 
         let db = state.db.clone();
+        let tracked = state.tracked.clone();
         let artist_name = artist.name.clone();
         let artist_path = artist.path.clone();
         let dl_title = title.clone();
@@ -563,9 +564,8 @@ pub(super) async fn import_queue_item(
                 dest_dir.display(),
             );
 
-            if id < 10000 {
-                let td_repo = TrackedDownloadRepository::new(db);
-                let _ = td_repo.delete(id).await;
+            if id < UNTRACKED_ID_BASE {
+                tracked.remove_by_id(id).await;
             }
         });
 
@@ -588,6 +588,7 @@ pub(super) async fn import_queue_item(
         };
 
         let db = state.db.clone();
+        let tracked = state.tracked.clone();
         let audiobook_title = audiobook.title.clone();
         let audiobook_path = audiobook.path.clone();
         tokio::spawn(async move {
@@ -724,9 +725,8 @@ pub(super) async fn import_queue_item(
                 dest_dir.display(),
             );
 
-            if id < 10000 {
-                let td_repo = TrackedDownloadRepository::new(db);
-                let _ = td_repo.delete(id).await;
+            if id < UNTRACKED_ID_BASE {
+                tracked.remove_by_id(id).await;
             }
         });
 
@@ -908,13 +908,6 @@ pub(super) async fn import_queue_item(
     if let Some(ref hybrid_bus) = state.hybrid_event_bus {
         if hybrid_bus.is_redis_enabled() {
             if let Some(consumer) = state.scan_result_consumer.get() {
-                // Mark tracked download as Importing so the queue UI shows import progress
-                if id < 10000 {
-                    let _ = td_repo
-                        .update_status(id, TrackedDownloadState::Importing as i32, "[]", None)
-                        .await;
-                }
-
                 let job_id = uuid::Uuid::new_v4().to_string();
 
                 let import_info = crate::core::scanner::DownloadImportInfo {
@@ -966,7 +959,7 @@ pub(super) async fn import_queue_item(
 
     // Fallback: run the import locally (no Redis worker available).
     // Season/multi-season packs can take minutes (FFmpeg probing + hashing per file).
-    let db = state.db.clone();
+    let tracked = state.tracked.clone();
     tokio::spawn(async move {
         match import_service.import(&pending).await {
             Ok(result) if result.success => {
@@ -977,11 +970,9 @@ pub(super) async fn import_queue_item(
                     result.episode_ids.len()
                 );
 
-                // Delete tracked download — import is complete, no need to
-                // keep the record (status=4 records caused ghost duplicates).
-                if id < 10000 {
-                    let td_repo = TrackedDownloadRepository::new(db);
-                    let _ = td_repo.delete(id).await;
+                // Delete tracked download — import is complete
+                if id < UNTRACKED_ID_BASE {
+                    tracked.remove_by_id(id).await;
                 }
             }
             Ok(result) => {

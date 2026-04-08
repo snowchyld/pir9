@@ -14,9 +14,9 @@ use anyhow::{Context, Result};
 use redis::aio::ConnectionManager;
 #[cfg(feature = "redis-events")]
 use redis::AsyncCommands;
+use tokio::sync::broadcast;
 #[cfg(feature = "redis-events")]
 use tokio::sync::mpsc;
-use tokio::sync::broadcast;
 #[cfg(feature = "redis-events")]
 use tracing::{debug, error, info, trace, warn};
 
@@ -95,9 +95,15 @@ impl RedisEventBus {
             .query_async::<String>(&mut conn)
             .await
         {
-            Ok(_) => info!("Created consumer group {} on {}", REDIS_WORKER_GROUP, REDIS_JOB_STREAM),
+            Ok(_) => info!(
+                "Created consumer group {} on {}",
+                REDIS_WORKER_GROUP, REDIS_JOB_STREAM
+            ),
             Err(e) if e.to_string().contains("BUSYGROUP") => {
-                debug!("Consumer group {} already exists on {}", REDIS_WORKER_GROUP, REDIS_JOB_STREAM);
+                debug!(
+                    "Consumer group {} already exists on {}",
+                    REDIS_WORKER_GROUP, REDIS_JOB_STREAM
+                );
             }
             Err(e) => return Err(e).context("Failed to create job stream consumer group"),
         }
@@ -112,9 +118,15 @@ impl RedisEventBus {
             .query_async::<String>(&mut conn)
             .await
         {
-            Ok(_) => info!("Created consumer group {} on {}", REDIS_SERVER_GROUP, REDIS_RESULT_STREAM),
+            Ok(_) => info!(
+                "Created consumer group {} on {}",
+                REDIS_SERVER_GROUP, REDIS_RESULT_STREAM
+            ),
             Err(e) if e.to_string().contains("BUSYGROUP") => {
-                debug!("Consumer group {} already exists on {}", REDIS_SERVER_GROUP, REDIS_RESULT_STREAM);
+                debug!(
+                    "Consumer group {} already exists on {}",
+                    REDIS_SERVER_GROUP, REDIS_RESULT_STREAM
+                );
             }
             Err(e) => return Err(e).context("Failed to create result stream consumer group"),
         }
@@ -365,7 +377,10 @@ impl RedisEventBus {
             .await
             .context("Failed to subscribe to Redis channel")?;
 
-        info!("Redis pub/sub subscriber started on channel {}", REDIS_CHANNEL);
+        info!(
+            "Redis pub/sub subscriber started on channel {}",
+            REDIS_CHANNEL
+        );
 
         while let Some(push_info) = rx.recv().await {
             if push_info.kind != redis::PushKind::Message {
@@ -440,10 +455,7 @@ impl RedisEventBus {
                 break;
             }
 
-            info!(
-                "Draining {} pending result(s) from PEL",
-                pending.len()
-            );
+            info!("Draining {} pending result(s) from PEL", pending.len());
             for (stream_id, message) in pending {
                 let _ = self.local_sender.send(message);
                 Self::ack_stream_entry(
@@ -500,10 +512,7 @@ impl RedisEventBus {
             .await;
 
             if !new_entries.is_empty() {
-                debug!(
-                    "Result stream: received {} new entries",
-                    new_entries.len()
-                );
+                debug!("Result stream: received {} new entries", new_entries.len());
                 for (stream_id, message) in new_entries {
                     debug!(
                         "Result stream → local broadcast: {} ({})",
@@ -604,11 +613,11 @@ fn parse_stream_entry(entry: &redis::Value) -> Option<(String, Message)> {
             Err(_) => return None,
         };
         if field == "msg" {
-            let json: String =
-                match redis::FromRedisValue::from_redis_value(fields[i + 1].clone()) {
-                    Ok(j) => j,
-                    Err(_) => return None,
-                };
+            let json: String = match redis::FromRedisValue::from_redis_value(fields[i + 1].clone())
+            {
+                Ok(j) => j,
+                Err(_) => return None,
+            };
             return match serde_json::from_str::<Message>(&json) {
                 Ok(msg) => Some((id, msg)),
                 Err(e) => {

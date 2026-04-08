@@ -9,9 +9,10 @@ use axum::{
 
 use super::common::*;
 use super::fetch::fetch_all_downloads;
-use crate::core::datastore::repositories::{DownloadClientRepository, TrackedDownloadRepository};
+use crate::core::datastore::repositories::DownloadClientRepository;
 use crate::core::download::clients::create_client_from_model;
-use crate::core::queue::TrackedDownloadService;
+use crate::core::queue::tracked::SuppressedRef;
+use crate::core::queue::{TrackedDownloadService, UNTRACKED_ID_BASE};
 use crate::web::AppState;
 
 pub(super) async fn remove_queue_item(
@@ -21,7 +22,7 @@ pub(super) async fn remove_queue_item(
 ) -> Json<QueueActionResponse> {
     let service = TrackedDownloadService::new(state.db.clone(), state.tracked.clone());
 
-    if id < 10000 {
+    if id < UNTRACKED_ID_BASE {
         if let Err(e) = service
             .remove(id, query.remove_from_client, query.blocklist)
             .await
@@ -32,7 +33,7 @@ pub(super) async fn remove_queue_item(
         }
     }
 
-    // Fallback for untracked downloads (id >= 10000)
+    // Fallback for untracked downloads (id >= UNTRACKED_ID_BASE)
     let downloads = fetch_all_downloads(&state, true).await;
     if let Some(download) = downloads.iter().find(|d| d.id == id) {
         if query.remove_from_client {
@@ -50,8 +51,8 @@ pub(super) async fn remove_queue_item(
                 }
             }
         } else {
-            // Create a tracked_downloads record with status=Ignored (7) so the
-            // item moves to the Completed tab instead of reappearing in the queue
+            // Suppress the download so it doesn't reappear in the queue.
+            // Resolve the download client ID from its name.
             let client_repo = DownloadClientRepository::new(state.db.clone());
             let mut client_id: i64 = 0;
             if let (Some(client_name), Ok(clients)) =
@@ -62,49 +63,34 @@ pub(super) async fn remove_queue_item(
                 }
             }
 
-            let td_repo = TrackedDownloadRepository::new(state.db.clone());
-            let model = crate::core::datastore::models::TrackedDownloadDbModel {
+            use crate::core::queue::tracked::TrackedDownload;
+            let suppressed = TrackedDownload {
                 id: 0,
                 download_id: download.download_id.clone().unwrap_or_default(),
-                download_client_id: client_id,
-                series_id: download.series_id.unwrap_or(0),
-                episode_ids: if let Some(ep_id) = download.episode_id {
-                    serde_json::to_string(&vec![ep_id]).unwrap_or_else(|_| "[]".to_string())
-                } else {
-                    "[]".to_string()
-                },
+                client_id,
+                content: SuppressedRef,
                 title: download.title.clone(),
+                quality: String::new(),
                 indexer: download.indexer.clone(),
-                size: download.size as i64,
-                protocol: if download.protocol == "usenet" { 1 } else { 2 },
-                quality: serde_json::to_string(&download.quality)
-                    .unwrap_or_else(|_| "{}".to_string()),
-                languages: serde_json::to_string(&download.languages)
-                    .unwrap_or_else(|_| "[]".to_string()),
-                status: 7, // Ignored
-                status_messages: "[]".to_string(),
-                error_message: None,
-                output_path: download.output_path.clone(),
-                is_upgrade: false,
                 added: chrono::Utc::now(),
-                movie_id: download.movie_id,
-                artist_id: download.artist_id,
-                audiobook_id: None,
-                content_type: download.content_type.clone(),
+                is_upgrade: false,
             };
 
-            if let Err(e) = td_repo.insert(&model).await {
-                tracing::warn!(
-                    "Failed to create tracked record for untracked download {}: {}",
-                    id,
-                    e
-                );
-            } else {
-                tracing::info!(
-                    "Created tracked record (Ignored) for untracked download: {} ({})",
-                    download.title,
-                    id
-                );
+            match state.tracked.suppressed.insert(suppressed).await {
+                Ok(_) => {
+                    tracing::info!(
+                        "Suppressed untracked download: {} ({})",
+                        download.title,
+                        id
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to suppress untracked download {}: {}",
+                        id,
+                        e
+                    );
+                }
             }
         }
     }
@@ -121,7 +107,7 @@ pub(super) async fn remove_from_queue(
     let downloads = fetch_all_downloads(&state, true).await;
 
     for download in &downloads {
-        if download.id < 10000 {
+        if download.id < UNTRACKED_ID_BASE {
             let _ = service
                 .remove(download.id, query.remove_from_client, query.blocklist)
                 .await;

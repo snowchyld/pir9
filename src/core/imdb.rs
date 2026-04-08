@@ -158,7 +158,10 @@ impl ImdbClient {
         self.start_sync_selective(&[]).await
     }
 
-    pub async fn start_sync_selective(&self, datasets: &[String]) -> anyhow::Result<ImdbProxyResponse> {
+    pub async fn start_sync_selective(
+        &self,
+        datasets: &[String],
+    ) -> anyhow::Result<ImdbProxyResponse> {
         if !self.config.enabled {
             return Ok(ImdbProxyResponse {
                 status: 503,
@@ -252,7 +255,10 @@ impl ImdbClient {
             Ok(response) if response.status().is_success() => Ok(response.json().await.ok()),
             Ok(response) if response.status().as_u16() == 404 => Ok(None),
             Ok(response) => {
-                warn!("IMDB service returned error for credits: {}", response.status());
+                warn!(
+                    "IMDB service returned error for credits: {}",
+                    response.status()
+                );
                 Ok(None)
             }
             Err(e) => {

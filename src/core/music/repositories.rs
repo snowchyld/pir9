@@ -233,11 +233,10 @@ impl AlbumRepository {
     /// Find albums by artist ID
     pub async fn find_by_artist_id(&self, artist_id: i64) -> Result<Vec<Album>> {
         let pool = self.db.pool();
-        let rows =
-            sqlx::query("SELECT * FROM albums WHERE artist_id = $1 ORDER BY release_date")
-                .bind(artist_id)
-                .fetch_all(pool)
-                .await?;
+        let rows = sqlx::query("SELECT * FROM albums WHERE artist_id = $1 ORDER BY release_date")
+            .bind(artist_id)
+            .fetch_all(pool)
+            .await?;
 
         let mut albums = Vec::new();
         for row in rows {

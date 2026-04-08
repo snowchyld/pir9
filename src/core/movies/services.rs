@@ -92,7 +92,8 @@ impl MovieService {
                     movie.tmdb_id = enrichment.tmdb_id;
                 }
                 if !enrichment.images.is_empty() {
-                    movie.images = enrichment.images
+                    movie.images = enrichment
+                        .images
                         .into_iter()
                         .filter_map(|img| {
                             let cover_type = match img.cover_type.as_str() {

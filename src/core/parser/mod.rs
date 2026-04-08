@@ -291,31 +291,31 @@ pub fn detect_languages(title: &str) -> Vec<Language> {
 
     // Map of title markers to language IDs (matching LANGUAGES static)
     let markers: &[(&[&str], i32)] = &[
-        (&["FRENCH", "VOSTFR", "TRUEFRENCH", "VFF", "VFQ"], 2),     // French
-        (&["SPANISH", "LATINO", "CASTELLANO", "SPA"], 3),             // Spanish
-        (&["GERMAN", "DEUTSCH"], 4),                                   // German
-        (&["ITALIAN", "ITA"], 5),                                      // Italian
-        (&["DANISH", "DAN"], 6),                                       // Danish
-        (&["DUTCH", "NLD", "FLEMISH"], 7),                             // Dutch
-        (&["JAPANESE", "JPN"], 8),                                     // Japanese
-        (&["ICELANDIC"], 9),                                           // Icelandic
-        (&["CHINESE", "CHI", "MANDARIN", "CANTONESE"], 10),           // Chinese
-        (&["RUSSIAN", "RUS"], 11),                                     // Russian
-        (&["POLISH", "POL", "PL."], 12),                               // Polish
-        (&["VIETNAMESE", "VIE"], 13),                                  // Vietnamese
-        (&["SWEDISH", "SWE"], 14),                                     // Swedish
-        (&["NORWEGIAN", "NOR", "NORSK"], 15),                         // Norwegian
-        (&["FINNISH", "FIN"], 16),                                     // Finnish
-        (&["TURKISH", "TUR"], 17),                                     // Turkish
-        (&["PORTUGUESE", "POR"], 18),                                  // Portuguese
-        (&["KOREAN", "KOR"], 19),                                      // Korean
-        (&["HUNGARIAN", "HUN"], 20),                                   // Hungarian
-        (&["HEBREW", "HEB"], 21),                                      // Hebrew
-        (&["CZECH", "CZE", "CES"], 22),                                // Czech
-        (&["HINDI", "HIN"], 23),                                       // Hindi
-        (&["ROMANIAN", "RON", "ROM"], 24),                             // Romanian
-        (&["THAI", "THA"], 25),                                        // Thai
-        (&["ARABIC", "ARA"], 26),                                      // Arabic
+        (&["FRENCH", "VOSTFR", "TRUEFRENCH", "VFF", "VFQ"], 2), // French
+        (&["SPANISH", "LATINO", "CASTELLANO", "SPA"], 3),       // Spanish
+        (&["GERMAN", "DEUTSCH"], 4),                            // German
+        (&["ITALIAN", "ITA"], 5),                               // Italian
+        (&["DANISH", "DAN"], 6),                                // Danish
+        (&["DUTCH", "NLD", "FLEMISH"], 7),                      // Dutch
+        (&["JAPANESE", "JPN"], 8),                              // Japanese
+        (&["ICELANDIC"], 9),                                    // Icelandic
+        (&["CHINESE", "CHI", "MANDARIN", "CANTONESE"], 10),     // Chinese
+        (&["RUSSIAN", "RUS"], 11),                              // Russian
+        (&["POLISH", "POL", "PL."], 12),                        // Polish
+        (&["VIETNAMESE", "VIE"], 13),                           // Vietnamese
+        (&["SWEDISH", "SWE"], 14),                              // Swedish
+        (&["NORWEGIAN", "NOR", "NORSK"], 15),                   // Norwegian
+        (&["FINNISH", "FIN"], 16),                              // Finnish
+        (&["TURKISH", "TUR"], 17),                              // Turkish
+        (&["PORTUGUESE", "POR"], 18),                           // Portuguese
+        (&["KOREAN", "KOR"], 19),                               // Korean
+        (&["HUNGARIAN", "HUN"], 20),                            // Hungarian
+        (&["HEBREW", "HEB"], 21),                               // Hebrew
+        (&["CZECH", "CZE", "CES"], 22),                         // Czech
+        (&["HINDI", "HIN"], 23),                                // Hindi
+        (&["ROMANIAN", "RON", "ROM"], 24),                      // Romanian
+        (&["THAI", "THA"], 25),                                 // Thai
+        (&["ARABIC", "ARA"], 26),                               // Arabic
     ];
 
     // Check for multi-language indicators
@@ -324,7 +324,10 @@ pub fn detect_languages(title: &str) -> Vec<Language> {
     for (terms, lang_id) in markers {
         for term in *terms {
             // Match as whole word: surrounded by separators or string boundary
-            let pattern = format!(r"(?:^|[.\s_\-\[\(]){}(?:$|[.\s_\-\]\)])", regex::escape(term));
+            let pattern = format!(
+                r"(?:^|[.\s_\-\[\(]){}(?:$|[.\s_\-\]\)])",
+                regex::escape(term)
+            );
             if let Ok(re) = Regex::new(&pattern) {
                 if re.is_match(&upper) {
                     if let Some(lang) = Language::from_id(*lang_id) {

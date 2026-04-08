@@ -64,10 +64,10 @@ async fn lookup_movie(
     let term = query.term.as_deref().unwrap_or("");
 
     // Parse the term to determine lookup mode
-    if let Some(tmdb_id) = query
-        .tmdb_id
-        .or_else(|| term.strip_prefix("tmdb:").and_then(|s| s.trim().parse::<i64>().ok()))
-    {
+    if let Some(tmdb_id) = query.tmdb_id.or_else(|| {
+        term.strip_prefix("tmdb:")
+            .and_then(|s| s.trim().parse::<i64>().ok())
+    }) {
         return lookup_by_tmdb_id(&state, tmdb_id).await;
     }
 
@@ -204,7 +204,13 @@ async fn lookup_by_imdb_id(
 
     let result = if let Some(m) = imdb_movie {
         let (tmdb_id, images, overview, studio, certification) = match &enrichment {
-            Some(e) => (e.tmdb_id, e.images.clone(), e.overview.clone(), e.studio.clone(), e.certification.clone()),
+            Some(e) => (
+                e.tmdb_id,
+                e.images.clone(),
+                e.overview.clone(),
+                e.studio.clone(),
+                e.certification.clone(),
+            ),
             None => (0, vec![], None, None, None),
         };
         MovieLookupResult {
@@ -426,7 +432,10 @@ async fn add_movie(
     };
 
     let images = if options.images.is_empty() {
-        enrichment.as_ref().map(|e| e.images.clone()).unwrap_or_default()
+        enrichment
+            .as_ref()
+            .map(|e| e.images.clone())
+            .unwrap_or_default()
     } else {
         options.images.clone()
     };
@@ -439,12 +448,32 @@ async fn add_movie(
     };
 
     // Merge enrichment metadata — request fields take priority
-    let overview = options.overview.clone().or_else(|| enrichment.as_ref().and_then(|e| e.overview.clone()));
-    let studio = options.studio.clone().or_else(|| enrichment.as_ref().and_then(|e| e.studio.clone()));
-    let certification = options.certification.clone().or_else(|| enrichment.as_ref().and_then(|e| e.certification.clone()));
-    let physical_release_date = enrichment.as_ref().and_then(|e| e.physical_release.as_deref()).and_then(|s| movies::parse_date_prefix(s));
-    let digital_release_date = enrichment.as_ref().and_then(|e| e.digital_release.as_deref()).and_then(|s| movies::parse_date_prefix(s));
-    let release_date = release_date.or_else(|| enrichment.as_ref().and_then(|e| e.in_cinemas.as_deref()).and_then(|s| movies::parse_date_prefix(s)));
+    let overview = options
+        .overview
+        .clone()
+        .or_else(|| enrichment.as_ref().and_then(|e| e.overview.clone()));
+    let studio = options
+        .studio
+        .clone()
+        .or_else(|| enrichment.as_ref().and_then(|e| e.studio.clone()));
+    let certification = options
+        .certification
+        .clone()
+        .or_else(|| enrichment.as_ref().and_then(|e| e.certification.clone()));
+    let physical_release_date = enrichment
+        .as_ref()
+        .and_then(|e| e.physical_release.as_deref())
+        .and_then(|s| movies::parse_date_prefix(s));
+    let digital_release_date = enrichment
+        .as_ref()
+        .and_then(|e| e.digital_release.as_deref())
+        .and_then(|s| movies::parse_date_prefix(s));
+    let release_date = release_date.or_else(|| {
+        enrichment
+            .as_ref()
+            .and_then(|e| e.in_cinemas.as_deref())
+            .and_then(|s| movies::parse_date_prefix(s))
+    });
 
     use crate::core::datastore::models::MovieDbModel;
 
@@ -485,7 +514,11 @@ async fn add_movie(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to create movie: {}", e)))?;
 
-    tracing::info!("Created movie via v3 API: id={}, title={}", id, options.title);
+    tracing::info!(
+        "Created movie via v3 API: id={}, title={}",
+        id,
+        options.title
+    );
 
     // Create the movie folder on disk
     let movie_path = &db_movie.path;

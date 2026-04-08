@@ -9,7 +9,7 @@ use tracing::{error, info, warn};
 
 use crate::core::datastore::repositories::{
     DownloadClientRepository, EpisodeRepository, IndexerRepository, QualityProfileRepository,
-    RootFolderRepository, SeriesRepository, TrackedDownloadRepository,
+    RootFolderRepository, SeriesRepository,
 };
 use crate::core::datastore::Database;
 use crate::core::download::clients::create_client_from_model as create_download_client;
@@ -355,11 +355,10 @@ async fn execute_rss_sync(
     let series_repo = SeriesRepository::new(db.clone());
     let episode_repo = EpisodeRepository::new(db.clone());
     let quality_repo = QualityProfileRepository::new(db.clone());
-    let tracked_repo = TrackedDownloadRepository::new(db.clone());
     let tracked_store = tracked
         .cloned()
         .unwrap_or_else(|| Arc::new(crate::core::queue::TrackedDownloads::empty()));
-    let tracked_service = TrackedDownloadService::new(db.clone(), tracked_store);
+    let tracked_service = TrackedDownloadService::new(db.clone(), tracked_store.clone());
 
     let all_series = series_repo.get_all().await?;
     let monitored_series: Vec<_> = all_series.into_iter().filter(|s| s.monitored).collect();
@@ -374,10 +373,10 @@ async fn execute_rss_sync(
         all_profiles.into_iter().map(|p| (p.id, p)).collect();
 
     // Get currently downloading episode IDs to avoid duplicate grabs
-    let active_downloads = tracked_repo.get_all_active().await.unwrap_or_default();
+    let active_downloads = tracked_store.get_all_any().await;
     let downloading_episode_ids: std::collections::HashSet<i64> = active_downloads
         .iter()
-        .flat_map(|d| serde_json::from_str::<Vec<i64>>(&d.episode_ids).unwrap_or_default())
+        .flat_map(|d| d.episode_ids.iter().copied())
         .collect();
 
     let mut grabbed = 0u32;

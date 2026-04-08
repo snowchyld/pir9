@@ -34,7 +34,11 @@ impl std::fmt::Debug for MetadataService {
 }
 
 impl MetadataService {
-    pub fn new(imdb_client: ImdbClient, tvmaze_client: TvMazeClient, tvdb_client: TvdbClient) -> Self {
+    pub fn new(
+        imdb_client: ImdbClient,
+        tvmaze_client: TvMazeClient,
+        tvdb_client: TvdbClient,
+    ) -> Self {
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .user_agent(format!("pir9/{}", env!("CARGO_PKG_VERSION")))

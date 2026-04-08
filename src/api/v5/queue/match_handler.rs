@@ -12,9 +12,12 @@ use serde::Deserialize;
 use super::common::QueueActionResponse;
 use crate::core::datastore::repositories::{
     ArtistRepository, AudiobookRepository, DownloadClientRepository, MovieRepository,
-    SeriesRepository, TrackedDownloadRepository,
+    SeriesRepository,
 };
-use crate::core::queue::TrackedDownloadState;
+use crate::core::queue::tracked::{
+    AudiobookRef, MovieRef, MusicRef, SeriesRef, TrackedDownload,
+};
+use crate::core::queue::UNTRACKED_ID_BASE;
 use crate::web::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -30,7 +33,7 @@ pub struct UpdateMatchRequest {
     pub artist_id: Option<i64>,
     /// Audiobook ID (for audiobook match)
     pub audiobook_id: Option<i64>,
-    /// Required for untracked downloads (id >= 10000) — the download client's ID for this item
+    /// Required for untracked downloads (id >= UNTRACKED_ID_BASE) — the download client's ID for this item
     pub download_id: Option<String>,
     /// Required for untracked downloads — the download client name
     pub download_client: Option<String>,
@@ -44,16 +47,14 @@ pub struct UpdateMatchRequest {
 
 /// PUT /api/v5/queue/{id}/match
 /// Manually fix the series/episode or movie match for a queue item.
-/// For tracked downloads (id < 10000): updates the existing DB record.
-/// For untracked downloads (id >= 10000): promotes to a tracked download by
-/// creating a new DB record with the corrected match.
+/// For tracked downloads (id < UNTRACKED_ID_BASE): updates the existing in-memory record.
+/// For untracked downloads (id >= UNTRACKED_ID_BASE): promotes to a tracked download by
+/// creating a new record in the appropriate store.
 pub(super) async fn update_match(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
     Json(body): Json<UpdateMatchRequest>,
 ) -> Result<Json<QueueActionResponse>, StatusCode> {
-    let td_repo = TrackedDownloadRepository::new(state.db.clone());
-
     // Determine match type: audiobook > artist > movie > series
     let is_audiobook_match = body.audiobook_id.is_some();
     let is_artist_match = body.artist_id.is_some();
@@ -69,14 +70,39 @@ pub(super) async fn update_match(
             _ => return Err(StatusCode::NOT_FOUND),
         }
 
-        if id < 10000 {
-            if let Err(e) = td_repo.update_audiobook_match(id, audiobook_id).await {
-                tracing::warn!(
-                    "Failed to update audiobook match for tracked download {}: {}",
-                    id,
-                    e
-                );
-                return Ok(Json(QueueActionResponse { success: false }));
+        if id < UNTRACKED_ID_BASE {
+            // Tracked download — update in audiobooks store (or migrate if in different store)
+            let updated = state
+                .tracked
+                .audiobooks
+                .update(id, |td| {
+                    td.content.audiobook_id = audiobook_id;
+                })
+                .await
+                .unwrap_or(false);
+            if !updated {
+                // Download may be in a different store — remove and re-insert as audiobook
+                if let Some(existing) = state.tracked.find_by_id(id).await {
+                    state.tracked.remove_by_id(id).await;
+                    let td = TrackedDownload {
+                        id: 0,
+                        download_id: existing.download_id,
+                        client_id: existing.client_id,
+                        content: AudiobookRef { audiobook_id },
+                        title: existing.title,
+                        quality: existing.quality,
+                        indexer: existing.indexer,
+                        added: existing.added,
+                        is_upgrade: existing.is_upgrade,
+                    };
+                    if let Err(e) = state.tracked.audiobooks.insert(td).await {
+                        tracing::warn!("Failed to update audiobook match: {}", e);
+                        return Ok(Json(QueueActionResponse { success: false }));
+                    }
+                } else {
+                    tracing::warn!("Tracked download {} not found", id);
+                    return Ok(Json(QueueActionResponse { success: false }));
+                }
             }
             tracing::info!(
                 "Queue match updated: download {} → audiobook {}",
@@ -84,6 +110,7 @@ pub(super) async fn update_match(
                 audiobook_id
             );
         } else {
+            // Untracked download — promote to tracked
             let download_id = match body.download_id {
                 Some(ref id) if !id.is_empty() => id.clone(),
                 _ => return Err(StatusCode::BAD_REQUEST),
@@ -100,52 +127,33 @@ pub(super) async fn update_match(
                 None => return Err(StatusCode::NOT_FOUND),
             };
 
-            if let Ok(Some(existing)) = td_repo.get_by_download_id(client_id, &download_id).await {
-                if let Err(e) = td_repo
-                    .update_audiobook_match(existing.id, audiobook_id)
-                    .await
-                {
-                    tracing::warn!("Failed to update audiobook match: {}", e);
-                    return Ok(Json(QueueActionResponse { success: false }));
-                }
-                let _ = td_repo
-                    .update_status(
-                        existing.id,
-                        TrackedDownloadState::ImportPending as i32,
-                        "[]",
-                        None,
-                    )
+            // Check if already tracked by download_id
+            if let Some(existing) = state
+                .tracked
+                .audiobooks
+                .get_by_download_id(client_id, &download_id)
+                .await
+            {
+                let _ = state
+                    .tracked
+                    .audiobooks
+                    .update(existing.id, |td| {
+                        td.content.audiobook_id = audiobook_id;
+                    })
                     .await;
             } else {
-                let protocol = match body.protocol.as_deref() {
-                    Some("usenet") => 1,
-                    _ => 2,
-                };
-                use crate::core::datastore::models::TrackedDownloadDbModel;
-                let model = TrackedDownloadDbModel {
+                let td = TrackedDownload {
                     id: 0,
                     download_id: download_id.clone(),
-                    download_client_id: client_id,
-                    series_id: 0,
-                    episode_ids: "[]".to_string(),
+                    client_id,
+                    content: AudiobookRef { audiobook_id },
                     title: body.title.unwrap_or_default(),
                     indexer: None,
-                    size: body.size.unwrap_or(0.0) as i64,
-                    protocol,
                     quality: "{}".to_string(),
-                    languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
-                    status: TrackedDownloadState::Downloading as i32,
-                    status_messages: "[]".to_string(),
-                    error_message: None,
-                    output_path: None,
-                    is_upgrade: false,
                     added: chrono::Utc::now(),
-                    movie_id: None,
-                    artist_id: None,
-                    audiobook_id: Some(audiobook_id),
-                    content_type: "audiobook".to_string(),
+                    is_upgrade: false,
                 };
-                if let Err(e) = td_repo.insert(&model).await {
+                if let Err(e) = state.tracked.audiobooks.insert(td).await {
                     tracing::warn!(
                         "Failed to promote untracked download '{}': {}",
                         download_id,
@@ -166,15 +174,38 @@ pub(super) async fn update_match(
             _ => return Err(StatusCode::NOT_FOUND),
         }
 
-        if id < 10000 {
-            // Tracked download — update existing record
-            if let Err(e) = td_repo.update_artist_match(id, artist_id).await {
-                tracing::warn!(
-                    "Failed to update artist match for tracked download {}: {}",
-                    id,
-                    e
-                );
-                return Ok(Json(QueueActionResponse { success: false }));
+        if id < UNTRACKED_ID_BASE {
+            // Tracked download — update in music store (or migrate if in different store)
+            let updated = state
+                .tracked
+                .music
+                .update(id, |td| {
+                    td.content.artist_id = artist_id;
+                })
+                .await
+                .unwrap_or(false);
+            if !updated {
+                if let Some(existing) = state.tracked.find_by_id(id).await {
+                    state.tracked.remove_by_id(id).await;
+                    let td = TrackedDownload {
+                        id: 0,
+                        download_id: existing.download_id,
+                        client_id: existing.client_id,
+                        content: MusicRef { artist_id },
+                        title: existing.title,
+                        quality: existing.quality,
+                        indexer: existing.indexer,
+                        added: existing.added,
+                        is_upgrade: existing.is_upgrade,
+                    };
+                    if let Err(e) = state.tracked.music.insert(td).await {
+                        tracing::warn!("Failed to update artist match: {}", e);
+                        return Ok(Json(QueueActionResponse { success: false }));
+                    }
+                } else {
+                    tracing::warn!("Tracked download {} not found", id);
+                    return Ok(Json(QueueActionResponse { success: false }));
+                }
             }
             tracing::info!(
                 "Queue match updated: download {} → artist {}",
@@ -199,22 +230,18 @@ pub(super) async fn update_match(
                 None => return Err(StatusCode::NOT_FOUND),
             };
 
-            if let Ok(Some(existing)) = td_repo.get_by_download_id(client_id, &download_id).await {
-                if let Err(e) = td_repo.update_artist_match(existing.id, artist_id).await {
-                    tracing::warn!(
-                        "Failed to update artist match for existing tracked download {}: {}",
-                        existing.id,
-                        e
-                    );
-                    return Ok(Json(QueueActionResponse { success: false }));
-                }
-                let _ = td_repo
-                    .update_status(
-                        existing.id,
-                        TrackedDownloadState::ImportPending as i32,
-                        "[]",
-                        None,
-                    )
+            if let Some(existing) = state
+                .tracked
+                .music
+                .get_by_download_id(client_id, &download_id)
+                .await
+            {
+                let _ = state
+                    .tracked
+                    .music
+                    .update(existing.id, |td| {
+                        td.content.artist_id = artist_id;
+                    })
                     .await;
                 tracing::info!(
                     "Queue match updated (existing): download {} → artist {}",
@@ -222,35 +249,18 @@ pub(super) async fn update_match(
                     artist_id
                 );
             } else {
-                let protocol = match body.protocol.as_deref() {
-                    Some("usenet") => 1,
-                    _ => 2,
-                };
-                use crate::core::datastore::models::TrackedDownloadDbModel;
-                let model = TrackedDownloadDbModel {
+                let td = TrackedDownload {
                     id: 0,
                     download_id: download_id.clone(),
-                    download_client_id: client_id,
-                    series_id: 0,
-                    episode_ids: "[]".to_string(),
+                    client_id,
+                    content: MusicRef { artist_id },
                     title: body.title.unwrap_or_default(),
                     indexer: None,
-                    size: body.size.unwrap_or(0.0) as i64,
-                    protocol,
                     quality: "{}".to_string(),
-                    languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
-                    status: TrackedDownloadState::Downloading as i32,
-                    status_messages: "[]".to_string(),
-                    error_message: None,
-                    output_path: None,
-                    is_upgrade: false,
                     added: chrono::Utc::now(),
-                    movie_id: None,
-                    artist_id: Some(artist_id),
-                    audiobook_id: None,
-                    content_type: "music".to_string(),
+                    is_upgrade: false,
                 };
-                match td_repo.insert(&model).await {
+                match state.tracked.music.insert(td).await {
                     Ok(new_id) => {
                         tracing::info!(
                             "Untracked download promoted: '{}' → tracked {} (artist {})",
@@ -281,15 +291,38 @@ pub(super) async fn update_match(
             _ => return Err(StatusCode::NOT_FOUND),
         }
 
-        if id < 10000 {
-            // Tracked download — update existing record
-            if let Err(e) = td_repo.update_movie_match(id, movie_id).await {
-                tracing::warn!(
-                    "Failed to update movie match for tracked download {}: {}",
-                    id,
-                    e
-                );
-                return Ok(Json(QueueActionResponse { success: false }));
+        if id < UNTRACKED_ID_BASE {
+            // Tracked download — update in movies store (or migrate if in different store)
+            let updated = state
+                .tracked
+                .movies
+                .update(id, |td| {
+                    td.content.movie_id = movie_id;
+                })
+                .await
+                .unwrap_or(false);
+            if !updated {
+                if let Some(existing) = state.tracked.find_by_id(id).await {
+                    state.tracked.remove_by_id(id).await;
+                    let td = TrackedDownload {
+                        id: 0,
+                        download_id: existing.download_id,
+                        client_id: existing.client_id,
+                        content: MovieRef { movie_id },
+                        title: existing.title,
+                        quality: existing.quality,
+                        indexer: existing.indexer,
+                        added: existing.added,
+                        is_upgrade: existing.is_upgrade,
+                    };
+                    if let Err(e) = state.tracked.movies.insert(td).await {
+                        tracing::warn!("Failed to update movie match: {}", e);
+                        return Ok(Json(QueueActionResponse { success: false }));
+                    }
+                } else {
+                    tracing::warn!("Tracked download {} not found", id);
+                    return Ok(Json(QueueActionResponse { success: false }));
+                }
             }
             tracing::info!("Queue match updated: download {} → movie {}", id, movie_id);
         } else {
@@ -310,22 +343,18 @@ pub(super) async fn update_match(
                 None => return Err(StatusCode::NOT_FOUND),
             };
 
-            if let Ok(Some(existing)) = td_repo.get_by_download_id(client_id, &download_id).await {
-                if let Err(e) = td_repo.update_movie_match(existing.id, movie_id).await {
-                    tracing::warn!(
-                        "Failed to update movie match for existing tracked download {}: {}",
-                        existing.id,
-                        e
-                    );
-                    return Ok(Json(QueueActionResponse { success: false }));
-                }
-                let _ = td_repo
-                    .update_status(
-                        existing.id,
-                        TrackedDownloadState::ImportPending as i32,
-                        "[]",
-                        None,
-                    )
+            if let Some(existing) = state
+                .tracked
+                .movies
+                .get_by_download_id(client_id, &download_id)
+                .await
+            {
+                let _ = state
+                    .tracked
+                    .movies
+                    .update(existing.id, |td| {
+                        td.content.movie_id = movie_id;
+                    })
                     .await;
                 tracing::info!(
                     "Queue match updated (existing): download {} → movie {}",
@@ -333,35 +362,18 @@ pub(super) async fn update_match(
                     movie_id
                 );
             } else {
-                let protocol = match body.protocol.as_deref() {
-                    Some("usenet") => 1,
-                    _ => 2,
-                };
-                use crate::core::datastore::models::TrackedDownloadDbModel;
-                let model = TrackedDownloadDbModel {
+                let td = TrackedDownload {
                     id: 0,
                     download_id: download_id.clone(),
-                    download_client_id: client_id,
-                    series_id: 0,
-                    episode_ids: "[]".to_string(),
+                    client_id,
+                    content: MovieRef { movie_id },
                     title: body.title.unwrap_or_default(),
                     indexer: None,
-                    size: body.size.unwrap_or(0.0) as i64,
-                    protocol,
                     quality: "{}".to_string(),
-                    languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
-                    status: TrackedDownloadState::Downloading as i32,
-                    status_messages: "[]".to_string(),
-                    error_message: None,
-                    output_path: None,
-                    is_upgrade: false,
                     added: chrono::Utc::now(),
-                    movie_id: Some(movie_id),
-                    artist_id: None,
-                    audiobook_id: None,
-                    content_type: "movie".to_string(),
+                    is_upgrade: false,
                 };
-                match td_repo.insert(&model).await {
+                match state.tracked.movies.insert(td).await {
                     Ok(new_id) => {
                         tracing::info!(
                             "Untracked download promoted: '{}' → tracked {} (movie {})",
@@ -398,19 +410,43 @@ pub(super) async fn update_match(
             _ => return Err(StatusCode::NOT_FOUND),
         }
 
-        let episode_ids_json =
-            serde_json::to_string(&episode_ids).unwrap_or_else(|_| "[]".to_string());
-
-        if id < 10000 {
-            // Tracked download — update existing record
-            if let Err(e) = td_repo
-                .update_series_match(id, series_id, &episode_ids_json)
+        if id < UNTRACKED_ID_BASE {
+            // Tracked download — update in series store (or migrate if in different store)
+            let updated = state
+                .tracked
+                .series
+                .update(id, |td| {
+                    td.content.series_id = series_id;
+                    td.content.episode_ids = episode_ids.clone();
+                })
                 .await
-            {
-                tracing::warn!("Failed to update match for tracked download {}: {}", id, e);
-                return Ok(Json(QueueActionResponse { success: false }));
+                .unwrap_or(false);
+            if !updated {
+                if let Some(existing) = state.tracked.find_by_id(id).await {
+                    state.tracked.remove_by_id(id).await;
+                    let td = TrackedDownload {
+                        id: 0,
+                        download_id: existing.download_id,
+                        client_id: existing.client_id,
+                        content: SeriesRef {
+                            series_id,
+                            episode_ids: episode_ids.clone(),
+                        },
+                        title: existing.title,
+                        quality: existing.quality,
+                        indexer: existing.indexer,
+                        added: existing.added,
+                        is_upgrade: existing.is_upgrade,
+                    };
+                    if let Err(e) = state.tracked.series.insert(td).await {
+                        tracing::warn!("Failed to update series match: {}", e);
+                        return Ok(Json(QueueActionResponse { success: false }));
+                    }
+                } else {
+                    tracing::warn!("Tracked download {} not found", id);
+                    return Ok(Json(QueueActionResponse { success: false }));
+                }
             }
-
             tracing::info!(
                 "Queue match updated: download {} → series {}, episodes {:?}",
                 id,
@@ -439,28 +475,20 @@ pub(super) async fn update_match(
                 }
             };
 
-            // Check if a tracked_downloads record already exists for this download.
-            if let Ok(Some(existing)) = td_repo.get_by_download_id(client_id, &download_id).await {
-                if let Err(e) = td_repo
-                    .update_series_match(existing.id, series_id, &episode_ids_json)
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to update match for existing tracked download {}: {}",
-                        existing.id,
-                        e
-                    );
-                    return Ok(Json(QueueActionResponse { success: false }));
-                }
-
-                // Reset status to ImportPending
-                let _ = td_repo
-                    .update_status(
-                        existing.id,
-                        TrackedDownloadState::ImportPending as i32,
-                        "[]",
-                        None,
-                    )
+            // Check if a tracked download already exists for this download
+            if let Some(existing) = state
+                .tracked
+                .series
+                .get_by_download_id(client_id, &download_id)
+                .await
+            {
+                let _ = state
+                    .tracked
+                    .series
+                    .update(existing.id, |td| {
+                        td.content.series_id = series_id;
+                        td.content.episode_ids = episode_ids.clone();
+                    })
                     .await;
 
                 tracing::info!(
@@ -471,38 +499,22 @@ pub(super) async fn update_match(
                 );
             } else {
                 // Truly untracked — promote to tracked by creating a new record
-                let protocol = match body.protocol.as_deref() {
-                    Some("usenet") => 1,
-                    _ => 2,
-                };
-
-                use crate::core::datastore::models::TrackedDownloadDbModel;
-
-                let model = TrackedDownloadDbModel {
+                let td = TrackedDownload {
                     id: 0,
                     download_id: download_id.clone(),
-                    download_client_id: client_id,
-                    series_id,
-                    episode_ids: episode_ids_json,
+                    client_id,
+                    content: SeriesRef {
+                        series_id,
+                        episode_ids: episode_ids.clone(),
+                    },
                     title: body.title.unwrap_or_default(),
                     indexer: None,
-                    size: body.size.unwrap_or(0.0) as i64,
-                    protocol,
                     quality: "{}".to_string(),
-                    languages: r#"[{"id":1,"name":"English"}]"#.to_string(),
-                    status: TrackedDownloadState::Downloading as i32,
-                    status_messages: "[]".to_string(),
-                    error_message: None,
-                    output_path: None,
-                    is_upgrade: false,
                     added: chrono::Utc::now(),
-                    movie_id: None,
-                    artist_id: None,
-                    audiobook_id: None,
-                    content_type: "series".to_string(),
+                    is_upgrade: false,
                 };
 
-                match td_repo.insert(&model).await {
+                match state.tracked.series.insert(td).await {
                     Ok(new_id) => {
                         tracing::info!(
                             "Untracked download promoted: '{}' → tracked {} (series {}, episodes {:?})",

@@ -69,13 +69,13 @@ pub async fn get_root_folders(
 
     let db_folders = if let Some(ref ct) = query.content_type {
         let types: Vec<String> = ct.split(',').map(|s| s.trim().to_string()).collect();
-        repo.get_by_content_types(&types)
-            .await
-            .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folders: {}", e)))?
+        repo.get_by_content_types(&types).await.map_err(|e| {
+            RootFolderError::Internal(format!("Failed to fetch root folders: {}", e))
+        })?
     } else {
-        repo.get_all()
-            .await
-            .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folders: {}", e)))?
+        repo.get_all().await.map_err(|e| {
+            RootFolderError::Internal(format!("Failed to fetch root folders: {}", e))
+        })?
     };
 
     // Get series + movie paths to determine which folders are unmapped
@@ -193,7 +193,12 @@ pub async fn create_root_folder(
         .await
         .map_err(|e| RootFolderError::Internal(format!("Failed to create root folder: {}", e)))?;
 
-    tracing::info!("Created root folder: id={}, path={}, content_type={}", id, path, content_type);
+    tracing::info!(
+        "Created root folder: id={}, path={}, content_type={}",
+        id,
+        path,
+        content_type
+    );
 
     // Scan for unmapped folders based on content type
     let mapped_paths = match content_type.as_str() {

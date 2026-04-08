@@ -71,13 +71,13 @@ pub async fn get_root_folders(
 
     let db_folders = if let Some(ref ct) = query.content_type {
         let types: Vec<String> = ct.split(',').map(|s| s.trim().to_string()).collect();
-        repo.get_by_content_types(&types)
-            .await
-            .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folders: {}", e)))?
+        repo.get_by_content_types(&types).await.map_err(|e| {
+            RootFolderError::Internal(format!("Failed to fetch root folders: {}", e))
+        })?
     } else {
-        repo.get_all()
-            .await
-            .map_err(|e| RootFolderError::Internal(format!("Failed to fetch root folders: {}", e)))?
+        repo.get_all().await.map_err(|e| {
+            RootFolderError::Internal(format!("Failed to fetch root folders: {}", e))
+        })?
     };
 
     // Scan each root folder in spawn_blocking to avoid blocking the async
@@ -170,7 +170,12 @@ pub async fn create_root_folder(
         .await
         .map_err(|e| RootFolderError::Internal(format!("Failed to create root folder: {}", e)))?;
 
-    tracing::info!("Created root folder: id={}, path={}, content_type={}", id, path, content_type);
+    tracing::info!(
+        "Created root folder: id={}, path={}, content_type={}",
+        id,
+        path,
+        content_type
+    );
 
     Ok(Json(RootFolderResource {
         id: id as i32,

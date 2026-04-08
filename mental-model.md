@@ -1,7 +1,7 @@
 # pir9 Mental Model
 
 > Living document — updated as the codebase evolves.
-> **Version**: 0.46.0 | **Last updated**: 2026-02-18
+> **Version**: 0.102.0 | **Last updated**: 2026-04-07
 
 ## 1. What Is pir9?
 
@@ -219,31 +219,32 @@ pub trait DownloadClient: Send + Sync {
 
 ### 6.7 Queue & Tracked Downloads (`core/queue/`)
 
-**State machine**:
+**Architecture (v0.99.0)**: Per-content-type JSONL flat files replace the `tracked_downloads` DB table:
+
 ```
-Downloading → ImportBlocked → ImportPending → Importing → Imported
-           ↘ FailedPending → Failed
+core/queue/
+  mod.rs        — re-exports, UNTRACKED_ID_BASE = 1_000_000
+  tracked.rs    — TrackedDownload<C>, ContentRef trait, per-content ref types
+  store.rs      — Generic TrackingStore<C> (JSONL + in-memory RwLock)
+  stores.rs     — TrackedDownloads aggregate, cross-store ops, DB migration
+  service.rs    — TrackedDownloadService (uses stores, not DB repo)
+
+data/tracked/
+  series.jsonl, movies.jsonl, music.jsonl, audiobooks.jsonl, podcasts.jsonl
+  suppressed.jsonl  — soft-removed untracked downloads
 ```
 
-**`TrackedDownloadService.grab_release(release, episode_ids, movie_id)`**:
-1. Select best download client matching protocol
-2. Content-aware category: `movieCategory` for movies, `category` for series (fallback: "sonarr")
-3. Prefer magnet links (avoid indexer dependency)
-4. Fallback: magnet from info_hash → torrent file download → redirect-following
-5. Convert .torrent → magnet via bencoding parser
-6. Send to download client, create tracking record with `movie_id`
+**Key design**: Only "bookmark" data persists (download_id, client_id, content FK, title, quality, added). Status/size/output_path are derived from live download client polling. `process_queue()` is read-only against stores.
 
-**`TrackedDownloadService.get_queue()`** returns `QueueResult`:
-- `items`: Vec of tracked QueueItems with merged live download status
-- `client_downloads`: HashMap<client_id, Vec<DownloadStatus>> — raw polled data reused by callers to avoid double-polling
-- `episode_has_file` checks ALL tracked episode IDs (v0.42.0) — previously only checked the first episode, which hid multi-episode/season-pack downloads from the queue when one episode was already imported
-- Orphaned tracked downloads (torrent removed from client) show as `DownloadClientUnavailable` instead of being deleted — lets import-pending items persist for manual intervention
+**TrackedDownloadService** takes `Arc<TrackedDownloads>` + `Database`. Inserts go to per-content stores; removals on import completion delete from stores (not status update). `reconcile_downloads()` matches untracked client downloads to series/movies and inserts into stores.
 
-**`reconcile_downloads()`** (scheduled every 5min, v0.42.0): Matches untracked downloads to series first, then movies as fallback using `normalize_title()` substring matching. Also runs `cleanup_imported_downloads()` to purge fully-imported tracked records.
+**API layer (v0.100.0)**: `src/api/v5/queue.rs` (3,489 lines) split into `src/api/v5/queue/` directory:
+- `common.rs` — shared types (QueueResource, ClientCategories, etc.)
+- `fetch.rs` — `fetch_all_downloads()` core aggregation
+- `list.rs` — list_queue, get_queue_status, get_queue_details, get_queue_item
+- `remove.rs`, `grab.rs`, `import.rs`, `files.rs`, `match_handler.rs`, `preview.rs`, `tracked.rs`
 
-**Anime detection**: `queue.rs` enrichment pass checks `series.series_type == 2` and overrides `content_type` to "anime".
-
-**Startup**: Logs tracked download count (doesn't process — clients may still be initializing). First `ProcessDownloadQueue` scheduled job (1 min) handles it.
+**Legacy**: `TrackedDownloadRepository` and `TrackedDownloadDbModel` still exist — some API handlers in queue/ still reference the DB directly. Migration to stores is incremental.
 
 ### 6.8 Naming Engine (`core/naming.rs`, ~672 lines)
 

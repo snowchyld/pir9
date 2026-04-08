@@ -117,9 +117,7 @@ async fn get_running_tasks(
                 crate::core::messaging::ScanType::DownloadedEpisodesScan => {
                     "Scan Downloads".to_string()
                 }
-                crate::core::messaging::ScanType::DownloadedMovieScan => {
-                    "Import Movie".to_string()
-                }
+                crate::core::messaging::ScanType::DownloadedMovieScan => "Import Movie".to_string(),
                 crate::core::messaging::ScanType::RescanPodcast => "Scan Podcasts".to_string(),
                 crate::core::messaging::ScanType::RescanMusic => "Scan Music".to_string(),
                 crate::core::messaging::ScanType::RescanAudiobook => "Scan Audiobooks".to_string(),
@@ -181,11 +179,12 @@ async fn get_running_tasks(
                             &sync_status.name_basics,
                             &sync_status.title_principals,
                         ];
-                        let active = datasets.iter().find_map(|d| {
-                            d.as_ref().filter(|ds| ds.is_running)
-                        });
+                        let active = datasets
+                            .iter()
+                            .find_map(|d| d.as_ref().filter(|ds| ds.is_running));
                         let detail = active.map(|ds| {
-                            let name = ds.dataset_name
+                            let name = ds
+                                .dataset_name
                                 .trim_end_matches(".tsv.gz")
                                 .replace('.', " ");
                             if ds.rows_processed > 0 {

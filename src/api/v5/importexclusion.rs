@@ -102,10 +102,7 @@ async fn add_exclusion(
 }
 
 /// DELETE /api/v5/importexclusion/{id} — remove an exclusion
-async fn delete_exclusion(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-) -> StatusCode {
+async fn delete_exclusion(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> StatusCode {
     let repo = ImportExclusionRepository::new(state.db.clone());
     match repo.delete(id).await {
         Ok(()) => StatusCode::OK,

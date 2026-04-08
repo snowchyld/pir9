@@ -292,21 +292,19 @@ async fn start_process(
 /// Get IMDB stats - proxied to pir9-imdb service
 async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.imdb_client.get_stats().await {
-        Ok(Some(stats)) => {
-            Json(serde_json::json!({
-                "seriesCount": stats.series_count,
-                "episodeCount": stats.episode_count,
-                "movieCount": stats.movie_count,
-                "peopleCount": stats.people_count,
-                "creditsCount": stats.credits_count,
-                "dbSizeBytes": stats.db_size_bytes,
-                "lastSync": stats.last_sync,
-                "lastBasicsSync": stats.last_sync,
-                "lastEpisodesSync": stats.last_sync,
-                "lastRatingsSync": stats.last_sync,
-            }))
-            .into_response()
-        }
+        Ok(Some(stats)) => Json(serde_json::json!({
+            "seriesCount": stats.series_count,
+            "episodeCount": stats.episode_count,
+            "movieCount": stats.movie_count,
+            "peopleCount": stats.people_count,
+            "creditsCount": stats.credits_count,
+            "dbSizeBytes": stats.db_size_bytes,
+            "lastSync": stats.last_sync,
+            "lastBasicsSync": stats.last_sync,
+            "lastEpisodesSync": stats.last_sync,
+            "lastRatingsSync": stats.last_sync,
+        }))
+        .into_response(),
         Ok(None) => Json(serde_json::json!({
             "seriesCount": 0,
             "episodeCount": 0,

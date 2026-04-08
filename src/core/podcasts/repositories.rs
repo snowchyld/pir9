@@ -253,13 +253,11 @@ impl PodcastEpisodeRepository {
         guid: &str,
     ) -> Result<Option<PodcastEpisode>> {
         let pool = self.db.pool();
-        let row = sqlx::query(
-            "SELECT * FROM podcast_episodes WHERE podcast_id = $1 AND guid = $2",
-        )
-        .bind(podcast_id)
-        .bind(guid)
-        .fetch_optional(pool)
-        .await?;
+        let row = sqlx::query("SELECT * FROM podcast_episodes WHERE podcast_id = $1 AND guid = $2")
+            .bind(podcast_id)
+            .bind(guid)
+            .fetch_optional(pool)
+            .await?;
 
         match row {
             Some(row) => Ok(Some(self.row_to_episode(&row)?)),

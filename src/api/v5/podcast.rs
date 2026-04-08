@@ -218,10 +218,9 @@ async fn create_podcast(
         sanitize_filename::sanitize(&title)
     );
 
-    let genres_json = serde_json::to_string(&feed_metadata.categories)
-        .unwrap_or_else(|_| "[]".to_string());
-    let tags_json =
-        serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
+    let genres_json =
+        serde_json::to_string(&feed_metadata.categories).unwrap_or_else(|_| "[]".to_string());
+    let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
 
     // Build images from feed
     let images: Vec<PodcastImage> = feed_metadata
@@ -234,8 +233,7 @@ async fn create_podcast(
             }]
         })
         .unwrap_or_default();
-    let images_json =
-        serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+    let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
 
     let db_podcast = PodcastDbModel {
         id: 0,
@@ -271,11 +269,7 @@ async fn create_podcast(
         if !path.exists() {
             match tokio::fs::create_dir_all(path).await {
                 Ok(()) => tracing::info!("Created podcast folder: {}", full_path),
-                Err(e) => tracing::warn!(
-                    "Failed to create podcast folder {}: {}",
-                    full_path,
-                    e
-                ),
+                Err(e) => tracing::warn!("Failed to create podcast folder {}: {}", full_path, e),
             }
         }
     }
@@ -307,11 +301,7 @@ async fn create_podcast(
         }
     }
 
-    tracing::info!(
-        "Added {} episodes for podcast id={}",
-        episodes_added,
-        id
-    );
+    tracing::info!("Added {} episodes for podcast id={}", episodes_added, id);
 
     let created = repo
         .get_by_id(id)
@@ -392,11 +382,7 @@ async fn delete_podcast(
         let podcast_path = std::path::Path::new(&podcast.path);
         if podcast_path.exists() {
             if let Err(e) = std::fs::remove_dir_all(podcast_path) {
-                tracing::error!(
-                    "Failed to delete podcast folder {}: {}",
-                    podcast.path,
-                    e
-                );
+                tracing::error!("Failed to delete podcast folder {}: {}", podcast.path, e);
             } else {
                 tracing::info!("Deleted podcast folder: {}", podcast.path);
             }
@@ -437,8 +423,10 @@ async fn get_podcast_episodes(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch episodes: {}", e)))?;
 
-    let responses: Vec<PodcastEpisodeResponse> =
-        episodes.into_iter().map(PodcastEpisodeResponse::from).collect();
+    let responses: Vec<PodcastEpisodeResponse> = episodes
+        .into_iter()
+        .map(PodcastEpisodeResponse::from)
+        .collect();
 
     Ok(Json(responses))
 }
@@ -480,12 +468,11 @@ async fn refresh_podcast(
             url: image_url.clone(),
             remote_url: Some(image_url.clone()),
         }];
-        podcast.images =
-            serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+        podcast.images = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
     }
     if !feed_metadata.categories.is_empty() {
-        podcast.genres = serde_json::to_string(&feed_metadata.categories)
-            .unwrap_or_else(|_| "[]".to_string());
+        podcast.genres =
+            serde_json::to_string(&feed_metadata.categories).unwrap_or_else(|_| "[]".to_string());
     }
 
     podcast.last_info_sync = Some(Utc::now());
@@ -499,10 +486,7 @@ async fn refresh_podcast(
     for fe in &feed_metadata.episodes {
         // Check for existing episode by guid
         let existing = if let Some(ref guid) = fe.guid {
-            episode_repo
-                .get_by_guid(id, guid)
-                .await
-                .unwrap_or(None)
+            episode_repo.get_by_guid(id, guid).await.unwrap_or(None)
         } else {
             None
         };
@@ -592,9 +576,7 @@ async fn lookup_podcast(
     if term.starts_with("http://") || term.starts_with("https://") {
         let feed_metadata = crate::core::podcasts::feed::fetch_feed(term)
             .await
-            .map_err(|e| {
-                ApiError::Internal(format!("Failed to fetch RSS feed: {}", e))
-            })?;
+            .map_err(|e| ApiError::Internal(format!("Failed to fetch RSS feed: {}", e)))?;
 
         let result = PodcastLookupResult {
             title: feed_metadata.title,
@@ -626,10 +608,7 @@ async fn search_itunes(term: &str) -> Result<Vec<PodcastLookupResult>, anyhow::E
 
     let response = client
         .get(&url)
-        .header(
-            "User-Agent",
-            format!("pir9/{}", env!("CARGO_PKG_VERSION")),
-        )
+        .header("User-Agent", format!("pir9/{}", env!("CARGO_PKG_VERSION")))
         .send()
         .await?;
 
@@ -723,9 +702,7 @@ fn default_true() -> bool {
 impl CreatePodcastRequest {
     fn validate(&self) -> Result<(), ApiError> {
         if self.feed_url.is_empty() {
-            return Err(ApiError::Validation(
-                "feed_url is required".to_string(),
-            ));
+            return Err(ApiError::Validation("feed_url is required".to_string()));
         }
         if self.root_folder_path.is_empty() {
             return Err(ApiError::Validation(
@@ -859,8 +836,7 @@ impl From<PodcastDbModel> for PodcastResponse {
     fn from(p: PodcastDbModel) -> Self {
         let genres: Vec<String> = serde_json::from_str(&p.genres).unwrap_or_default();
         let tags: Vec<i64> = serde_json::from_str(&p.tags).unwrap_or_default();
-        let images: Vec<PodcastImage> =
-            serde_json::from_str(&p.images).unwrap_or_default();
+        let images: Vec<PodcastImage> = serde_json::from_str(&p.images).unwrap_or_default();
 
         Self {
             id: p.id,

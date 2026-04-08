@@ -17,7 +17,7 @@ use crate::core::datastore::models::{
 };
 use crate::core::datastore::repositories::{
     DownloadClientRepository, EpisodeFileRepository, EpisodeRepository, HistoryRepository,
-    SeriesRepository, TrackedDownloadRepository,
+    SeriesRepository,
 };
 use crate::core::datastore::Database;
 use crate::core::download::clients::{create_client_from_model, DownloadState, DownloadStatus};
@@ -79,10 +79,7 @@ pub async fn match_series_standalone(
 ) -> anyhow::Result<Option<SeriesDbModel>> {
     let series_repo = SeriesRepository::new(db.clone());
     let all_series = series_repo.get_all().await?;
-    Ok(
-        best_series_match(info, &all_series)
-            .map(|idx| all_series.into_iter().nth(idx).unwrap()),
-    )
+    Ok(best_series_match(info, &all_series).map(|idx| all_series.into_iter().nth(idx).unwrap()))
 }
 
 /// Match episodes for a series based on parsed info (standalone, no ImportService needed).
@@ -561,9 +558,7 @@ impl ImportService {
             };
 
             // User explicitly chose "Do not import" for this file
-            if skip_files.contains(filename)
-                || skip_files.iter().any(|p| p.ends_with(filename))
-            {
+            if skip_files.contains(filename) || skip_files.iter().any(|p| p.ends_with(filename)) {
                 tracing::info!(
                     "Season pack import: skipping '{}' — user chose Do not import",
                     filename,
@@ -605,7 +600,8 @@ impl ImportService {
                     {
                         tracing::info!(
                             "Season pack import: manual override '{}' → {:?}",
-                            filename, pairs
+                            filename,
+                            pairs
                         );
                         pairs.clone()
                     } else {
@@ -1050,25 +1046,11 @@ impl ImportService {
         Ok(results)
     }
 
-    /// Mark the tracked download as Imported (state 4) after successful import
-    pub async fn mark_tracked_imported(&self, pending: &PendingImport) {
-        use crate::core::queue::TrackedDownloadState;
-
-        let repo = TrackedDownloadRepository::new(self.db.clone());
-        if let Ok(Some(td)) = repo
-            .get_by_download_id(pending.download_client_id, &pending.download_id)
-            .await
-        {
-            if let Err(e) = repo
-                .update_status(td.id, TrackedDownloadState::Imported as i32, "[]", None)
-                .await
-            {
-                tracing::warn!(
-                    "Failed to mark tracked download as imported for '{}': {}",
-                    pending.title,
-                    e
-                );
-            }
-        }
+    /// Mark the tracked download as imported after successful import.
+    ///
+    /// This is now a no-op: the scanner/consumer pipeline handles removal of
+    /// tracked downloads upon successful import via `TrackedDownloads::remove_by_download_id`.
+    pub async fn mark_tracked_imported(&self, _pending: &PendingImport) {
+        // No-op — tracked download cleanup is handled by the scanner consumer.
     }
 }

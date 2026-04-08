@@ -13,9 +13,9 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::core::datastore::models::{ArtistDbModel, AlbumDbModel, TrackDbModel, TrackFileDbModel};
+use crate::core::datastore::models::{AlbumDbModel, ArtistDbModel, TrackDbModel, TrackFileDbModel};
 use crate::core::datastore::repositories::{
-    ArtistRepository, AlbumRepository, TrackRepository, TrackFileRepository,
+    AlbumRepository, ArtistRepository, TrackFileRepository, TrackRepository,
 };
 use crate::web::AppState;
 
@@ -123,9 +123,15 @@ async fn get_track_lyrics(
     let cache_file = cache_dir.join(format!("{}.lyric", id));
 
     if cache_file.exists() {
-        let cached = tokio::fs::read_to_string(&cache_file).await.unwrap_or_default();
+        let cached = tokio::fs::read_to_string(&cache_file)
+            .await
+            .unwrap_or_default();
         // Empty file = "not found" sentinel (avoid re-fetching)
-        let lyrics = if cached.is_empty() { None } else { Some(cached) };
+        let lyrics = if cached.is_empty() {
+            None
+        } else {
+            Some(cached)
+        };
         return Ok(Json(serde_json::json!({
             "trackId": id,
             "artist": artist_name,
@@ -346,12 +352,13 @@ async fn enrich_artist_response(
 
     let pool = db.pool();
 
-    let album_count: i64 = sqlx::query("SELECT COUNT(*)::bigint as cnt FROM albums WHERE artist_id = $1")
-        .bind(response.id)
-        .fetch_one(pool)
-        .await
-        .and_then(|row| row.try_get("cnt").map_err(Into::into))
-        .unwrap_or(0);
+    let album_count: i64 =
+        sqlx::query("SELECT COUNT(*)::bigint as cnt FROM albums WHERE artist_id = $1")
+            .bind(response.id)
+            .fetch_one(pool)
+            .await
+            .and_then(|row| row.try_get("cnt").map_err(Into::into))
+            .unwrap_or(0);
 
     let (track_count, track_file_count): (i64, i64) = sqlx::query(
         "SELECT COUNT(*)::bigint as cnt, SUM(CASE WHEN has_file THEN 1 ELSE 0 END)::bigint as file_cnt FROM tracks WHERE artist_id = $1",
@@ -417,11 +424,9 @@ async fn create_artist(
     let full_path = options.get_full_path();
     let root_folder_path = options.get_root_folder_path();
 
-    let genres_json =
-        serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string());
+    let genres_json = serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string());
     let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
-    let images_json =
-        serde_json::to_string(&options.images).unwrap_or_else(|_| "[]".to_string());
+    let images_json = serde_json::to_string(&options.images).unwrap_or_else(|_| "[]".to_string());
 
     let db_artist = ArtistDbModel {
         id: 0,
@@ -430,8 +435,14 @@ async fn create_artist(
         clean_name: clean,
         sort_name: sort,
         overview: options.overview.clone(),
-        artist_type: options.artist_type.clone().unwrap_or_else(|| "group".to_string()),
-        status: options.status.clone().unwrap_or_else(|| "continuing".to_string()),
+        artist_type: options
+            .artist_type
+            .clone()
+            .unwrap_or_else(|| "group".to_string()),
+        status: options
+            .status
+            .clone()
+            .unwrap_or_else(|| "continuing".to_string()),
         genres: genres_json,
         images: images_json,
         tags: tags_json,
@@ -463,7 +474,10 @@ async fn create_artist(
     }
 
     // Auto-fetch albums from MusicBrainz when searchForAlbums is requested
-    let should_search = options.add_options.as_ref().map_or(false, |o| o.search_for_albums);
+    let should_search = options
+        .add_options
+        .as_ref()
+        .map_or(false, |o| o.search_for_albums);
     if should_search {
         if let Some(ref mbid) = options.musicbrainz_id {
             upsert_albums_from_musicbrainz(id, mbid, &state).await;
@@ -483,8 +497,7 @@ async fn create_artist(
     if let Some(ref mbid) = created.musicbrainz_id {
         let images = fetch_fanart_artist_images(mbid, Some(id)).await;
         if !images.is_empty() {
-            created.images =
-                serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+            created.images = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
         }
     }
 
@@ -634,11 +647,7 @@ async fn refresh_artist(
 }
 
 /// Fetch updated artist metadata from MusicBrainz and images from Fanart.tv
-async fn refresh_artist_metadata(
-    artist: &mut ArtistDbModel,
-    mbid: &str,
-    state: &AppState,
-) {
+async fn refresh_artist_metadata(artist: &mut ArtistDbModel, mbid: &str, state: &AppState) {
     // Update metadata from MusicBrainz service
     if let Some(ref mb_client) = state.musicbrainz_client {
         match mb_client.get_artist(mbid).await {
@@ -667,18 +676,17 @@ async fn refresh_artist_metadata(
     // Refresh images from Fanart.tv (with local MediaCover URLs)
     let images = fetch_fanart_artist_images(mbid, Some(artist.id)).await;
     if !images.is_empty() {
-        artist.images = serde_json::to_string(&images)
-            .unwrap_or_else(|_| "[]".to_string());
-        tracing::info!("Updated {} Fanart.tv images for artist: {}", images.len(), artist.name);
+        artist.images = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+        tracing::info!(
+            "Updated {} Fanart.tv images for artist: {}",
+            images.len(),
+            artist.name
+        );
     }
 }
 
 /// Fetch albums from MusicBrainz and upsert into the database
-async fn upsert_albums_from_musicbrainz(
-    artist_id: i64,
-    mbid: &str,
-    state: &AppState,
-) {
+async fn upsert_albums_from_musicbrainz(artist_id: i64, mbid: &str, state: &AppState) {
     let mb_client = match state.musicbrainz_client {
         Some(ref c) => c,
         None => return,
@@ -704,24 +712,32 @@ async fn upsert_albums_from_musicbrainz(
     for mb_album in &mb_albums {
         // Build cover art URL from cover-art-cache service (via nginx proxy)
         let cover_images = build_album_cover_images(&mb_album.mbid);
-        let images_json = serde_json::to_string(&cover_images)
-            .unwrap_or_else(|_| "[]".to_string());
-        let genres_json = serde_json::to_string(&mb_album.genres)
-            .unwrap_or_else(|_| "[]".to_string());
-        let secondary_types_json = serde_json::to_string(&mb_album.secondary_types)
-            .unwrap_or_else(|_| "[]".to_string());
-        let release_date = mb_album.release_date.as_deref()
+        let images_json = serde_json::to_string(&cover_images).unwrap_or_else(|_| "[]".to_string());
+        let genres_json =
+            serde_json::to_string(&mb_album.genres).unwrap_or_else(|_| "[]".to_string());
+        let secondary_types_json =
+            serde_json::to_string(&mb_album.secondary_types).unwrap_or_else(|_| "[]".to_string());
+        let release_date = mb_album
+            .release_date
+            .as_deref()
             .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
-        let album_type = mb_album.album_type.clone().unwrap_or_else(|| "Album".to_string());
+        let album_type = mb_album
+            .album_type
+            .clone()
+            .unwrap_or_else(|| "Album".to_string());
         let clean = clean_title(&mb_album.title);
 
         // Auto-monitor: only studio Albums (no secondary types) are monitored by default
         // Compilations, Live, Soundtracks, Remixes etc. start unmonitored
-        let should_monitor = album_type.eq_ignore_ascii_case("Album")
-            && mb_album.secondary_types.is_empty();
+        let should_monitor =
+            album_type.eq_ignore_ascii_case("Album") && mb_album.secondary_types.is_empty();
 
         // Check if album already exists by MBID
-        let existing = album_repo.get_by_musicbrainz_id(&mb_album.mbid).await.ok().flatten();
+        let existing = album_repo
+            .get_by_musicbrainz_id(&mb_album.mbid)
+            .await
+            .ok()
+            .flatten();
 
         if let Some(mut existing_album) = existing {
             // Update existing album metadata (preserve user's monitored state)
@@ -769,7 +785,10 @@ async fn upsert_albums_from_musicbrainz(
 
     tracing::info!(
         "Album sync complete for artist MBID {}: {} inserted, {} updated (of {} total)",
-        mbid, inserted, updated, mb_albums.len()
+        mbid,
+        inserted,
+        updated,
+        mb_albums.len()
     );
 }
 
@@ -796,7 +815,10 @@ async fn populate_tracks_from_musicbrainz(artist_id: i64, state: &AppState) {
         };
 
         // Check if this album already has tracks from MusicBrainz
-        let existing_tracks = track_repo.get_by_album_id(album.id).await.unwrap_or_default();
+        let existing_tracks = track_repo
+            .get_by_album_id(album.id)
+            .await
+            .unwrap_or_default();
         // Skip if we already have tracks with no files (canonical tracks already populated)
         // Only re-populate if there are zero tracks
         if !existing_tracks.is_empty() {
@@ -816,9 +838,17 @@ async fn populate_tracks_from_musicbrainz(artist_id: i64, state: &AppState) {
         // Build a priority order: US first, then XW, then by track count desc
         let mut ordered_releases: Vec<&_> = Vec::with_capacity(releases.len());
         // US releases first
-        ordered_releases.extend(releases.iter().filter(|r| r.country.as_deref() == Some("US")));
+        ordered_releases.extend(
+            releases
+                .iter()
+                .filter(|r| r.country.as_deref() == Some("US")),
+        );
         // XW (worldwide) next
-        ordered_releases.extend(releases.iter().filter(|r| r.country.as_deref() == Some("XW")));
+        ordered_releases.extend(
+            releases
+                .iter()
+                .filter(|r| r.country.as_deref() == Some("XW")),
+        );
         // Then the rest, sorted by track count descending
         let mut rest: Vec<&_> = releases
             .iter()
@@ -877,7 +907,11 @@ async fn populate_tracks_from_musicbrainz(artist_id: i64, state: &AppState) {
 
 /// Scan an artist's album folders for audio files and create track/track_file records.
 /// Returns (files_found, files_added).
-async fn scan_artist_audio_files(artist_id: i64, artist_path: &str, state: &AppState) -> (usize, usize) {
+async fn scan_artist_audio_files(
+    artist_id: i64,
+    artist_path: &str,
+    state: &AppState,
+) -> (usize, usize) {
     let album_repo = AlbumRepository::new(state.db.clone());
     let track_repo = TrackRepository::new(state.db.clone());
     let track_file_repo = TrackFileRepository::new(state.db.clone());
@@ -899,10 +933,16 @@ async fn scan_artist_audio_files(artist_id: i64, artist_path: &str, state: &AppS
             continue;
         }
 
-        let existing_files = track_file_repo.get_by_album_id(album.id).await.unwrap_or_default();
+        let existing_files = track_file_repo
+            .get_by_album_id(album.id)
+            .await
+            .unwrap_or_default();
         let existing_file_paths: std::collections::HashSet<String> =
             existing_files.iter().map(|f| f.path.clone()).collect();
-        let existing_tracks = track_repo.get_by_album_id(album.id).await.unwrap_or_default();
+        let existing_tracks = track_repo
+            .get_by_album_id(album.id)
+            .await
+            .unwrap_or_default();
 
         let mut dir = match tokio::fs::read_dir(&album_path).await {
             Ok(e) => e,
@@ -915,9 +955,15 @@ async fn scan_artist_audio_files(artist_id: i64, artist_path: &str, state: &AppS
             if !path.is_file() {
                 continue;
             }
-            let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+            let ext = path
+                .extension()
+                .map(|e| e.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
             if AUDIO_EXTENSIONS.contains(&ext.as_str()) {
-                let filename = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                let filename = path
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_default();
                 let size = entry.metadata().await.map(|m| m.len() as i64).unwrap_or(0);
                 audio_files.push((path.to_string_lossy().to_string(), filename, size));
             }
@@ -933,7 +979,10 @@ async fn scan_artist_audio_files(artist_id: i64, artist_path: &str, state: &AppS
 
             // Try to match to an existing canonical track by track number
             // If no canonical track exists (MB didn't have data), create one from filename
-            let track_id = if let Some(et) = existing_tracks.iter().find(|t| t.track_number == track_num && !t.has_file) {
+            let track_id = if let Some(et) = existing_tracks
+                .iter()
+                .find(|t| t.track_number == track_num && !t.has_file)
+            {
                 // Found a canonical track without a file — link to it
                 et.id
             } else if existing_tracks.iter().any(|t| t.track_number == track_num) {
@@ -995,11 +1044,13 @@ async fn scan_artist_audio_files(artist_id: i64, artist_path: &str, state: &AppS
 
             if let Ok(file_id) = track_file_repo.insert(&new_file).await {
                 let pool = state.db.pool();
-                let _ = sqlx::query("UPDATE tracks SET has_file = true, track_file_id = $1 WHERE id = $2")
-                    .bind(file_id)
-                    .bind(track_id)
-                    .execute(pool)
-                    .await;
+                let _ = sqlx::query(
+                    "UPDATE tracks SET has_file = true, track_file_id = $1 WHERE id = $2",
+                )
+                .bind(file_id)
+                .bind(track_id)
+                .execute(pool)
+                .await;
                 total_added += 1;
             }
         }
@@ -1007,7 +1058,9 @@ async fn scan_artist_audio_files(artist_id: i64, artist_path: &str, state: &AppS
 
     tracing::info!(
         "Audio scan for artist {}: {} files found, {} added",
-        artist_id, total_found, total_added
+        artist_id,
+        total_found,
+        total_added
     );
     (total_found, total_added)
 }
@@ -1065,7 +1118,12 @@ async fn rescan_artist(
         .map_err(|e| ApiError::Internal(format!("Failed to fetch artist: {}", e)))?
         .ok_or(ApiError::NotFound)?;
 
-    tracing::info!("Rescan requested for artist: id={}, name={}, path={}", id, artist.name, artist.path);
+    tracing::info!(
+        "Rescan requested for artist: id={}, name={}, path={}",
+        id,
+        artist.name,
+        artist.path
+    );
 
     let (total_found, total_added) = scan_artist_audio_files(id, &artist.path, &state).await;
 
@@ -1227,19 +1285,19 @@ async fn get_album(
 
     // Try numeric id first, then slug lookup (needs artist context from query)
     let album = if let Ok(id) = id_or_slug.parse::<i64>() {
-        repo.get_by_id(id).await
+        repo.get_by_id(id)
+            .await
             .map_err(|e| ApiError::Internal(format!("Failed to fetch album: {}", e)))?
             .ok_or(ApiError::NotFound)?
     } else {
         // Slug lookup — search all albums for this slug
-        let all = sqlx::query_as::<_, AlbumDbModel>(
-            "SELECT * FROM albums WHERE title_slug = $1 LIMIT 1",
-        )
-        .bind(&id_or_slug)
-        .fetch_optional(state.db.pool())
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to fetch album: {}", e)))?
-        .ok_or(ApiError::NotFound)?;
+        let all =
+            sqlx::query_as::<_, AlbumDbModel>("SELECT * FROM albums WHERE title_slug = $1 LIMIT 1")
+                .bind(&id_or_slug)
+                .fetch_optional(state.db.pool())
+                .await
+                .map_err(|e| ApiError::Internal(format!("Failed to fetch album: {}", e)))?
+                .ok_or(ApiError::NotFound)?;
         all
     };
 
@@ -1349,7 +1407,12 @@ async fn rescan_album(
         .map_err(|e| ApiError::Internal(format!("Failed to fetch artist: {}", e)))?
         .ok_or(ApiError::NotFound)?;
 
-    tracing::info!("Rescanning album: id={}, title='{}' by '{}'", id, album.title, artist.name);
+    tracing::info!(
+        "Rescanning album: id={}, title='{}' by '{}'",
+        id,
+        album.title,
+        artist.name
+    );
 
     // Scan just this album's folder
     let artist_dir = std::path::Path::new(&artist.path);
@@ -1359,19 +1422,33 @@ async fn rescan_album(
     if album_path.is_dir() {
         let track_repo = TrackRepository::new(state.db.clone());
         let track_file_repo = TrackFileRepository::new(state.db.clone());
-        let existing_files = track_file_repo.get_by_album_id(album.id).await.unwrap_or_default();
+        let existing_files = track_file_repo
+            .get_by_album_id(album.id)
+            .await
+            .unwrap_or_default();
         let existing_file_paths: std::collections::HashSet<String> =
             existing_files.iter().map(|f| f.path.clone()).collect();
-        let existing_tracks = track_repo.get_by_album_id(album.id).await.unwrap_or_default();
+        let existing_tracks = track_repo
+            .get_by_album_id(album.id)
+            .await
+            .unwrap_or_default();
 
         if let Ok(mut dir) = tokio::fs::read_dir(&album_path).await {
             let mut audio_files = Vec::new();
             while let Ok(Some(entry)) = dir.next_entry().await {
                 let path = entry.path();
-                if !path.is_file() { continue; }
-                let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+                if !path.is_file() {
+                    continue;
+                }
+                let ext = path
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
                 if AUDIO_EXTENSIONS.contains(&ext.as_str()) {
-                    let filename = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                    let filename = path
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_default();
                     let size = entry.metadata().await.map(|m| m.len() as i64).unwrap_or(0);
                     audio_files.push((path.to_string_lossy().to_string(), filename, size));
                 }
@@ -1380,19 +1457,31 @@ async fn rescan_album(
 
             let mut added = 0;
             for (file_path, filename, size) in &audio_files {
-                if existing_file_paths.contains(file_path) { continue; }
+                if existing_file_paths.contains(file_path) {
+                    continue;
+                }
                 let (track_num, title) = parse_track_filename(filename);
 
-                let track_id = if let Some(et) = existing_tracks.iter().find(|t| t.track_number == track_num && !t.has_file) {
+                let track_id = if let Some(et) = existing_tracks
+                    .iter()
+                    .find(|t| t.track_number == track_num && !t.has_file)
+                {
                     et.id
                 } else if existing_tracks.iter().any(|t| t.track_number == track_num) {
                     continue;
                 } else {
                     let new_track = crate::core::datastore::models::TrackDbModel {
-                        id: 0, album_id: album.id, artist_id: album.artist_id,
-                        title: title.clone(), track_number: track_num, disc_number: 1,
-                        duration_ms: None, has_file: true, track_file_id: None,
-                        monitored: true, air_date_utc: None,
+                        id: 0,
+                        album_id: album.id,
+                        artist_id: album.artist_id,
+                        title: title.clone(),
+                        track_number: track_num,
+                        disc_number: 1,
+                        duration_ms: None,
+                        has_file: true,
+                        track_file_id: None,
+                        monitored: true,
+                        air_date_utc: None,
                     };
                     match track_repo.insert(&new_track).await {
                         Ok(tid) => tid,
@@ -1401,38 +1490,58 @@ async fn rescan_album(
                 };
 
                 let relative_path = format!("{}/{}", album_folder, filename);
-                let ext = std::path::Path::new(filename).extension()
+                let ext = std::path::Path::new(filename)
+                    .extension()
                     .map(|e| e.to_string_lossy().to_uppercase())
                     .unwrap_or_else(|| "MP3".to_string());
 
                 let matched_track = existing_tracks.iter().find(|t| t.track_number == track_num);
-                let bitrate = matched_track.and_then(|t| t.duration_ms).filter(|&d| d > 0)
+                let bitrate = matched_track
+                    .and_then(|t| t.duration_ms)
+                    .filter(|&d| d > 0)
                     .map(|duration_ms| (*size * 8 / (duration_ms as i64 / 1000)) as i32 / 1000);
 
                 let media_info = serde_json::json!({ "audio_format": ext, "bitrate": bitrate });
 
                 let new_file = crate::core::datastore::models::TrackFileDbModel {
-                    id: 0, artist_id: album.artist_id, album_id: album.id,
-                    relative_path, path: file_path.clone(), size: *size,
+                    id: 0,
+                    artist_id: album.artist_id,
+                    album_id: album.id,
+                    relative_path,
+                    path: file_path.clone(),
+                    size: *size,
                     quality: serde_json::json!({ "codec": ext }).to_string(),
-                    media_info: Some(media_info.to_string()), date_added: Utc::now(),
+                    media_info: Some(media_info.to_string()),
+                    date_added: Utc::now(),
                 };
 
                 if let Ok(file_id) = track_file_repo.insert(&new_file).await {
                     let pool = state.db.pool();
-                    let _ = sqlx::query("UPDATE tracks SET has_file = true, track_file_id = $1 WHERE id = $2")
-                        .bind(file_id).bind(track_id).execute(pool).await;
+                    let _ = sqlx::query(
+                        "UPDATE tracks SET has_file = true, track_file_id = $1 WHERE id = $2",
+                    )
+                    .bind(file_id)
+                    .bind(track_id)
+                    .execute(pool)
+                    .await;
                     added += 1;
                 }
             }
-            tracing::info!("Album rescan complete: {} files found, {} added for '{}'", audio_files.len(), added, album.title);
+            tracing::info!(
+                "Album rescan complete: {} files found, {} added for '{}'",
+                audio_files.len(),
+                added,
+                album.title
+            );
         }
     } else {
         tracing::info!("Album folder not found: {}", album_path.display());
     }
 
     // Return updated album response
-    let updated = album_repo.get_by_id(id).await
+    let updated = album_repo
+        .get_by_id(id)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch album: {}", e)))?
         .ok_or(ApiError::NotFound)?;
     let mut response = AlbumResponse::from(updated);
@@ -1629,9 +1738,15 @@ async fn list_tracks(
 
     // Load all track files for this album/artist to join with tracks
     let files = if let Some(album_id) = query.album_id {
-        file_repo.get_by_album_id(album_id).await.unwrap_or_default()
+        file_repo
+            .get_by_album_id(album_id)
+            .await
+            .unwrap_or_default()
     } else if let Some(artist_id) = query.artist_id {
-        file_repo.get_by_artist_id(artist_id).await.unwrap_or_default()
+        file_repo
+            .get_by_artist_id(artist_id)
+            .await
+            .unwrap_or_default()
     } else {
         vec![]
     };
@@ -1728,11 +1843,7 @@ impl CreateArtistRequest {
             path.clone()
         } else if let Some(ref root) = self.root_folder_path {
             let folder = sanitize_filename::sanitize(&self.name);
-            format!(
-                "{}/{}",
-                root.trim_end_matches('/'),
-                folder
-            )
+            format!("{}/{}", root.trim_end_matches('/'), folder)
         } else {
             String::new()
         }
@@ -1992,9 +2103,18 @@ impl TrackResponse {
                 .unwrap_or(serde_json::json!({}));
 
             let audio_format = f.path.rsplit('.').next().map(|e| e.to_uppercase());
-            let bitrate = media.get("bitrate").and_then(|v| v.as_i64()).map(|v| v as i32);
-            let sample_rate = media.get("sample_rate").and_then(|v| v.as_i64()).map(|v| v as i32);
-            let channels = media.get("channels").and_then(|v| v.as_i64()).map(|v| v as i32);
+            let bitrate = media
+                .get("bitrate")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
+            let sample_rate = media
+                .get("sample_rate")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
+            let channels = media
+                .get("channels")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
 
             TrackFileInfo {
                 id: f.id,
@@ -2114,8 +2234,8 @@ pub async fn fetch_fanart_artist_images(mbid: &str, artist_id: Option<i64>) -> V
                 if let Ok(data) = tokio::fs::read_to_string(&cache_file).await {
                     if let Ok(cached) = serde_json::from_str::<Vec<ArtistImage>>(&data) {
                         // If artist_id is provided, check if cached URLs are already local
-                        let needs_rewrite = artist_id.is_some()
-                            && cached.iter().any(|i| i.url.starts_with("http"));
+                        let needs_rewrite =
+                            artist_id.is_some() && cached.iter().any(|i| i.url.starts_with("http"));
                         if !needs_rewrite {
                             return cached;
                         }
@@ -2161,8 +2281,15 @@ pub async fn fetch_fanart_artist_images(mbid: &str, artist_id: Option<i64>) -> V
     ];
 
     for &(cover_type, source) in types {
-        if let Some(best) = source.iter().max_by_key(|i| i.likes.parse::<i32>().unwrap_or(0)) {
-            let ext = if best.url.ends_with(".png") { "png" } else { "jpg" };
+        if let Some(best) = source
+            .iter()
+            .max_by_key(|i| i.likes.parse::<i32>().unwrap_or(0))
+        {
+            let ext = if best.url.ends_with(".png") {
+                "png"
+            } else {
+                "jpg"
+            };
             let local_url = match artist_id {
                 Some(id) => format!("/MediaCover/Artists/{}/{}.{}", id, cover_type, ext),
                 None => best.url.clone(),

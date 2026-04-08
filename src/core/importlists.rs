@@ -27,7 +27,10 @@ pub struct ImportListSyncResult {
 }
 
 /// Sync all enabled import lists that are due for sync
-pub async fn sync_all_import_lists(db: &Database, imdb_client: &ImdbClient) -> Result<Vec<ImportListSyncResult>> {
+pub async fn sync_all_import_lists(
+    db: &Database,
+    imdb_client: &ImdbClient,
+) -> Result<Vec<ImportListSyncResult>> {
     let repo = ImportListRepository::new(db.clone());
     let lists = repo.get_enabled().await?;
 
@@ -78,7 +81,10 @@ pub async fn sync_all_import_lists(db: &Database, imdb_client: &ImdbClient) -> R
 
         // Update last_synced_at regardless of success/failure
         if let Err(e) = repo.update_last_synced(list.id).await {
-            warn!("Failed to update last_synced_at for list '{}': {}", list.name, e);
+            warn!(
+                "Failed to update last_synced_at for list '{}': {}",
+                list.name, e
+            );
         }
     }
 
@@ -99,12 +105,13 @@ pub async fn sync_import_list(
 
     // Fetch items based on list type
     let items = match list.list_type.as_str() {
-        "imdb_watchlist" | "imdb_list" => {
-            fetch_imdb_list_items(list, imdb_client).await?
-        }
+        "imdb_watchlist" | "imdb_list" => fetch_imdb_list_items(list, imdb_client).await?,
         "trakt_watchlist" | "trakt_list" => {
             // Trakt is stubbed for now -- return empty list
-            info!("Trakt import lists not yet implemented, skipping '{}'", list.name);
+            info!(
+                "Trakt import lists not yet implemented, skipping '{}'",
+                list.name
+            );
             vec![]
         }
         unknown => {
@@ -128,7 +135,10 @@ pub async fn sync_import_list(
             process_series_items(list, &items, db, &exclusion_repo, &mut result).await?;
         }
         unknown => {
-            warn!("Unknown content type '{}' for list '{}'", unknown, list.name);
+            warn!(
+                "Unknown content type '{}' for list '{}'",
+                unknown, list.name
+            );
         }
     }
 
@@ -149,7 +159,10 @@ async fn fetch_imdb_list_items(
     imdb_client: &ImdbClient,
 ) -> Result<Vec<ImportListItem>> {
     if !imdb_client.is_enabled() {
-        warn!("IMDB service not enabled, cannot sync IMDB import list '{}'", list.name);
+        warn!(
+            "IMDB service not enabled, cannot sync IMDB import list '{}'",
+            list.name
+        );
         return Ok(vec![]);
     }
 
@@ -267,7 +280,10 @@ async fn process_movie_items(
                 continue;
             }
             Err(e) => {
-                warn!("Failed to check exclusion for '{}': {}", item.external_id, e);
+                warn!(
+                    "Failed to check exclusion for '{}': {}",
+                    item.external_id, e
+                );
             }
             _ => {}
         }
@@ -293,12 +309,16 @@ async fn process_movie_items(
         }
 
         // Add the movie
-        let clean = item.title.to_lowercase()
+        let clean = item
+            .title
+            .to_lowercase()
             .replace(|c: char| !c.is_alphanumeric() && c != ' ', " ")
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        let slug = item.title.to_lowercase()
+        let slug = item
+            .title
+            .to_lowercase()
             .replace(|c: char| !c.is_alphanumeric() && c != ' ', "-")
             .replace(' ', "-")
             .replace("--", "-")
@@ -317,7 +337,11 @@ async fn process_movie_items(
             monitored: list.monitored,
             quality_profile_id: list.quality_profile_id,
             title_slug: slug,
-            path: format!("{}/{}", list.root_folder_path.trim_end_matches('/'), item.title),
+            path: format!(
+                "{}/{}",
+                list.root_folder_path.trim_end_matches('/'),
+                item.title
+            ),
             root_folder_path: list.root_folder_path.clone(),
             year: item.year.unwrap_or(0),
             release_date: None,
@@ -350,10 +374,9 @@ async fn process_movie_items(
                 result.items_added += 1;
             }
             Err(e) => {
-                result.errors.push(format!(
-                    "Failed to insert movie '{}': {}",
-                    item.title, e
-                ));
+                result
+                    .errors
+                    .push(format!("Failed to insert movie '{}': {}", item.title, e));
             }
         }
     }
@@ -379,7 +402,10 @@ async fn process_series_items(
                 continue;
             }
             Err(e) => {
-                warn!("Failed to check exclusion for '{}': {}", item.external_id, e);
+                warn!(
+                    "Failed to check exclusion for '{}': {}",
+                    item.external_id, e
+                );
             }
             _ => {}
         }
@@ -404,12 +430,16 @@ async fn process_series_items(
         }
 
         // Add the series
-        let clean = item.title.to_lowercase()
+        let clean = item
+            .title
+            .to_lowercase()
             .replace(|c: char| !c.is_alphanumeric() && c != ' ', " ")
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        let slug = item.title.to_lowercase()
+        let slug = item
+            .title
+            .to_lowercase()
             .replace(|c: char| !c.is_alphanumeric() && c != ' ', "-")
             .replace(' ', "-")
             .replace("--", "-")
@@ -435,7 +465,11 @@ async fn process_series_items(
             season_folder: true,
             series_type: 0, // Standard
             title_slug: slug,
-            path: format!("{}/{}", list.root_folder_path.trim_end_matches('/'), item.title),
+            path: format!(
+                "{}/{}",
+                list.root_folder_path.trim_end_matches('/'),
+                item.title
+            ),
             root_folder_path: list.root_folder_path.clone(),
             year: item.year.unwrap_or(0),
             first_aired: None,
@@ -463,10 +497,9 @@ async fn process_series_items(
                 result.items_added += 1;
             }
             Err(e) => {
-                result.errors.push(format!(
-                    "Failed to insert series '{}': {}",
-                    item.title, e
-                ));
+                result
+                    .errors
+                    .push(format!("Failed to insert series '{}': {}", item.title, e));
             }
         }
     }
@@ -481,7 +514,10 @@ mod tests {
     #[test]
     fn test_extract_imdb_id_direct() {
         assert_eq!(extract_imdb_id("tt1234567"), Some("tt1234567".to_string()));
-        assert_eq!(extract_imdb_id("tt12345678"), Some("tt12345678".to_string()));
+        assert_eq!(
+            extract_imdb_id("tt12345678"),
+            Some("tt12345678".to_string())
+        );
     }
 
     #[test]

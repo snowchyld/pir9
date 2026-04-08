@@ -96,7 +96,8 @@ pub fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
             // Find the episode block after the season marker
             // Match "S02 E07-E08", "S01E01E02E03", "S01E01-E02", "S01E01-02"
             // Use a broad match to capture the full episode block, then extract E## within it
-            if let Ok(re) = Regex::new(r"[Ss]\d{1,2}[\s._-]*([Ee]\d{1,3}(?:[\s._-]*[Ee]?\d{1,3})*)") {
+            if let Ok(re) = Regex::new(r"[Ss]\d{1,2}[\s._-]*([Ee]\d{1,3}(?:[\s._-]*[Ee]?\d{1,3})*)")
+            {
                 if let Some(caps) = re.captures(filename) {
                     let episode_block = caps.get(0).unwrap().as_str();
                     // Extract all E## numbers from the matched block
@@ -112,7 +113,10 @@ pub fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
                     // Handle bare number after dash: S01E07-08 (no E prefix on second number)
                     if let Ok(bare_re) = Regex::new(r"[Ee](\d{1,3})-(\d{1,3})(?:[^Ee\d]|$)") {
                         if let Some(bare_caps) = bare_re.captures(episode_block) {
-                            if let Some(end_num) = bare_caps.get(2).and_then(|m| m.as_str().parse::<i32>().ok()) {
+                            if let Some(end_num) = bare_caps
+                                .get(2)
+                                .and_then(|m| m.as_str().parse::<i32>().ok())
+                            {
                                 if !episodes.iter().any(|&(_, e)| e == end_num) {
                                     episodes.push((season, end_num));
                                 }
@@ -497,7 +501,11 @@ pub fn scan_movie_directory(dir: &Path) -> Option<ScannedFile> {
             return None;
         }
         let size = std::fs::metadata(dir).map(|m| m.len() as i64).unwrap_or(0);
-        let filename = dir.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        let filename = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
         let release_group = extract_release_group(&filename);
         return Some(ScannedFile {
             path: dir.to_path_buf(),
@@ -524,7 +532,9 @@ pub fn scan_movie_directory(dir: &Path) -> Option<ScannedFile> {
                 if path.is_dir() {
                     walk_movie_dir(&path, best, depth + 1);
                 } else if is_video_file(&path) {
-                    let size = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
+                    let size = std::fs::metadata(&path)
+                        .map(|m| m.len() as i64)
+                        .unwrap_or(0);
                     if best.as_ref().is_none_or(|(_, s)| size > *s) {
                         *best = Some((path, size));
                     }
@@ -536,7 +546,11 @@ pub fn scan_movie_directory(dir: &Path) -> Option<ScannedFile> {
     walk_movie_dir(dir, &mut best, 0);
 
     best.map(|(file_path, size)| {
-        let filename = file_path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        let filename = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
         let release_group = extract_release_group(&filename);
         ScannedFile {
             path: file_path,

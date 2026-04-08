@@ -122,17 +122,15 @@ pub(super) async fn get_import_preview(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<ImportPreviewResponse>, StatusCode> {
-    use crate::core::datastore::repositories::{
-        EpisodeRepository, RemotePathMappingRepository, TrackedDownloadRepository,
-    };
+    use crate::core::datastore::repositories::{EpisodeRepository, RemotePathMappingRepository};
     use crate::core::download::import::compute_destination_path;
     use crate::core::parser::parse_title;
+    use crate::core::queue::UNTRACKED_ID_BASE;
     use crate::core::scanner::{is_video_file, parse_episodes_from_filename};
 
-    let td_repo = TrackedDownloadRepository::new(state.db.clone());
     let client_repo = DownloadClientRepository::new(state.db.clone());
 
-    // Resolve download: tracked (id < 10000) or untracked
+    // Resolve download: tracked (id < UNTRACKED_ID_BASE) or untracked
     let (
         download_id,
         download_client_id,
@@ -140,21 +138,25 @@ pub(super) async fn get_import_preview(
         tracked_series_id,
         tracked_movie_id,
         stored_output_path,
-    ) = if id < 10000 {
-        match td_repo.get_by_id(id).await {
-            Ok(Some(td)) => (
+    ) = if id < UNTRACKED_ID_BASE {
+        match state.tracked.find_by_id(id).await {
+            Some(td) => (
                 td.download_id,
-                td.download_client_id,
+                td.client_id,
                 td.title,
                 if td.series_id > 0 {
                     Some(td.series_id)
                 } else {
                     None
                 },
-                td.movie_id,
-                td.output_path,
+                if td.movie_id > 0 {
+                    Some(td.movie_id)
+                } else {
+                    None
+                },
+                None::<String>,
             ),
-            _ => return Err(StatusCode::NOT_FOUND),
+            None => return Err(StatusCode::NOT_FOUND),
         }
     } else {
         let downloads = fetch_all_downloads(&state, true).await;

@@ -28,7 +28,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/", get(list_audiobooks).post(create_audiobook))
         .route(
             "/{id}",
-            get(get_audiobook).put(update_audiobook).delete(delete_audiobook),
+            get(get_audiobook)
+                .put(update_audiobook)
+                .delete(delete_audiobook),
         )
         .route("/{id}/chapters", get(get_audiobook_chapters))
         .route("/{id}/refresh", post(refresh_audiobook))
@@ -227,13 +229,10 @@ async fn create_audiobook(
         sanitize_filename::sanitize(&title)
     );
 
-    let genres_json =
-        serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string());
-    let tags_json =
-        serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
+    let genres_json = serde_json::to_string(&options.genres).unwrap_or_else(|_| "[]".to_string());
+    let tags_json = serde_json::to_string(&options.tags).unwrap_or_else(|_| "[]".to_string());
     let images = build_images_from_url(&options.image_url, None);
-    let images_json =
-        serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+    let images_json = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
 
     let db_audiobook = AudiobookDbModel {
         id: 0,
@@ -275,11 +274,7 @@ async fn create_audiobook(
         if !path.exists() {
             match tokio::fs::create_dir_all(path).await {
                 Ok(()) => tracing::info!("Created audiobook folder: {}", full_path),
-                Err(e) => tracing::warn!(
-                    "Failed to create audiobook folder {}: {}",
-                    full_path,
-                    e
-                ),
+                Err(e) => tracing::warn!("Failed to create audiobook folder {}: {}", full_path, e),
             }
         }
     }
@@ -425,8 +420,10 @@ async fn get_audiobook_chapters(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to fetch chapters: {}", e)))?;
 
-    let responses: Vec<AudiobookChapterResponse> =
-        chapters.into_iter().map(AudiobookChapterResponse::from).collect();
+    let responses: Vec<AudiobookChapterResponse> = chapters
+        .into_iter()
+        .map(AudiobookChapterResponse::from)
+        .collect();
 
     Ok(Json(responses))
 }
@@ -459,8 +456,7 @@ async fn refresh_audiobook(
         // Update images if we found a cover
         if best.image_url.is_some() {
             let images = build_images_from_url(&best.image_url, Some(id));
-            audiobook.images =
-                serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
+            audiobook.images = serde_json::to_string(&images).unwrap_or_else(|_| "[]".to_string());
         }
 
         // Fill in missing metadata from lookup
@@ -530,7 +526,10 @@ async fn rescan_audiobook(
 
 /// Check if a string looks like an ISBN (10 or 13 digits, optional hyphens)
 fn is_isbn(term: &str) -> bool {
-    let digits: String = term.chars().filter(|c| c.is_ascii_digit() || *c == 'X').collect();
+    let digits: String = term
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == 'X')
+        .collect();
     digits.len() == 10 || digits.len() == 13
 }
 
@@ -625,7 +624,9 @@ async fn fetch_audiobook_lookup(term: &str) -> Vec<AudiobookLookupResult> {
 }
 
 /// Look up a specific ISBN via OpenLibrary's ISBN endpoint
-async fn lookup_openlibrary_isbn(isbn: &str) -> Result<Option<AudiobookLookupResult>, anyhow::Error> {
+async fn lookup_openlibrary_isbn(
+    isbn: &str,
+) -> Result<Option<AudiobookLookupResult>, anyhow::Error> {
     let client = reqwest::Client::new();
     let url = format!("https://openlibrary.org/isbn/{}.json", isbn);
 
@@ -657,12 +658,14 @@ async fn lookup_openlibrary_isbn(isbn: &str) -> Result<Option<AudiobookLookupRes
 
     let edition: OlEdition = response.json().await?;
 
-    let cover_url = edition.covers
+    let cover_url = edition
+        .covers
         .as_ref()
         .and_then(|c| c.first())
         .map(|id| format!("https://covers.openlibrary.org/b/id/{}-L.jpg", id));
 
-    let isbn_val = edition.isbn_13
+    let isbn_val = edition
+        .isbn_13
         .as_ref()
         .and_then(|v| v.first().cloned())
         .or_else(|| edition.isbn_10.as_ref().and_then(|v| v.first().cloned()));
@@ -671,7 +674,8 @@ async fn lookup_openlibrary_isbn(isbn: &str) -> Result<Option<AudiobookLookupRes
     let author = if let Some(ref authors) = edition.authors {
         if let Some(ref key) = authors.first().and_then(|a| a.key.as_ref()) {
             let author_url = format!("https://openlibrary.org{}.json", key);
-            client.get(&author_url)
+            client
+                .get(&author_url)
                 .header("User-Agent", format!("pir9/{}", env!("CARGO_PKG_VERSION")))
                 .send()
                 .await
@@ -695,7 +699,12 @@ async fn lookup_openlibrary_isbn(isbn: &str) -> Result<Option<AudiobookLookupRes
         isbn: isbn_val,
         publisher: edition.publishers.and_then(|p| p.into_iter().next()),
         image_url: cover_url,
-        genres: edition.subjects.unwrap_or_default().into_iter().take(5).collect(),
+        genres: edition
+            .subjects
+            .unwrap_or_default()
+            .into_iter()
+            .take(5)
+            .collect(),
     }))
 }
 
@@ -797,7 +806,8 @@ async fn parse_google_books_response(
                     .or_else(|| ids.iter().find(|id| id.id_type == "ISBN_10"))
                     .map(|id| id.identifier.clone())
             });
-            let image = v.image_links
+            let image = v
+                .image_links
                 .and_then(|il| il.thumbnail)
                 .map(|url| url.replace("http://", "https://"));
 
@@ -828,10 +838,7 @@ async fn search_openlibrary(term: &str) -> Result<Vec<AudiobookLookupResult>, an
 
     let response = client
         .get(&url)
-        .header(
-            "User-Agent",
-            format!("pir9/{}", env!("CARGO_PKG_VERSION")),
-        )
+        .header("User-Agent", format!("pir9/{}", env!("CARGO_PKG_VERSION")))
         .send()
         .await?;
 
@@ -846,9 +853,9 @@ async fn search_openlibrary(term: &str) -> Result<Vec<AudiobookLookupResult>, an
         .into_iter()
         .take(15)
         .map(|doc| {
-            let cover_url = doc.cover_i.map(|id| {
-                format!("https://covers.openlibrary.org/b/id/{}-L.jpg", id)
-            });
+            let cover_url = doc
+                .cover_i
+                .map(|id| format!("https://covers.openlibrary.org/b/id/{}-L.jpg", id));
 
             AudiobookLookupResult {
                 title: doc.title.unwrap_or_default(),
@@ -858,7 +865,12 @@ async fn search_openlibrary(term: &str) -> Result<Vec<AudiobookLookupResult>, an
                 isbn: doc.isbn.and_then(|isbns| isbns.into_iter().next()),
                 publisher: doc.publisher.and_then(|p| p.into_iter().next()),
                 image_url: cover_url,
-                genres: doc.subject.unwrap_or_default().into_iter().take(5).collect(),
+                genres: doc
+                    .subject
+                    .unwrap_or_default()
+                    .into_iter()
+                    .take(5)
+                    .collect(),
             }
         })
         .filter(|r| !r.title.is_empty())
@@ -868,10 +880,17 @@ async fn search_openlibrary(term: &str) -> Result<Vec<AudiobookLookupResult>, an
 }
 
 /// Build AudiobookImage array with local MediaCover URL + remote source
-fn build_images_from_url(image_url: &Option<String>, audiobook_id: Option<i64>) -> Vec<AudiobookImage> {
+fn build_images_from_url(
+    image_url: &Option<String>,
+    audiobook_id: Option<i64>,
+) -> Vec<AudiobookImage> {
     match image_url {
         Some(remote) if !remote.is_empty() => {
-            let ext = if remote.contains(".png") { "png" } else { "jpg" };
+            let ext = if remote.contains(".png") {
+                "png"
+            } else {
+                "jpg"
+            };
             let local_url = match audiobook_id {
                 Some(id) => format!("/MediaCover/Audiobooks/{}/poster.{}", id, ext),
                 None => remote.clone(), // No id yet — will be rewritten after insert
@@ -957,9 +976,7 @@ fn default_true() -> bool {
 impl CreateAudiobookRequest {
     fn validate(&self) -> Result<(), ApiError> {
         if self.title.is_empty() {
-            return Err(ApiError::Validation(
-                "title is required".to_string(),
-            ));
+            return Err(ApiError::Validation("title is required".to_string()));
         }
         if self.root_folder_path.is_empty() {
             return Err(ApiError::Validation(
@@ -1091,8 +1108,7 @@ impl From<AudiobookDbModel> for AudiobookResponse {
     fn from(a: AudiobookDbModel) -> Self {
         let genres: Vec<String> = serde_json::from_str(&a.genres).unwrap_or_default();
         let tags: Vec<i64> = serde_json::from_str(&a.tags).unwrap_or_default();
-        let images: Vec<AudiobookImage> =
-            serde_json::from_str(&a.images).unwrap_or_default();
+        let images: Vec<AudiobookImage> = serde_json::from_str(&a.images).unwrap_or_default();
 
         Self {
             id: a.id,

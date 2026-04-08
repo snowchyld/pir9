@@ -64,11 +64,9 @@ pub fn score_release(
         }
 
         // Parse required terms
-        let required: Vec<String> =
-            serde_json::from_str(&profile.required).unwrap_or_default();
+        let required: Vec<String> = serde_json::from_str(&profile.required).unwrap_or_default();
         // Parse ignored terms
-        let ignored: Vec<String> =
-            serde_json::from_str(&profile.ignored).unwrap_or_default();
+        let ignored: Vec<String> = serde_json::from_str(&profile.ignored).unwrap_or_default();
         // Parse preferred words
         let preferred: Vec<PreferredWord> =
             serde_json::from_str(&profile.preferred).unwrap_or_default();
@@ -195,9 +193,7 @@ fn matches_custom_format(title: &str, cf: &CustomFormatDbModel) -> bool {
             .collect();
 
         let raw_match = match spec.implementation.as_str() {
-            "ReleaseTitleSpecification"
-            | "ReleaseGroupSpecification"
-            | "EditionSpecification" => {
+            "ReleaseTitleSpecification" | "ReleaseGroupSpecification" | "EditionSpecification" => {
                 // These use a regex value field
                 let pattern = fields
                     .iter()
@@ -208,16 +204,10 @@ fn matches_custom_format(title: &str, cf: &CustomFormatDbModel) -> bool {
                 if pattern.is_empty() {
                     false
                 } else {
-                    match RegexBuilder::new(pattern)
-                        .case_insensitive(true)
-                        .build()
-                    {
+                    match RegexBuilder::new(pattern).case_insensitive(true).build() {
                         Ok(re) => re.is_match(title),
                         Err(e) => {
-                            warn!(
-                                "Invalid regex in custom format '{}' spec: {}",
-                                cf.name, e
-                            );
+                            warn!("Invalid regex in custom format '{}' spec: {}", cf.name, e);
                             false
                         }
                     }
@@ -235,7 +225,11 @@ fn matches_custom_format(title: &str, cf: &CustomFormatDbModel) -> bool {
             _ => false,
         };
 
-        if spec.negate { !raw_match } else { raw_match }
+        if spec.negate {
+            !raw_match
+        } else {
+            raw_match
+        }
     };
 
     let required_specs: Vec<&Spec> = specs.iter().filter(|s| s.required).collect();
@@ -258,16 +252,15 @@ fn matches_custom_format(title: &str, cf: &CustomFormatDbModel) -> bool {
 /// Check if a release's detected languages match the required language IDs.
 /// Returns true if any of the release's languages matches any of the required ones.
 /// If `required_language_ids` is empty, all releases pass (no filtering).
-pub fn release_matches_language(
-    release_title: &str,
-    required_language_ids: &[i32],
-) -> bool {
+pub fn release_matches_language(release_title: &str, required_language_ids: &[i32]) -> bool {
     if required_language_ids.is_empty() {
         return true; // No language preference set — accept everything
     }
 
     let detected = crate::core::parser::detect_languages(release_title);
-    detected.iter().any(|lang| required_language_ids.contains(&lang.id))
+    detected
+        .iter()
+        .any(|lang| required_language_ids.contains(&lang.id))
 }
 
 #[cfg(test)]
@@ -350,12 +343,7 @@ mod tests {
             vec![("CAM", -100), ("TS", -50)],
         )];
 
-        let score = score_release(
-            "Movie.2024.CAM.x264-JUNK",
-            &profiles,
-            &[],
-            &HashMap::new(),
-        );
+        let score = score_release("Movie.2024.CAM.x264-JUNK", &profiles, &[], &HashMap::new());
 
         assert_eq!(score.preferred_word_score, -100);
         assert_eq!(score.total_score, -100);
@@ -371,12 +359,7 @@ mod tests {
             vec![("1080p", 10), ("x265", 20), ("YTS", -50)],
         )];
 
-        let score = score_release(
-            "Movie.2024.1080p.x265-YTS",
-            &profiles,
-            &[],
-            &HashMap::new(),
-        );
+        let score = score_release("Movie.2024.1080p.x265-YTS", &profiles, &[], &HashMap::new());
 
         assert_eq!(score.preferred_word_score, -20); // 10 + 20 - 50
         assert!(!score.rejected);
@@ -503,12 +486,7 @@ mod tests {
 
     #[test]
     fn test_disabled_profile_skipped() {
-        let mut profile = make_release_profile(
-            "Disabled",
-            vec!["IMPOSSIBLE_TERM"],
-            vec![],
-            vec![],
-        );
+        let mut profile = make_release_profile("Disabled", vec!["IMPOSSIBLE_TERM"], vec![], vec![]);
         profile.enabled = false;
 
         let score = score_release(
@@ -656,12 +634,7 @@ mod tests {
 
     #[test]
     fn test_empty_profiles_and_formats() {
-        let score = score_release(
-            "Movie.2024.1080p.BluRay-GROUP",
-            &[],
-            &[],
-            &HashMap::new(),
-        );
+        let score = score_release("Movie.2024.1080p.BluRay-GROUP", &[], &[], &HashMap::new());
 
         assert_eq!(score.total_score, 0);
         assert!(!score.rejected);
@@ -674,12 +647,7 @@ mod tests {
         let mut format_scores = HashMap::new();
         format_scores.insert(1, 100);
 
-        let score = score_release(
-            "Movie.2024.1080p.BluRay-GROUP",
-            &[],
-            &[cf],
-            &format_scores,
-        );
+        let score = score_release("Movie.2024.1080p.BluRay-GROUP", &[], &[cf], &format_scores);
 
         assert_eq!(score.custom_format_score, 0);
     }

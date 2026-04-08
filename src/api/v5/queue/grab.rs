@@ -20,17 +20,14 @@ pub(super) async fn grab_release(
     use crate::core::indexers::search::IndexerSearchService;
     use crate::core::indexers::SearchCriteria;
 
-    let td_repo =
-        crate::core::datastore::repositories::TrackedDownloadRepository::new(state.db.clone());
-
     // Look up the tracked download
-    let tracked = match td_repo.get_by_id(id).await {
-        Ok(Some(td)) => td,
-        _ => return Json(QueueActionResponse { success: false }),
+    let tracked = match state.tracked.find_by_id(id).await {
+        Some(td) => td,
+        None => return Json(QueueActionResponse { success: false }),
     };
 
-    // Parse episode IDs from the tracked download
-    let episode_ids: Vec<i64> = serde_json::from_str(&tracked.episode_ids).unwrap_or_default();
+    // Episode IDs from the tracked download
+    let episode_ids = tracked.episode_ids.clone();
     if episode_ids.is_empty() {
         tracing::warn!("Re-grab: tracked download {} has no episode IDs", id);
         return Json(QueueActionResponse { success: false });
@@ -98,8 +95,13 @@ pub(super) async fn grab_release(
 
     // Grab the best release (first in quality-sorted list)
     let best = &releases[0];
+    let movie_id_opt = if tracked.movie_id > 0 {
+        Some(tracked.movie_id)
+    } else {
+        None
+    };
     match service
-        .grab_release(best, episode_ids, tracked.movie_id, &tracked.content_type)
+        .grab_release(best, episode_ids, movie_id_opt, tracked.content_type)
         .await
     {
         Ok(new_id) => {

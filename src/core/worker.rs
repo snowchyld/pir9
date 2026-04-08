@@ -15,7 +15,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::core::messaging::ImportFileResult;
 
-use crate::core::messaging::{KnownFileInfo, Message, ScannedFile, ScanType};
+use crate::core::messaging::{KnownFileInfo, Message, ScanType, ScannedFile};
 use crate::core::scanner;
 use std::collections::HashMap;
 
@@ -375,27 +375,30 @@ impl WorkerRunner {
                         let path = PathBuf::from(path_str);
                         if !path.exists() {
                             warn!("[discover] Path does not exist: {}", path_str);
-                            event_bus.publish(Message::ScanResult {
-                                job_id: job_id.clone(),
-                                series_id: *entity_id,
-                                worker_id: this.worker_id.clone(),
-                                files_found: vec![],
-                                errors: vec![format!("Path does not exist: {}", path_str)],
-                            }).await;
+                            event_bus
+                                .publish(Message::ScanResult {
+                                    job_id: job_id.clone(),
+                                    series_id: *entity_id,
+                                    worker_id: this.worker_id.clone(),
+                                    files_found: vec![],
+                                    errors: vec![format!("Path does not exist: {}", path_str)],
+                                })
+                                .await;
                             continue;
                         }
 
                         let media_type = infer_media_type(&path);
                         let files: Vec<ScannedFile> = match scan_type {
                             ScanType::RescanSeries => {
-                                info!("[discover][{}] Listing {} (id={})", media_type, path_str, entity_id);
+                                info!(
+                                    "[discover][{}] Listing {} (id={})",
+                                    media_type, path_str, entity_id
+                                );
                                 scanner::scan_series_directory(&path)
                             }
                             ScanType::RescanMovie => {
                                 info!("[discover][movie] Listing {} (id={})", path_str, entity_id);
-                                scanner::scan_movie_directory(&path)
-                                    .into_iter()
-                                    .collect()
+                                scanner::scan_movie_directory(&path).into_iter().collect()
                             }
                             ScanType::DownloadedEpisodesScan | ScanType::DownloadedMovieScan => {
                                 info!("[discover][download] Listing {}", path_str);
@@ -406,19 +409,28 @@ impl WorkerRunner {
 
                         let file_count = files.len();
                         total_files += file_count as u64;
-                        info!("[discover] {} — {} file(s) (id={})", media_type, file_count, entity_id);
+                        info!(
+                            "[discover] {} — {} file(s) (id={})",
+                            media_type, file_count, entity_id
+                        );
 
-                        event_bus.publish(Message::ScanResult {
-                            job_id: job_id.clone(),
-                            series_id: *entity_id,
-                            worker_id: this.worker_id.clone(),
-                            files_found: files,
-                            errors: vec![],
-                        }).await;
+                        event_bus
+                            .publish(Message::ScanResult {
+                                job_id: job_id.clone(),
+                                series_id: *entity_id,
+                                worker_id: this.worker_id.clone(),
+                                files_found: files,
+                                errors: vec![],
+                            })
+                            .await;
                     }
 
                     let elapsed = scan_start.elapsed();
-                    info!("[discover] Job complete — {} file(s) in {:.1}s", total_files, elapsed.as_secs_f64());
+                    info!(
+                        "[discover] Job complete — {} file(s) in {:.1}s",
+                        total_files,
+                        elapsed.as_secs_f64()
+                    );
                     this.record_scan(total_files);
                 });
             }
@@ -457,14 +469,17 @@ impl WorkerRunner {
                     let path = std::path::Path::new(&file_path);
 
                     let (media_info, quality) = if path.exists() {
-                        let media_info_result = crate::core::mediafiles::MediaAnalyzer::analyze(path).await;
+                        let media_info_result =
+                            crate::core::mediafiles::MediaAnalyzer::analyze(path).await;
                         let media_info = media_info_result
                             .as_ref()
                             .ok()
                             .and_then(|info| serde_json::to_string(info).ok());
                         let quality = match &media_info_result {
                             Ok(info) => {
-                                let q = crate::core::mediafiles::derive_quality_from_media(info, &filename);
+                                let q = crate::core::mediafiles::derive_quality_from_media(
+                                    info, &filename,
+                                );
                                 serde_json::to_string(&q).ok()
                             }
                             Err(_) => None,
@@ -475,15 +490,17 @@ impl WorkerRunner {
                         (None, None)
                     };
 
-                    event_bus.publish(Message::ProbeFileResult {
-                        job_id,
-                        parent_job_id,
-                        file_path,
-                        entity_id,
-                        worker_id: this.worker_id.clone(),
-                        media_info,
-                        quality,
-                    }).await;
+                    event_bus
+                        .publish(Message::ProbeFileResult {
+                            job_id,
+                            parent_job_id,
+                            file_path,
+                            entity_id,
+                            worker_id: this.worker_id.clone(),
+                            media_info,
+                            quality,
+                        })
+                        .await;
                 });
             }
             Message::HashFileRequest {
@@ -525,21 +542,28 @@ impl WorkerRunner {
                         None
                     };
 
-                    event_bus.publish(Message::HashFileResult {
-                        job_id,
-                        parent_job_id,
-                        file_path,
-                        entity_id,
-                        worker_id: this.worker_id.clone(),
-                        file_hash,
-                    }).await;
+                    event_bus
+                        .publish(Message::HashFileResult {
+                            job_id,
+                            parent_job_id,
+                            file_path,
+                            entity_id,
+                            worker_id: this.worker_id.clone(),
+                            file_hash,
+                        })
+                        .await;
                 });
             }
             Message::ImportFilesRequest { job_id, files } => {
                 let total = files.len();
-                info!("[import] Starting import job {} — {} file(s)", job_id, total);
+                info!(
+                    "[import] Starting import job {} — {} file(s)",
+                    job_id, total
+                );
 
-                let any_ours = files.iter().any(|f| self.handles_path(&f.source_path.to_string_lossy()));
+                let any_ours = files
+                    .iter()
+                    .any(|f| self.handles_path(&f.source_path.to_string_lossy()));
                 if !any_ours {
                     debug!("Import files request not for our paths, re-enqueuing");
                     event_bus.enqueue_job(message).await;
@@ -552,19 +576,36 @@ impl WorkerRunner {
                 let mut results = Vec::new();
                 let started = std::time::Instant::now();
 
-                publish_progress(event_bus, job_id, &self.worker_id, "copying", None, total, 0, 0.0, None).await;
+                publish_progress(
+                    event_bus,
+                    job_id,
+                    &self.worker_id,
+                    "copying",
+                    None,
+                    total,
+                    0,
+                    0.0,
+                    None,
+                )
+                .await;
 
                 for (idx, spec) in files.iter().enumerate() {
                     let media_type = infer_media_type(&spec.dest_path);
-                    let filename = spec.source_path.file_name()
+                    let filename = spec
+                        .source_path
+                        .file_name()
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
 
                     info!(
                         "[import][{}] ({}/{}) {} — {} -> {}",
-                        media_type, idx + 1, total, filename,
-                        spec.source_path.display(), spec.dest_path.display()
+                        media_type,
+                        idx + 1,
+                        total,
+                        filename,
+                        spec.source_path.display(),
+                        spec.dest_path.display()
                     );
 
                     let (progress_tx, progress_rx) = std::sync::mpsc::channel::<(u64, u64)>();
@@ -598,18 +639,29 @@ impl WorkerRunner {
                                     0.0
                                 };
                                 let overall_pct = (progress_file_idx as f32 + file_pct / 100.0)
-                                    * 100.0 / progress_total as f32;
+                                    * 100.0
+                                    / progress_total as f32;
                                 if (overall_pct - last_reported_pct).abs() >= 0.1 {
                                     last_reported_pct = overall_pct;
                                     publish_progress_bytes(
-                                        &progress_bus, &progress_job_id, &progress_worker_id,
-                                        "copying", Some(&progress_filename), progress_total,
-                                        progress_file_idx, overall_pct.min(100.0), None,
-                                        Some(bytes_copied), Some(bytes_total_size),
-                                    ).await;
+                                        &progress_bus,
+                                        &progress_job_id,
+                                        &progress_worker_id,
+                                        "copying",
+                                        Some(&progress_filename),
+                                        progress_total,
+                                        progress_file_idx,
+                                        overall_pct.min(100.0),
+                                        None,
+                                        Some(bytes_copied),
+                                        Some(bytes_total_size),
+                                    )
+                                    .await;
                                 }
                             }
-                            if disconnected { break; }
+                            if disconnected {
+                                break;
+                            }
                         }
                     });
 
@@ -618,7 +670,8 @@ impl WorkerRunner {
                     let file_start = std::time::Instant::now();
                     let copy_result = tokio::task::spawn_blocking(move || {
                         move_file(&src, &dst, Some(progress_tx))
-                    }).await;
+                    })
+                    .await;
 
                     let _ = progress_handle.await;
 
@@ -627,29 +680,54 @@ impl WorkerRunner {
                             let elapsed = file_start.elapsed();
                             info!(
                                 "[{}][{}] ({}/{}) {} — {} in {:.1}s",
-                                mr.method, media_type, idx + 1, total, filename,
-                                format_size(mr.size as u64), elapsed.as_secs_f64()
+                                mr.method,
+                                media_type,
+                                idx + 1,
+                                total,
+                                filename,
+                                format_size(mr.size as u64),
+                                elapsed.as_secs_f64()
                             );
                             crate::core::messaging::ImportFileResult {
                                 source_path: spec.source_path.clone(),
                                 dest_path: spec.dest_path.clone(),
-                                success: true, file_size: mr.size, error: None,
+                                success: true,
+                                file_size: mr.size,
+                                error: None,
                             }
                         }
                         Ok(Err(e)) => {
-                            error!("[error][{}] ({}/{}) {} — copy failed: {}", media_type, idx + 1, total, filename, e);
+                            error!(
+                                "[error][{}] ({}/{}) {} — copy failed: {}",
+                                media_type,
+                                idx + 1,
+                                total,
+                                filename,
+                                e
+                            );
                             crate::core::messaging::ImportFileResult {
                                 source_path: spec.source_path.clone(),
                                 dest_path: spec.dest_path.clone(),
-                                success: false, file_size: 0, error: Some(e.to_string()),
+                                success: false,
+                                file_size: 0,
+                                error: Some(e.to_string()),
                             }
                         }
                         Err(e) => {
-                            error!("[error][{}] ({}/{}) {} — spawn_blocking panicked: {}", media_type, idx + 1, total, filename, e);
+                            error!(
+                                "[error][{}] ({}/{}) {} — spawn_blocking panicked: {}",
+                                media_type,
+                                idx + 1,
+                                total,
+                                filename,
+                                e
+                            );
                             crate::core::messaging::ImportFileResult {
                                 source_path: spec.source_path.clone(),
                                 dest_path: spec.dest_path.clone(),
-                                success: false, file_size: 0, error: Some(format!("internal error: {}", e)),
+                                success: false,
+                                file_size: 0,
+                                error: Some(format!("internal error: {}", e)),
                             }
                         }
                     };
@@ -661,19 +739,32 @@ impl WorkerRunner {
                 let elapsed = started.elapsed();
                 info!(
                     "[import] Job {} complete — {}/{} succeeded, {} total in {:.1}s",
-                    job_id, succeeded, total, format_size(total_bytes as u64), elapsed.as_secs_f64()
+                    job_id,
+                    succeeded,
+                    total,
+                    format_size(total_bytes as u64),
+                    elapsed.as_secs_f64()
                 );
                 self.record_scan(succeeded as u64);
 
-                event_bus.publish(Message::ImportFilesResult {
-                    job_id: job_id.clone(),
-                    worker_id: self.worker_id.clone(),
-                    results,
-                }).await;
+                event_bus
+                    .publish(Message::ImportFilesResult {
+                        job_id: job_id.clone(),
+                        worker_id: self.worker_id.clone(),
+                        results,
+                    })
+                    .await;
             }
-            Message::DeletePathsRequest { job_id, paths, recursive } => {
+            Message::DeletePathsRequest {
+                job_id,
+                paths,
+                recursive,
+            } => {
                 let total = paths.len();
-                info!("[delete] Starting delete job {} — {} path(s), recursive={}", job_id, total, recursive);
+                info!(
+                    "[delete] Starting delete job {} — {} path(s), recursive={}",
+                    job_id, total, recursive
+                );
 
                 let any_ours = paths.iter().any(|p| self.handles_path(p));
                 if !any_ours {
@@ -698,32 +789,60 @@ impl WorkerRunner {
                     } else if !path.exists() {
                         Ok(())
                     } else {
-                        Err(std::io::Error::new(std::io::ErrorKind::Other, "Path is a directory but recursive=false"))
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            "Path is a directory but recursive=false",
+                        ))
                     };
 
                     match result {
                         Ok(()) => {
-                            info!("[delete][{}] ({}/{}) {} — {}", media_type, idx + 1, total, name, path_str);
+                            info!(
+                                "[delete][{}] ({}/{}) {} — {}",
+                                media_type,
+                                idx + 1,
+                                total,
+                                name,
+                                path_str
+                            );
                             results.push((path_str.clone(), true, None));
                         }
                         Err(e) => {
-                            error!("[delete][{}] ({}/{}) {} — failed: {}", media_type, idx + 1, total, name, e);
+                            error!(
+                                "[delete][{}] ({}/{}) {} — failed: {}",
+                                media_type,
+                                idx + 1,
+                                total,
+                                name,
+                                e
+                            );
                             results.push((path_str.clone(), false, Some(e.to_string())));
                         }
                     }
                 }
 
-                event_bus.publish(Message::DeletePathsResult {
-                    job_id: job_id.clone(),
-                    worker_id: self.worker_id.clone(),
-                    results,
-                }).await;
+                event_bus
+                    .publish(Message::DeletePathsResult {
+                        job_id: job_id.clone(),
+                        worker_id: self.worker_id.clone(),
+                        results,
+                    })
+                    .await;
             }
-            Message::RenameFilesRequest { job_id, files, episode_file_ids: _ } => {
+            Message::RenameFilesRequest {
+                job_id,
+                files,
+                episode_file_ids: _,
+            } => {
                 let total = files.len();
-                info!("[rename] Starting rename job {} — {} file(s)", job_id, total);
+                info!(
+                    "[rename] Starting rename job {} — {} file(s)",
+                    job_id, total
+                );
 
-                let any_ours = files.iter().any(|f| self.handles_path(&f.source_path.to_string_lossy()));
+                let any_ours = files
+                    .iter()
+                    .any(|f| self.handles_path(&f.source_path.to_string_lossy()));
                 if !any_ours {
                     debug!("Rename request not for our paths, re-enqueuing");
                     event_bus.enqueue_job(message).await;
@@ -742,7 +861,13 @@ impl WorkerRunner {
                     // Ensure target directory exists
                     if let Some(parent) = dst.parent() {
                         if let Err(e) = std::fs::create_dir_all(parent) {
-                            error!("[rename] ({}/{}) Failed to create dir for {}: {}", idx + 1, total, name, e);
+                            error!(
+                                "[rename] ({}/{}) Failed to create dir for {}: {}",
+                                idx + 1,
+                                total,
+                                name,
+                                e
+                            );
                             results.push(ImportFileResult {
                                 source_path: src.clone(),
                                 dest_path: dst.clone(),
@@ -757,7 +882,12 @@ impl WorkerRunner {
                     if !src.exists() && dst.exists() {
                         // Already renamed (idempotent)
                         let size = std::fs::metadata(dst).map(|m| m.len() as i64).unwrap_or(0);
-                        info!("[rename] ({}/{}) {} — already at destination", idx + 1, total, name);
+                        info!(
+                            "[rename] ({}/{}) {} — already at destination",
+                            idx + 1,
+                            total,
+                            name
+                        );
                         results.push(ImportFileResult {
                             source_path: src.clone(),
                             dest_path: dst.clone(),
@@ -771,7 +901,13 @@ impl WorkerRunner {
                     match std::fs::rename(src, dst) {
                         Ok(()) => {
                             let size = std::fs::metadata(dst).map(|m| m.len() as i64).unwrap_or(0);
-                            info!("[rename] ({}/{}) {} → {}", idx + 1, total, name, dst.display());
+                            info!(
+                                "[rename] ({}/{}) {} → {}",
+                                idx + 1,
+                                total,
+                                name,
+                                dst.display()
+                            );
                             results.push(ImportFileResult {
                                 source_path: src.clone(),
                                 dest_path: dst.clone(),
@@ -793,15 +929,20 @@ impl WorkerRunner {
                     }
                 }
 
-                event_bus.publish(Message::RenameFilesResult {
-                    job_id: job_id.clone(),
-                    worker_id: self.worker_id.clone(),
-                    results,
-                }).await;
+                event_bus
+                    .publish(Message::RenameFilesResult {
+                        job_id: job_id.clone(),
+                        worker_id: self.worker_id.clone(),
+                        results,
+                    })
+                    .await;
             }
             other => {
                 // Unexpected message type from job stream — ACK and discard
-                warn!("Unexpected message type from job stream: {}", message_type_name(other));
+                warn!(
+                    "Unexpected message type from job stream: {}",
+                    message_type_name(other)
+                );
                 self.ack_job(&stream_id).await;
             }
         }
@@ -830,9 +971,12 @@ impl WorkerRunner {
                 info!("Worker went offline: {}", worker_id);
             }
             // Ignore server-bound messages
-            Message::ScanResult { .. } | Message::ScanProgress { .. }
-            | Message::ImportFilesResult { .. } | Message::DeletePathsResult { .. }
-            | Message::ProbeFileResult { .. } | Message::HashFileResult { .. } => {}
+            Message::ScanResult { .. }
+            | Message::ScanProgress { .. }
+            | Message::ImportFilesResult { .. }
+            | Message::DeletePathsResult { .. }
+            | Message::ProbeFileResult { .. }
+            | Message::HashFileResult { .. } => {}
             other => {
                 trace!("Ignoring pub/sub message: {}", message_type_name(other));
             }
@@ -970,7 +1114,10 @@ fn move_file(
     let source_size = std::fs::metadata(source)?.len();
     copy_with_progress(source, dest, source_size, progress_tx)?;
     let size = std::fs::metadata(dest)?.len() as i64;
-    Ok(MoveResult { size, method: "copy" })
+    Ok(MoveResult {
+        size,
+        method: "copy",
+    })
 }
 
 /// Copy a file with periodic progress logging and byte-level progress reporting.
@@ -1132,12 +1279,14 @@ fn extract_media_detail(file: &ScannedFile) -> Option<String> {
     let info_str = file.media_info.as_deref()?;
     let info: serde_json::Value = serde_json::from_str(info_str).ok()?;
     let resolution = info["resolution"].as_str().unwrap_or("?");
-    let codec = info["videoCodec"].as_str()
+    let codec = info["videoCodec"]
+        .as_str()
         .or_else(|| info["video_codec"].as_str())
         .unwrap_or("?");
     let mut parts = vec![format!("{}p", resolution), codec.to_string()];
     // HDR detection
-    if let Some(ct) = info["videoColourTransfer"].as_str()
+    if let Some(ct) = info["videoColourTransfer"]
+        .as_str()
         .or_else(|| info["video_colour_transfer"].as_str())
     {
         if ct == "smpte2084" {
@@ -1161,7 +1310,10 @@ async fn probe_scanned_file(file: &mut ScannedFile, progress: (usize, usize)) ->
         let probe_start = std::time::Instant::now();
         info!(
             "[probe] ({}/{}) {} ({})",
-            current, total, file.filename, format_size(file.size as u64)
+            current,
+            total,
+            file.filename,
+            format_size(file.size as u64)
         );
         match MediaAnalyzer::analyze(path).await {
             Ok(info) => {
@@ -1171,7 +1323,12 @@ async fn probe_scanned_file(file: &mut ScannedFile, progress: (usize, usize)) ->
                 let codec = info.video_codec.as_deref().unwrap_or("?");
                 info!(
                     "[probe] ({}/{}) {} — {}p {} in {:.1}s",
-                    current, total, file.filename, resolution, codec, elapsed.as_secs_f64()
+                    current,
+                    total,
+                    file.filename,
+                    resolution,
+                    codec,
+                    elapsed.as_secs_f64()
                 );
                 file.quality = serde_json::to_string(&quality).ok();
                 file.media_info = serde_json::to_string(&info).ok();
@@ -1181,7 +1338,11 @@ async fn probe_scanned_file(file: &mut ScannedFile, progress: (usize, usize)) ->
                 let elapsed = probe_start.elapsed();
                 warn!(
                     "[probe] ({}/{}) {} — failed in {:.1}s: {}",
-                    current, total, file.filename, elapsed.as_secs_f64(), e
+                    current,
+                    total,
+                    file.filename,
+                    elapsed.as_secs_f64(),
+                    e
                 );
             }
         }
@@ -1214,7 +1375,12 @@ async fn hash_scanned_file(file: &mut ScannedFile, progress: (usize, usize)) {
             };
             info!(
                 "[hash] ({}/{}) {} — {} in {:.1}s ({}/s)",
-                current, total, file.filename, &hash[..12], elapsed.as_secs_f64(), rate
+                current,
+                total,
+                file.filename,
+                &hash[..12],
+                elapsed.as_secs_f64(),
+                rate
             );
             file.file_hash = Some(hash);
         }

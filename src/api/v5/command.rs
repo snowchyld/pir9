@@ -1896,7 +1896,6 @@ async fn execute_episode_search(
 ) -> Result<String, String> {
     use crate::core::datastore::repositories::{
         EpisodeRepository, IndexerRepository, QualityProfileRepository, SeriesRepository,
-        TrackedDownloadRepository,
     };
     use crate::core::indexers::search::IndexerSearchService;
     use crate::core::indexers::SearchCriteria;
@@ -1950,8 +1949,8 @@ async fn execute_episode_search(
     let episode_repo = EpisodeRepository::new(db.clone());
     let series_repo = SeriesRepository::new(db.clone());
     let quality_repo = QualityProfileRepository::new(db.clone());
-    let tracked_repo = TrackedDownloadRepository::new(db.clone());
-    let tracked_service = TrackedDownloadService::new(db.clone(), options.tracked_downloads());
+    let tracked_store = options.tracked_downloads();
+    let tracked_service = TrackedDownloadService::new(db.clone(), tracked_store.clone());
 
     // Pre-load quality profiles for fast lookup
     let all_profiles = quality_repo.get_all().await.unwrap_or_default();
@@ -1959,10 +1958,10 @@ async fn execute_episode_search(
         all_profiles.into_iter().map(|p| (p.id, p)).collect();
 
     // Get currently downloading episode IDs to avoid duplicate grabs
-    let active_downloads = tracked_repo.get_all_active().await.unwrap_or_default();
+    let active_downloads = tracked_store.get_all_any().await;
     let downloading_episode_ids: std::collections::HashSet<i64> = active_downloads
         .iter()
-        .flat_map(|d| serde_json::from_str::<Vec<i64>>(&d.episode_ids).unwrap_or_default())
+        .flat_map(|d| d.episode_ids.iter().copied())
         .collect();
 
     let mut total_releases = 0;
@@ -2198,7 +2197,6 @@ async fn execute_season_search(
 ) -> Result<String, String> {
     use crate::core::datastore::repositories::{
         EpisodeRepository, IndexerRepository, QualityProfileRepository, SeriesRepository,
-        TrackedDownloadRepository,
     };
     use crate::core::indexers::search::IndexerSearchService;
     use crate::core::indexers::SearchCriteria;
@@ -2301,11 +2299,11 @@ async fn execute_season_search(
         .filter(|ep| ep.season_number == season_number)
         .collect();
 
-    let tracked_repo = TrackedDownloadRepository::new(db.clone());
-    let active_downloads = tracked_repo.get_all_active().await.unwrap_or_default();
+    let tracked_store = options.tracked_downloads();
+    let active_downloads = tracked_store.get_all_any().await;
     let downloading_ids: std::collections::HashSet<i64> = active_downloads
         .iter()
-        .flat_map(|d| serde_json::from_str::<Vec<i64>>(&d.episode_ids).unwrap_or_default())
+        .flat_map(|d| d.episode_ids.iter().copied())
         .collect();
 
     let missing_episode_ids: Vec<i64> = season_episodes
@@ -2511,7 +2509,7 @@ async fn execute_movie_search(
     options: &CommandExecutionOptions,
 ) -> Result<String, String> {
     use crate::core::datastore::repositories::{
-        IndexerRepository, MovieRepository, QualityProfileRepository, TrackedDownloadRepository,
+        IndexerRepository, MovieRepository, QualityProfileRepository,
     };
     use crate::core::indexers::search::IndexerSearchService;
     use crate::core::profiles::QualityProfileItem;
@@ -2559,17 +2557,20 @@ async fn execute_movie_search(
 
     let movie_repo = MovieRepository::new(db.clone());
     let quality_repo = QualityProfileRepository::new(db.clone());
-    let tracked_repo = TrackedDownloadRepository::new(db.clone());
-    let tracked_service = TrackedDownloadService::new(db.clone(), options.tracked_downloads());
+    let tracked_store = options.tracked_downloads();
+    let tracked_service = TrackedDownloadService::new(db.clone(), tracked_store.clone());
 
     let all_profiles = quality_repo.get_all().await.unwrap_or_default();
     let profiles: std::collections::HashMap<i64, _> =
         all_profiles.into_iter().map(|p| (p.id, p)).collect();
 
     // Get active movie downloads to avoid duplicates
-    let active_downloads = tracked_repo.get_all_active().await.unwrap_or_default();
-    let downloading_movie_ids: std::collections::HashSet<i64> =
-        active_downloads.iter().filter_map(|d| d.movie_id).collect();
+    let active_downloads = tracked_store.get_all_any().await;
+    let downloading_movie_ids: std::collections::HashSet<i64> = active_downloads
+        .iter()
+        .filter(|d| d.movie_id != 0)
+        .map(|d| d.movie_id)
+        .collect();
 
     let mut total_releases = 0;
     let mut grabbed = 0u32;

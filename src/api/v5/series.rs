@@ -219,7 +219,9 @@ async fn create_series(
     {
         tracing::info!(
             "Series already exists: id={}, title='{}', tvdb_id={}",
-            existing.id, existing.title, existing.tvdb_id
+            existing.id,
+            existing.title,
+            existing.tvdb_id
         );
         let mut response = SeriesResponse::from(existing);
         enrich_series_response(&mut response, &state.db).await;
@@ -275,7 +277,9 @@ async fn create_series(
         network: options.network.clone(),
         certification: options.certification.clone(),
         use_scene_numbering: false,
-        episode_ordering: if crate::core::tvdb::VALID_ORDERINGS.contains(&options.episode_ordering.as_str()) {
+        episode_ordering: if crate::core::tvdb::VALID_ORDERINGS
+            .contains(&options.episode_ordering.as_str())
+        {
             options.episode_ordering.clone()
         } else {
             "aired".to_string()
@@ -306,11 +310,7 @@ async fn create_series(
     }
 
     // Refresh metadata inline so the response includes full details (images, year, episodes)
-    tracing::info!(
-        "Auto-refreshing new series: {} (id={})",
-        options.title,
-        id
-    );
+    tracing::info!("Auto-refreshing new series: {} (id={})", options.title, id);
     if let Err(e) = auto_refresh_series(id, &state.db, &state.metadata_service).await {
         tracing::error!("Failed to auto-refresh series {}: {}", id, e);
     }
@@ -321,13 +321,8 @@ async fn create_series(
     let consumer = state.scan_result_consumer.get().cloned();
     let series_id = id;
     tokio::spawn(async move {
-        if let Err(e) = auto_scan_series(
-            series_id,
-            &db_clone,
-            hybrid_bus.as_ref(),
-            consumer.as_ref(),
-        )
-        .await
+        if let Err(e) =
+            auto_scan_series(series_id, &db_clone, hybrid_bus.as_ref(), consumer.as_ref()).await
         {
             tracing::error!("Failed to auto-scan series {}: {}", series_id, e);
         }
@@ -527,13 +522,9 @@ async fn import_series(
                         if let Err(e) = auto_refresh_series(id, &db_clone, &metadata_svc).await {
                             tracing::error!("Failed to auto-refresh series {}: {}", id, e);
                         }
-                        if let Err(e) = auto_scan_series(
-                            id,
-                            &db_clone,
-                            hybrid_bus.as_ref(),
-                            consumer.as_ref(),
-                        )
-                        .await
+                        if let Err(e) =
+                            auto_scan_series(id, &db_clone, hybrid_bus.as_ref(), consumer.as_ref())
+                                .await
                         {
                             tracing::error!("Failed to auto-scan series {}: {}", id, e);
                         }
@@ -1673,8 +1664,7 @@ pub async fn auto_refresh_series(
         .and_then(|f| f.to_str())
         .unwrap_or("");
     if current_folder_name.contains(':') && !series.root_folder_path.is_empty() {
-        let config = crate::core::configuration::AppConfig::load()
-            .unwrap_or_default();
+        let config = crate::core::configuration::AppConfig::load().unwrap_or_default();
         let folder_name = crate::core::naming::build_series_folder_name(
             &config.media,
             &series.title,
@@ -1686,12 +1676,18 @@ pub async fn auto_refresh_series(
             folder_name
         );
         if new_path != series.path {
-            tracing::info!("Fixing colon in series folder: {} -> {}", series.path, new_path);
+            tracing::info!(
+                "Fixing colon in series folder: {} -> {}",
+                series.path,
+                new_path
+            );
             let old = std::path::Path::new(&series.path);
             let new = std::path::Path::new(&new_path);
             if old.exists() && !new.exists() {
                 match tokio::fs::rename(old, new).await {
-                    Ok(()) => tracing::info!("Renamed series folder: {} -> {}", series.path, new_path),
+                    Ok(()) => {
+                        tracing::info!("Renamed series folder: {} -> {}", series.path, new_path)
+                    }
                     Err(e) => tracing::warn!("Failed to rename series folder: {}", e),
                 }
             }

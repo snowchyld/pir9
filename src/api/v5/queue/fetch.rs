@@ -5,7 +5,6 @@ use std::collections::HashSet;
 use super::common::*;
 use crate::core::datastore::repositories::{
     DownloadClientRepository, EpisodeRepository, MovieRepository, SeriesRepository,
-    TrackedDownloadRepository,
 };
 use crate::core::download::clients::{create_client_from_model, DownloadState};
 use crate::core::parser::{best_series_match, normalize_title, parse_title};
@@ -27,16 +26,9 @@ pub(super) async fn fetch_all_downloads(
 
     // Collect ALL tracked download IDs (regardless of status) so that
     // completed/imported downloads still suppress their untracked duplicates.
-    // Without this, a status=4 (Imported) record drops out of the active set
+    // Without this, a completed record drops out of the active set
     // and the torrent re-appears from the client as an untracked "ready to import".
-    let td_repo = TrackedDownloadRepository::new(state.db.clone());
-    let tracked_ids: HashSet<String> = match td_repo.get_all_download_ids().await {
-        Ok(ids) => ids.into_iter().collect(),
-        Err(e) => {
-            tracing::warn!("Failed to load tracked download IDs: {}", e);
-            HashSet::new()
-        }
-    };
+    let tracked_ids: HashSet<String> = state.tracked.all_download_id_strings().await;
 
     // Get tracked downloads with live status merged.
     // `get_queue()` returns a QueueResult containing both items and the raw
@@ -81,7 +73,8 @@ pub(super) async fn fetch_all_downloads(
         let all_series = series_repo.get_all().await.unwrap_or_default();
         let movie_repo = MovieRepository::new(state.db.clone());
         let all_movies = movie_repo.get_all().await.unwrap_or_default();
-        let mut id_counter = (all_downloads.len() as i64) + 10000;
+        let mut id_counter =
+            (all_downloads.len() as i64) + crate::core::queue::UNTRACKED_ID_BASE;
 
         for db_client in clients.iter().filter(|c| c.enable) {
             // Parse the configured categories from client settings.

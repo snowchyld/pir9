@@ -6,8 +6,8 @@ use anyhow::{Context, Result};
 use sqlx::Row;
 use std::collections::HashSet;
 
-use crate::core::datastore::Database;
 use crate::core::audiobooks::models::{Audiobook, AudiobookChapter, AudiobookFile};
+use crate::core::datastore::Database;
 use crate::core::tv::MediaCover;
 
 /// Repository for Audiobook entities

@@ -361,32 +361,9 @@ pub struct LogFileDbModel {
     pub last_write_time: DateTime<Utc>,
 }
 
-/// Tracked download database model
-/// Tracks downloads sent to clients with their series/episode relationships
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct TrackedDownloadDbModel {
-    pub id: i64,
-    pub download_id: String,           // ID from download client
-    pub download_client_id: i64,       // FK to download_clients
-    pub series_id: i64,                // FK to series
-    pub episode_ids: String,           // JSON array of episode IDs
-    pub title: String,                 // Release title
-    pub indexer: Option<String>,       // Indexer name
-    pub size: i64,                     // Size in bytes
-    pub protocol: i32,                 // 1=Usenet, 2=Torrent
-    pub quality: String,               // JSON QualityModel
-    pub languages: String,             // JSON array of languages
-    pub status: i32,                   // TrackedDownloadState enum
-    pub status_messages: String,       // JSON array of StatusMessage
-    pub error_message: Option<String>, // Error message if failed
-    pub output_path: Option<String>,   // Download output path
-    pub is_upgrade: bool,              // Whether this is an upgrade
-    pub added: DateTime<Utc>,
-    pub movie_id: Option<i64>,  // FK to movies (for movie downloads)
-    pub artist_id: Option<i64>,    // FK to artists (for music downloads)
-    pub audiobook_id: Option<i64>, // FK to audiobooks (for audiobook downloads)
-    pub content_type: String,      // series, movie, anime, music, audiobook, podcast
-}
+// TrackedDownloadDbModel removed in v0.102.0 — tracked downloads now use
+// per-content-type JSONL flat files (see core/queue/tracked.rs).
+// The `tracked_downloads` DB table is still read by stores.rs for one-time migration.
 
 /// Import exclusion database model
 /// Tracks movies/series that should be excluded from automatic import
@@ -447,9 +424,9 @@ pub struct ArtistDbModel {
     pub overview: Option<String>,
     pub artist_type: String,
     pub status: String,
-    pub genres: String,  // JSON serialized
-    pub images: String,  // JSON serialized
-    pub tags: String,    // JSON serialized
+    pub genres: String, // JSON serialized
+    pub images: String, // JSON serialized
+    pub tags: String,   // JSON serialized
     pub path: String,
     pub root_folder_path: String,
     pub quality_profile_id: i64,
@@ -468,10 +445,10 @@ pub struct AlbumDbModel {
     pub title: String,
     pub clean_title: String,
     pub album_type: String,
-    pub secondary_types: String,  // JSON serialized array of secondary types
+    pub secondary_types: String, // JSON serialized array of secondary types
     pub release_date: Option<NaiveDate>,
-    pub genres: String,  // JSON serialized
-    pub images: String,  // JSON serialized
+    pub genres: String, // JSON serialized
+    pub images: String, // JSON serialized
     pub monitored: bool,
     pub added: DateTime<Utc>,
     pub last_info_sync: Option<DateTime<Utc>>,
@@ -519,9 +496,9 @@ pub struct PodcastDbModel {
     pub author: Option<String>,
     pub feed_url: String,
     pub website_url: Option<String>,
-    pub genres: String,  // JSON serialized
-    pub images: String,  // JSON serialized
-    pub tags: String,    // JSON serialized
+    pub genres: String, // JSON serialized
+    pub images: String, // JSON serialized
+    pub tags: String,   // JSON serialized
     pub path: String,
     pub root_folder_path: String,
     pub quality_profile_id: i64,
@@ -578,9 +555,9 @@ pub struct AudiobookDbModel {
     pub asin: Option<String>,
     pub duration_ms: Option<i64>,
     pub release_date: Option<NaiveDate>,
-    pub genres: String,  // JSON serialized
-    pub images: String,  // JSON serialized
-    pub tags: String,    // JSON serialized
+    pub genres: String, // JSON serialized
+    pub images: String, // JSON serialized
+    pub tags: String,   // JSON serialized
     pub path: String,
     pub root_folder_path: String,
     pub quality_profile_id: i64,

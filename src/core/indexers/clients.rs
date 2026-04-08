@@ -844,16 +844,24 @@ impl IndexerClient for ProwlarrClient {
             .header("X-Api-Key", &self.api_key)
             .send()
             .await
-            .context(format!("Failed to search Prowlarr (type={}, url={})", search_type, &url[..url.find('?').unwrap_or(url.len())]))?;
+            .context(format!(
+                "Failed to search Prowlarr (type={}, url={})",
+                search_type,
+                &url[..url.find('?').unwrap_or(url.len())]
+            ))?;
 
         if !response.status().is_success() {
-            anyhow::bail!("Prowlarr search failed: status={}, type={}", response.status(), search_type);
+            anyhow::bail!(
+                "Prowlarr search failed: status={}, type={}",
+                response.status(),
+                search_type
+            );
         }
 
-        let releases: Vec<ProwlarrRelease> = response
-            .json()
-            .await
-            .context(format!("Failed to parse Prowlarr JSON response (type={})", search_type))?;
+        let releases: Vec<ProwlarrRelease> = response.json().await.context(format!(
+            "Failed to parse Prowlarr JSON response (type={})",
+            search_type
+        ))?;
 
         Ok(releases
             .into_iter()

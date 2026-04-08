@@ -40,11 +40,7 @@ impl MusicBrainzClient {
     }
 
     /// Search artists by name
-    pub async fn search_artists(
-        &self,
-        query: &str,
-        limit: u32,
-    ) -> anyhow::Result<Vec<MbArtist>> {
+    pub async fn search_artists(&self, query: &str, limit: u32) -> anyhow::Result<Vec<MbArtist>> {
         let url = format!(
             "{}/api/artists/search?q={}&limit={}",
             self.base_url,
@@ -56,7 +52,10 @@ impl MusicBrainzClient {
                 Ok(response.json().await.unwrap_or_default())
             }
             Ok(response) => {
-                warn!("MusicBrainz service search returned error: {}", response.status());
+                warn!(
+                    "MusicBrainz service search returned error: {}",
+                    response.status()
+                );
                 Ok(vec![])
             }
             Err(e) => {
@@ -112,7 +111,10 @@ impl MusicBrainzClient {
     }
 
     /// Get track listing for a specific release MBID
-    pub async fn get_release_tracks(&self, release_mbid: &str) -> anyhow::Result<Vec<MbReleaseTrack>> {
+    pub async fn get_release_tracks(
+        &self,
+        release_mbid: &str,
+    ) -> anyhow::Result<Vec<MbReleaseTrack>> {
         let url = format!("{}/api/releases/{}/tracks", self.base_url, release_mbid);
         match self.client.get(&url).send().await {
             Ok(response) if response.status().is_success() => {
@@ -123,8 +125,14 @@ impl MusicBrainzClient {
     }
 
     /// Get releases (editions) for an album by release group MBID
-    pub async fn get_album_releases(&self, release_group_mbid: &str) -> anyhow::Result<Vec<MbRelease>> {
-        let url = format!("{}/api/albums/{}/releases", self.base_url, release_group_mbid);
+    pub async fn get_album_releases(
+        &self,
+        release_group_mbid: &str,
+    ) -> anyhow::Result<Vec<MbRelease>> {
+        let url = format!(
+            "{}/api/albums/{}/releases",
+            self.base_url, release_group_mbid
+        );
         match self.client.get(&url).send().await {
             Ok(response) if response.status().is_success() => {
                 Ok(response.json().await.unwrap_or_default())
@@ -148,7 +156,10 @@ impl MusicBrainzClient {
     }
 
     /// Trigger a MusicBrainz data sync for specific datasets
-    pub async fn trigger_sync_selective(&self, datasets: &[String]) -> anyhow::Result<MbProxyResponse> {
+    pub async fn trigger_sync_selective(
+        &self,
+        datasets: &[String],
+    ) -> anyhow::Result<MbProxyResponse> {
         let url = format!("{}/api/sync", self.base_url);
         match self
             .client

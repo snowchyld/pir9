@@ -103,9 +103,7 @@ fn resource_to_model(resource: &ImportListResource) -> ImportListDbModel {
 }
 
 /// GET /api/v5/importlist — list all import lists
-pub async fn get_import_lists(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<ImportListResource>> {
+pub async fn get_import_lists(State(state): State<Arc<AppState>>) -> Json<Vec<ImportListResource>> {
     let repo = ImportListRepository::new(state.db.clone());
 
     match repo.get_all().await {
@@ -238,9 +236,7 @@ pub async fn sync_import_list(
                 "errors": result.errors,
             }))
         }
-        Err(e) => {
-            Json(serde_json::json!({ "error": format!("Sync failed: {}", e) }))
-        }
+        Err(e) => Json(serde_json::json!({ "error": format!("Sync failed: {}", e) })),
     }
 }
 

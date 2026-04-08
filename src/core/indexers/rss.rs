@@ -8,7 +8,6 @@ use super::search::{apply_minimum_seeders_filter, get_minimum_seeders};
 use super::ReleaseInfo;
 use crate::core::datastore::models::IndexerDbModel;
 
-
 /// RSS sync service
 pub struct RssSyncService {
     indexers: Vec<IndexerDbModel>,

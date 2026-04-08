@@ -193,7 +193,10 @@ impl IndexerSearchService {
                 continue;
             }
 
-            match self.search_movie_indexer(indexer, title, year, imdb_id).await {
+            match self
+                .search_movie_indexer(indexer, title, year, imdb_id)
+                .await
+            {
                 Ok(releases) => {
                     tracing::debug!(
                         "Indexer {} returned {} movie releases",
@@ -226,7 +229,10 @@ impl IndexerSearchService {
                 continue;
             }
 
-            match self.search_movie_indexer(indexer, title, year, imdb_id).await {
+            match self
+                .search_movie_indexer(indexer, title, year, imdb_id)
+                .await
+            {
                 Ok(releases) => {
                     tracing::debug!(
                         "Indexer {} returned {} releases for interactive movie search",
@@ -253,7 +259,8 @@ impl IndexerSearchService {
         season: Option<i32>,
         episode: Option<i32>,
     ) -> Result<Vec<ReleaseInfo>> {
-        self.search_by_query_with_categories(series_title, season, episode, None).await
+        self.search_by_query_with_categories(series_title, season, episode, None)
+            .await
     }
 
     /// Search by query text with explicit categories.
@@ -273,7 +280,8 @@ impl IndexerSearchService {
 
             match create_client_from_model(indexer) {
                 Ok(client) => {
-                    let cats = categories.clone()
+                    let cats = categories
+                        .clone()
                         .unwrap_or_else(|| get_tv_categories(indexer.protocol));
                     let query = SearchQuery {
                         query: Some(query_text.to_string()),
@@ -291,8 +299,7 @@ impl IndexerSearchService {
                                 release.indexer = indexer.name.clone();
                             }
                             let min_seeders = get_minimum_seeders(indexer);
-                            let releases =
-                                apply_minimum_seeders_filter(releases, min_seeders);
+                            let releases = apply_minimum_seeders_filter(releases, min_seeders);
                             all_releases.extend(releases);
                         }
                         Err(e) => {
@@ -329,7 +336,10 @@ pub(crate) fn get_minimum_seeders(indexer: &IndexerDbModel) -> i32 {
 
 /// Filter releases below minimum seeders threshold.
 /// Only applies to torrent releases that report a seeders count.
-pub(crate) fn apply_minimum_seeders_filter(releases: Vec<ReleaseInfo>, min_seeders: i32) -> Vec<ReleaseInfo> {
+pub(crate) fn apply_minimum_seeders_filter(
+    releases: Vec<ReleaseInfo>,
+    min_seeders: i32,
+) -> Vec<ReleaseInfo> {
     if min_seeders <= 1 {
         return releases;
     }

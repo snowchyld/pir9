@@ -121,13 +121,10 @@ pub fn parse_feed(data: &[u8]) -> Result<FeedMetadata> {
                 .itunes_ext()
                 .and_then(|ext| ext.season().and_then(|s| s.parse::<i32>().ok()));
 
-            let description = item
-                .description()
-                .map(|s| s.to_string())
-                .or_else(|| {
-                    item.itunes_ext()
-                        .and_then(|ext| ext.summary().map(|s| s.to_string()))
-                });
+            let description = item.description().map(|s| s.to_string()).or_else(|| {
+                item.itunes_ext()
+                    .and_then(|ext| ext.summary().map(|s| s.to_string()))
+            });
 
             FeedEpisode {
                 title: item.title().unwrap_or("Untitled").to_string(),
@@ -160,7 +157,11 @@ pub fn parse_feed(data: &[u8]) -> Result<FeedMetadata> {
 
     let link = {
         let l = channel.link();
-        if l.is_empty() { None } else { Some(l.to_string()) }
+        if l.is_empty() {
+            None
+        } else {
+            Some(l.to_string())
+        }
     };
 
     Ok(FeedMetadata {

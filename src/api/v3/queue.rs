@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::core::datastore::repositories::{
-    DownloadClientRepository, EpisodeRepository, SeriesRepository, TrackedDownloadRepository,
+    DownloadClientRepository, EpisodeRepository, SeriesRepository,
 };
 use crate::core::download::clients::{create_client_from_model, DownloadState};
 use crate::core::parser::{parse_title, title_matches_series};
@@ -546,7 +546,6 @@ pub async fn delete_queue_item(
     Query(query): Query<DeleteQueueQuery>,
 ) -> Json<serde_json::Value> {
     let service = TrackedDownloadService::new(state.db.clone(), state.tracked.clone());
-    let _tracked_repo = TrackedDownloadRepository::new(state.db.clone());
 
     // Check if this is a tracked download (ID < 10000)
     if id < 10000 {

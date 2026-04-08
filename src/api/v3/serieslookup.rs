@@ -152,7 +152,8 @@ pub async fn lookup_series(
     // Determine lookup mode: tvdb_id param, "tvdb:NNNNN" in term, or text search
     let tvdb_id = query.tvdb_id.or_else(|| {
         query.term.as_ref().and_then(|t| {
-            t.strip_prefix("tvdb:").and_then(|id| id.trim().parse::<i32>().ok())
+            t.strip_prefix("tvdb:")
+                .and_then(|id| id.trim().parse::<i32>().ok())
         })
     });
 
@@ -162,15 +163,13 @@ pub async fn lookup_series(
         tracing::info!("Skyhook TVDB lookup: {}", url);
 
         match client.get(&url).header("User-Agent", "pir9").send().await {
-            Ok(r) if r.status().is_success() => {
-                match r.json::<SkyhookSearchResult>().await {
-                    Ok(show) => vec![show],
-                    Err(e) => {
-                        tracing::error!("Failed to parse Skyhook show response: {}", e);
-                        return Json(vec![]);
-                    }
+            Ok(r) if r.status().is_success() => match r.json::<SkyhookSearchResult>().await {
+                Ok(show) => vec![show],
+                Err(e) => {
+                    tracing::error!("Failed to parse Skyhook show response: {}", e);
+                    return Json(vec![]);
                 }
-            }
+            },
             Ok(r) => {
                 tracing::error!("Skyhook TVDB lookup returned status: {}", r.status());
                 return Json(vec![]);
@@ -256,7 +255,8 @@ pub async fn lookup_series(
                     })
                     .collect(),
                 year: s.year.unwrap_or_else(|| {
-                    s.first_aired.as_deref()
+                    s.first_aired
+                        .as_deref()
                         .and_then(|fa| fa.split('-').next())
                         .and_then(|y| y.parse::<i32>().ok())
                         .unwrap_or(0)

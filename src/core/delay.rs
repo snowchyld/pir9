@@ -109,10 +109,7 @@ pub fn check_delay(
     };
 
     if protocol == preferred {
-        debug!(
-            "Release uses preferred protocol {:?}, no delay",
-            protocol
-        );
+        debug!("Release uses preferred protocol {:?}, no delay", protocol);
         return DelayDecision::GrabNow;
     }
 
@@ -203,8 +200,8 @@ mod tests {
     #[test]
     fn test_find_matching_profile_tag_match() {
         let profiles = vec![
-            make_profile(1, true, true, 1, 720, 720, &[], 0),    // default
-            make_profile(2, true, true, 2, 0, 0, &[5, 6], 1),    // matches tag 5
+            make_profile(1, true, true, 1, 720, 720, &[], 0), // default
+            make_profile(2, true, true, 2, 0, 0, &[5, 6], 1), // matches tag 5
         ];
         // Entity has tag 5 — should match profile 2
         let result = find_matching_profile(&profiles, &[5]);
@@ -215,8 +212,8 @@ mod tests {
     #[test]
     fn test_find_matching_profile_no_tag_match_uses_default() {
         let profiles = vec![
-            make_profile(1, true, true, 1, 720, 720, &[], 0),    // default
-            make_profile(2, true, true, 2, 0, 0, &[5, 6], 1),    // tags 5,6
+            make_profile(1, true, true, 1, 720, 720, &[], 0), // default
+            make_profile(2, true, true, 2, 0, 0, &[5, 6], 1), // tags 5,6
         ];
         // Entity has tag 99 — no match, should fall back to default
         let result = find_matching_profile(&profiles, &[99]);
@@ -227,8 +224,8 @@ mod tests {
     #[test]
     fn test_find_matching_profile_first_tag_match_wins() {
         let profiles = vec![
-            make_profile(1, true, true, 1, 720, 720, &[10], 0),  // order 0, tag 10
-            make_profile(2, true, true, 2, 0, 0, &[10], 1),      // order 1, tag 10
+            make_profile(1, true, true, 1, 720, 720, &[10], 0), // order 0, tag 10
+            make_profile(2, true, true, 2, 0, 0, &[10], 1),     // order 1, tag 10
         ];
         // Both match tag 10, first in order wins
         let result = find_matching_profile(&profiles, &[10]);
@@ -243,7 +240,10 @@ mod tests {
     #[test]
     fn test_check_delay_no_air_date() {
         let profile = make_profile(1, true, true, 1, 720, 720, &[], 0);
-        assert_eq!(check_delay(&profile, Protocol::Torrent, None), DelayDecision::GrabNow);
+        assert_eq!(
+            check_delay(&profile, Protocol::Torrent, None),
+            DelayDecision::GrabNow
+        );
     }
 
     #[test]
