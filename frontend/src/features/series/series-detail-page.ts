@@ -6,7 +6,7 @@ import type { ReleaseSearchModal } from '../../components/release-search-modal';
 import '../../components/release-search-modal';
 import { BaseComponent, customElement, escapeHtml, html, safeHtml } from '../../core/component';
 import { type Episode, http, type QueueItem, type Series } from '../../core/http';
-import { createMutation, createQuery, invalidateQueries, useQueueQuery } from '../../core/query';
+import { createMutation, createQuery, invalidateQueries, setQueryData, useQueueQuery } from '../../core/query';
 import { signal } from '../../core/reactive';
 import type { ScanProgressMessage } from '../../core/websocket';
 import { wsManager } from '../../core/websocket';
@@ -1230,6 +1230,23 @@ export class SeriesDetailPage extends BaseComponent {
     if (!episodes) return;
     const episodeIds = episodes.filter((e) => e.seasonNumber === seasonNumber).map((e) => e.id);
     if (episodeIds.length === 0) return;
+
+    // Optimistically update the series cache so intermediate re-renders
+    // (e.g., from episode query refetch completing first) don't snap the
+    // checkbox back to the stale value.
+    const id = this.seriesId.value;
+    if (id) {
+      setQueryData<Series>(['/series', id], (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          seasons: old.seasons.map((s) =>
+            s.seasonNumber === seasonNumber ? { ...s, monitored } : s,
+          ),
+        };
+      });
+    }
+
     this.monitorMutation.mutate({ episodeIds, monitored });
   }
 

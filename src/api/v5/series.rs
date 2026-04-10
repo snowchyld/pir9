@@ -1749,7 +1749,6 @@ pub async fn auto_refresh_series(
     db: &crate::core::datastore::Database,
     metadata_service: &crate::core::metadata::MetadataService,
 ) -> Result<(), String> {
-    use crate::core::datastore::models::EpisodeDbModel;
     use crate::core::datastore::repositories::{EpisodeRepository, SeriesRepository};
     use crate::core::metadata::EpisodeEnrichment;
 
@@ -1862,73 +1861,11 @@ pub async fn auto_refresh_series(
         .await
         .map_err(|e| format!("Failed to update series: {}", e))?;
 
-    // Sync episodes
-    let mut added = 0;
-    let mut updated = 0;
-    for ep in metadata.episodes {
-        let air_date = ep
-            .air_date
-            .as_ref()
-            .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-        let air_date_utc = ep
-            .air_date_utc
-            .as_ref()
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-
-        let existing = episode_repo
-            .get_by_series_season_episode(series_id, ep.season_number, ep.episode_number)
-            .await
-            .ok()
-            .flatten();
-
-        let title = ep
-            .title
-            .unwrap_or_else(|| format!("Episode {}", ep.episode_number));
-
-        if let Some(mut existing_ep) = existing {
-            // Update metadata from Skyhook, preserve local state
-            existing_ep.tvdb_id = ep.tvdb_id;
-            existing_ep.title = title;
-            existing_ep.overview = ep.overview;
-            existing_ep.air_date = air_date;
-            existing_ep.air_date_utc = air_date_utc;
-            existing_ep.runtime = ep.runtime.unwrap_or(0);
-            existing_ep.absolute_episode_number = ep.absolute_episode_number;
-            if episode_repo.update(&existing_ep).await.is_ok() {
-                updated += 1;
-            }
-        } else {
-            let episode = EpisodeDbModel {
-                id: 0,
-                series_id,
-                tvdb_id: ep.tvdb_id,
-                episode_file_id: None,
-                season_number: ep.season_number,
-                episode_number: ep.episode_number,
-                absolute_episode_number: ep.absolute_episode_number,
-                scene_absolute_episode_number: None,
-                scene_episode_number: None,
-                scene_season_number: None,
-                title,
-                overview: ep.overview,
-                air_date,
-                air_date_utc,
-                runtime: ep.runtime.unwrap_or(0),
-                has_file: false,
-                monitored: series.monitored,
-                unverified_scene_numbering: false,
-                added: Utc::now(),
-                last_search_time: None,
-                imdb_id: None,
-                imdb_rating: None,
-                imdb_votes: None,
-            };
-            if episode_repo.insert(&episode).await.is_ok() {
-                added += 1;
-            }
-        }
-    }
+    // Sync episodes (batched in single transaction for WAL efficiency)
+    let (added, updated) = episode_repo
+        .sync_episodes_batch(series_id, series.monitored, &metadata.episodes)
+        .await
+        .map_err(|e| format!("Failed to sync episodes: {}", e))?;
 
     // Enrich episodes with IMDB ratings
     if let Some(imdb_id) = &series.imdb_id {

@@ -7,6 +7,27 @@ use tracing::info;
 
 use crate::models::*;
 
+/// Map a database row to a DbEpisode
+fn row_to_episode(row: &sqlx::postgres::PgRow) -> DbEpisode {
+    DbEpisode {
+        imdb_id: row.get("imdb_id"),
+        parent_imdb_id: row.get("parent_imdb_id"),
+        season_number: row.get("season_number"),
+        episode_number: row.get("episode_number"),
+        title: row.get("title"),
+        original_title: row.get("original_title"),
+        runtime_minutes: row.get("runtime_minutes"),
+        is_adult: row.get("is_adult"),
+        start_year: row.get("start_year"),
+        genres: row.get("genres"),
+        rating: row.get("rating"),
+        votes: row.get("votes"),
+        air_date: row.get("air_date"),
+        last_synced_at: row.get("last_synced_at"),
+        row_hash: None,
+    }
+}
+
 /// Info needed to resume a previously failed/cancelled sync
 pub struct ResumeInfo {
     pub sync_id: i64,
@@ -56,6 +77,7 @@ impl DbRepository {
                 title ILIKE $3 OR original_title ILIKE $3
                 OR regexp_replace(title, '[^a-zA-Z0-9 ]', ' ', 'g') ILIKE $5
                 OR regexp_replace(original_title, '[^a-zA-Z0-9 ]', ' ', 'g') ILIKE $5
+                OR EXISTS (SELECT 1 FROM imdb_title_akas a WHERE a.tconst = imdb_series.imdb_id AND a.title ILIKE $3)
             )
               AND is_adult = false
             ORDER BY
@@ -93,6 +115,7 @@ impl DbRepository {
                     rating: row.get("rating"),
                     votes: row.get("votes"),
                     last_synced_at: row.get("last_synced_at"),
+                    row_hash: None,
                 };
                 db_series.to_api()
             })
@@ -131,6 +154,7 @@ impl DbRepository {
                 rating: row.get("rating"),
                 votes: row.get("votes"),
                 last_synced_at: row.get("last_synced_at"),
+                row_hash: None,
             };
             db_series.to_api()
         }))
@@ -142,9 +166,7 @@ impl DbRepository {
 
         let rows = sqlx::query(
             r#"
-            SELECT imdb_id, parent_imdb_id, season_number, episode_number,
-                   title, runtime_minutes, rating, votes, air_date, last_synced_at
-            FROM imdb_episodes
+            SELECT * FROM imdb_episodes
             WHERE parent_imdb_id = $1
             ORDER BY season_number NULLS LAST, episode_number NULLS LAST
             "#,
@@ -153,23 +175,33 @@ impl DbRepository {
         .fetch_all(&self.pool)
         .await?;
 
+        Ok(rows.iter().map(|row| row_to_episode(row).to_api()).collect())
+    }
+
+    /// Get episodes for a specific season of a series
+    pub async fn get_episodes_by_season(
+        &self,
+        imdb_id: &str,
+        season: i32,
+    ) -> Result<Vec<ImdbEpisode>> {
+        let numeric_id =
+            parse_imdb_id(imdb_id).ok_or_else(|| anyhow::anyhow!("Invalid IMDB ID"))?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT * FROM imdb_episodes
+            WHERE parent_imdb_id = $1 AND season_number = $2
+            ORDER BY episode_number NULLS LAST
+            "#,
+        )
+        .bind(numeric_id)
+        .bind(season)
+        .fetch_all(&self.pool)
+        .await?;
+
         let results: Vec<ImdbEpisode> = rows
             .iter()
-            .map(|row| {
-                let db_ep = DbEpisode {
-                    imdb_id: row.get("imdb_id"),
-                    parent_imdb_id: row.get("parent_imdb_id"),
-                    season_number: row.get("season_number"),
-                    episode_number: row.get("episode_number"),
-                    title: row.get("title"),
-                    runtime_minutes: row.get("runtime_minutes"),
-                    rating: row.get("rating"),
-                    votes: row.get("votes"),
-                    air_date: row.get("air_date"),
-                    last_synced_at: row.get("last_synced_at"),
-                };
-                db_ep.to_api()
-            })
+            .map(|row| row_to_episode(row).to_api())
             .collect();
 
         Ok(results)
@@ -206,6 +238,7 @@ impl DbRepository {
                 title ILIKE $3 OR original_title ILIKE $3
                 OR regexp_replace(title, '[^a-zA-Z0-9 ]', ' ', 'g') ILIKE $5
                 OR regexp_replace(original_title, '[^a-zA-Z0-9 ]', ' ', 'g') ILIKE $5
+                OR EXISTS (SELECT 1 FROM imdb_title_akas a WHERE a.tconst = imdb_movies.imdb_id AND a.title ILIKE $3)
             )
               AND is_adult = false
             ORDER BY
@@ -245,6 +278,7 @@ impl DbRepository {
                     poster_url: row.get("poster_url"),
                     fanart_url: row.get("fanart_url"),
                     tmdb_fetched_at: row.get("tmdb_fetched_at"),
+                    row_hash: None,
                 };
                 db_movie.to_api()
             })
@@ -285,35 +319,38 @@ impl DbRepository {
             poster_url: row.get("poster_url"),
             fanart_url: row.get("fanart_url"),
             tmdb_fetched_at: row.get("tmdb_fetched_at"),
+            row_hash: None,
         }))
     }
 
     /// Get database statistics
     pub async fn get_stats(&self) -> Result<ImdbStats> {
-        let series_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM imdb_series")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
+        // Use pg_class.reltuples for approximate counts — instant vs full table scan.
+        // Kept accurate by autovacuum/ANALYZE; exact COUNT(*) was taking 3-9s per table.
+        let counts: Vec<(String, i64)> = sqlx::query_as(
+            r#"
+            SELECT c.relname::text, c.reltuples::bigint
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public'
+              AND c.relname IN ('imdb_series', 'imdb_episodes', 'imdb_movies', 'imdb_people', 'imdb_credits', 'imdb_title_akas', 'imdb_title_crew')
+              AND c.relkind = 'r'
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
 
-        let episode_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM imdb_episodes")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
-
-        let movie_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM imdb_movies")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
-
-        let people_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM imdb_people")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
-
-        let credits_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM imdb_credits")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
+        let get = |name: &str| -> i64 {
+            counts.iter().find(|(n, _)| n == name).map_or(0, |(_, c)| *c)
+        };
+        let series_count = get("imdb_series");
+        let episode_count = get("imdb_episodes");
+        let movie_count = get("imdb_movies");
+        let people_count = get("imdb_people");
+        let credits_count = get("imdb_credits");
+        let akas_count = get("imdb_title_akas");
+        let crew_count = get("imdb_title_crew");
 
         // Get last sync time
         let last_sync: Option<String> = sqlx::query_scalar(
@@ -343,6 +380,8 @@ impl DbRepository {
             movie_count,
             people_count,
             credits_count,
+            akas_count,
+            crew_count,
             last_sync,
             db_size_bytes: db_size,
         })
@@ -354,6 +393,7 @@ impl DbRepository {
             let row = sqlx::query(
                 r#"
                 SELECT dataset_name, rows_processed, rows_inserted, rows_updated,
+                       COALESCE(rows_unchanged, 0) as rows_unchanged,
                        started_at, completed_at, status, error_message
                 FROM imdb_sync_status
                 WHERE dataset_name = $1
@@ -370,6 +410,7 @@ impl DbRepository {
                 rows_processed: r.get("rows_processed"),
                 rows_inserted: r.get("rows_inserted"),
                 rows_updated: r.get("rows_updated"),
+                rows_unchanged: r.get("rows_unchanged"),
                 started_at: r.get::<chrono::DateTime<chrono::Utc>, _>("started_at").to_rfc3339(),
                 completed_at: r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at").map(|d| d.to_rfc3339()),
                 status: r.get("status"),
@@ -379,6 +420,8 @@ impl DbRepository {
                 download_size_bytes: None,
                 download_bytes_done: None,
                 current_phase: None,
+                estimated_total_rows: None,
+                parsing_progress: None,
             }))
         }
 
@@ -389,6 +432,8 @@ impl DbRepository {
             title_ratings: get_dataset_status(&self.pool, "title.ratings.tsv.gz").await?,
             name_basics: get_dataset_status(&self.pool, "name.basics.tsv.gz").await?,
             title_principals: get_dataset_status(&self.pool, "title.principals.tsv.gz").await?,
+            title_akas: get_dataset_status(&self.pool, "title.akas.tsv.gz").await?,
+            title_crew: get_dataset_status(&self.pool, "title.crew.tsv.gz").await?,
         })
     }
 
@@ -417,10 +462,24 @@ impl DbRepository {
         rows_updated: i64,
         last_processed_id: i64,
     ) -> Result<()> {
+        self.update_sync_progress_full(sync_id, rows_processed, rows_inserted, rows_updated, 0, last_processed_id).await
+    }
+
+    /// Update sync progress including rows_unchanged count
+    pub async fn update_sync_progress_full(
+        &self,
+        sync_id: i64,
+        rows_processed: i64,
+        rows_inserted: i64,
+        rows_updated: i64,
+        rows_unchanged: i64,
+        last_processed_id: i64,
+    ) -> Result<()> {
         sqlx::query(
             r#"
             UPDATE imdb_sync_status
-            SET rows_processed = $2, rows_inserted = $3, rows_updated = $4, last_processed_id = $5
+            SET rows_processed = $2, rows_inserted = $3, rows_updated = $4,
+                rows_unchanged = $5, last_processed_id = $6
             WHERE id = $1
             "#,
         )
@@ -428,6 +487,7 @@ impl DbRepository {
         .bind(rows_processed)
         .bind(rows_inserted)
         .bind(rows_updated)
+        .bind(rows_unchanged)
         .bind(last_processed_id)
         .execute(&self.pool)
         .await?;
@@ -608,14 +668,19 @@ impl DbRepository {
         let result = sqlx::query(
             r#"
             INSERT INTO imdb_episodes (imdb_id, parent_imdb_id, season_number, episode_number,
-                                       title, runtime_minutes, rating, votes, air_date, last_synced_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                                       title, original_title, runtime_minutes, is_adult, start_year, genres,
+                                       rating, votes, air_date, last_synced_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             ON CONFLICT (imdb_id) DO UPDATE SET
                 parent_imdb_id = EXCLUDED.parent_imdb_id,
                 season_number = EXCLUDED.season_number,
                 episode_number = EXCLUDED.episode_number,
                 title = COALESCE(EXCLUDED.title, imdb_episodes.title),
+                original_title = COALESCE(EXCLUDED.original_title, imdb_episodes.original_title),
                 runtime_minutes = COALESCE(EXCLUDED.runtime_minutes, imdb_episodes.runtime_minutes),
+                is_adult = EXCLUDED.is_adult,
+                start_year = COALESCE(EXCLUDED.start_year, imdb_episodes.start_year),
+                genres = COALESCE(EXCLUDED.genres, imdb_episodes.genres),
                 rating = COALESCE(EXCLUDED.rating, imdb_episodes.rating),
                 votes = COALESCE(EXCLUDED.votes, imdb_episodes.votes),
                 air_date = COALESCE(EXCLUDED.air_date, imdb_episodes.air_date),
@@ -627,7 +692,11 @@ impl DbRepository {
         .bind(episode.season_number)
         .bind(episode.episode_number)
         .bind(&episode.title)
+        .bind(&episode.original_title)
         .bind(episode.runtime_minutes)
+        .bind(episode.is_adult)
+        .bind(episode.start_year)
+        .bind(&episode.genres)
         .bind(episode.rating)
         .bind(episode.votes)
         .bind(episode.air_date)
@@ -736,7 +805,8 @@ impl DbRepository {
 
     // ── Batch upsert methods (UNNEST-based) ──────────────────────────
 
-    /// Batch upsert series using UNNEST arrays
+    /// Batch upsert series using UNNEST arrays.
+    /// Skips rows where row_hash hasn't changed (diff-based sync).
     pub async fn upsert_series_batch(&self, batch: &[DbSeries]) -> Result<u64> {
         if batch.is_empty() {
             return Ok(0);
@@ -754,6 +824,7 @@ impl DbRepository {
         let mut ratings = Vec::with_capacity(batch.len());
         let mut votes_vec = Vec::with_capacity(batch.len());
         let mut synced_ats = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for s in batch {
             imdb_ids.push(s.imdb_id);
@@ -768,15 +839,16 @@ impl DbRepository {
             ratings.push(s.rating);
             votes_vec.push(s.votes);
             synced_ats.push(s.last_synced_at);
+            row_hashes.push(s.row_hash);
         }
 
         let result = sqlx::query(
             r#"
             INSERT INTO imdb_series (imdb_id, title, original_title, start_year, end_year,
-                                     runtime_minutes, genres, is_adult, title_type, rating, votes, last_synced_at)
+                                     runtime_minutes, genres, is_adult, title_type, rating, votes, last_synced_at, row_hash)
             SELECT * FROM UNNEST(
                 $1::bigint[], $2::text[], $3::text[], $4::int[], $5::int[],
-                $6::int[], $7::text[], $8::bool[], $9::text[], $10::float8[], $11::bigint[], $12::timestamptz[]
+                $6::int[], $7::text[], $8::bool[], $9::text[], $10::float8[], $11::bigint[], $12::timestamptz[], $13::bigint[]
             )
             ON CONFLICT (imdb_id) DO UPDATE SET
                 title = EXCLUDED.title,
@@ -789,7 +861,9 @@ impl DbRepository {
                 title_type = EXCLUDED.title_type,
                 rating = COALESCE(EXCLUDED.rating, imdb_series.rating),
                 votes = COALESCE(EXCLUDED.votes, imdb_series.votes),
-                last_synced_at = EXCLUDED.last_synced_at
+                last_synced_at = EXCLUDED.last_synced_at,
+                row_hash = EXCLUDED.row_hash
+            WHERE imdb_series.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&imdb_ids)
@@ -804,13 +878,15 @@ impl DbRepository {
         .bind(&ratings)
         .bind(&votes_vec)
         .bind(&synced_ats)
+        .bind(&row_hashes)
         .execute(&self.pool)
         .await?;
 
         Ok(result.rows_affected())
     }
 
-    /// Batch upsert movies using UNNEST arrays
+    /// Batch upsert movies using UNNEST arrays.
+    /// Skips rows where row_hash hasn't changed (diff-based sync).
     pub async fn upsert_movie_batch(&self, batch: &[DbMovie]) -> Result<u64> {
         if batch.is_empty() {
             return Ok(0);
@@ -826,6 +902,7 @@ impl DbRepository {
         let mut ratings = Vec::with_capacity(batch.len());
         let mut votes_vec = Vec::with_capacity(batch.len());
         let mut synced_ats = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for m in batch {
             imdb_ids.push(m.imdb_id);
@@ -838,15 +915,16 @@ impl DbRepository {
             ratings.push(m.rating);
             votes_vec.push(m.votes);
             synced_ats.push(m.last_synced_at);
+            row_hashes.push(m.row_hash);
         }
 
         let result = sqlx::query(
             r#"
             INSERT INTO imdb_movies (imdb_id, title, original_title, year,
-                                     runtime_minutes, genres, is_adult, rating, votes, last_synced_at)
+                                     runtime_minutes, genres, is_adult, rating, votes, last_synced_at, row_hash)
             SELECT * FROM UNNEST(
                 $1::bigint[], $2::text[], $3::text[], $4::int[],
-                $5::int[], $6::text[], $7::bool[], $8::float8[], $9::bigint[], $10::timestamptz[]
+                $5::int[], $6::text[], $7::bool[], $8::float8[], $9::bigint[], $10::timestamptz[], $11::bigint[]
             )
             ON CONFLICT (imdb_id) DO UPDATE SET
                 title = EXCLUDED.title,
@@ -857,7 +935,9 @@ impl DbRepository {
                 is_adult = EXCLUDED.is_adult,
                 rating = COALESCE(EXCLUDED.rating, imdb_movies.rating),
                 votes = COALESCE(EXCLUDED.votes, imdb_movies.votes),
-                last_synced_at = EXCLUDED.last_synced_at
+                last_synced_at = EXCLUDED.last_synced_at,
+                row_hash = EXCLUDED.row_hash
+            WHERE imdb_movies.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&imdb_ids)
@@ -870,13 +950,15 @@ impl DbRepository {
         .bind(&ratings)
         .bind(&votes_vec)
         .bind(&synced_ats)
+        .bind(&row_hashes)
         .execute(&self.pool)
         .await?;
 
         Ok(result.rows_affected())
     }
 
-    /// Batch upsert episodes using UNNEST arrays
+    /// Batch upsert episodes using UNNEST arrays.
+    /// Skips rows where row_hash hasn't changed (diff-based sync).
     pub async fn upsert_episode_batch(&self, batch: &[DbEpisode]) -> Result<u64> {
         if batch.is_empty() {
             return Ok(0);
@@ -886,12 +968,17 @@ impl DbRepository {
         let mut parent_ids = Vec::with_capacity(batch.len());
         let mut season_nums = Vec::with_capacity(batch.len());
         let mut episode_nums = Vec::with_capacity(batch.len());
-        let mut titles = Vec::with_capacity(batch.len());
+        let mut titles: Vec<Option<&str>> = Vec::with_capacity(batch.len());
+        let mut original_titles: Vec<Option<&str>> = Vec::with_capacity(batch.len());
         let mut runtime_mins = Vec::with_capacity(batch.len());
+        let mut is_adults = Vec::with_capacity(batch.len());
+        let mut start_years = Vec::with_capacity(batch.len());
+        let mut genres_vec: Vec<Option<&str>> = Vec::with_capacity(batch.len());
         let mut ratings = Vec::with_capacity(batch.len());
         let mut votes_vec = Vec::with_capacity(batch.len());
         let mut air_dates = Vec::with_capacity(batch.len());
         let mut synced_ats = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for e in batch {
             imdb_ids.push(e.imdb_id);
@@ -899,31 +986,44 @@ impl DbRepository {
             season_nums.push(e.season_number);
             episode_nums.push(e.episode_number);
             titles.push(e.title.as_deref());
+            original_titles.push(e.original_title.as_deref());
             runtime_mins.push(e.runtime_minutes);
+            is_adults.push(e.is_adult);
+            start_years.push(e.start_year);
+            genres_vec.push(e.genres.as_deref());
             ratings.push(e.rating);
             votes_vec.push(e.votes);
             air_dates.push(e.air_date);
             synced_ats.push(e.last_synced_at);
+            row_hashes.push(e.row_hash);
         }
 
         let result = sqlx::query(
             r#"
             INSERT INTO imdb_episodes (imdb_id, parent_imdb_id, season_number, episode_number,
-                                       title, runtime_minutes, rating, votes, air_date, last_synced_at)
+                                       title, original_title, runtime_minutes, is_adult, start_year, genres,
+                                       rating, votes, air_date, last_synced_at, row_hash)
             SELECT * FROM UNNEST(
                 $1::bigint[], $2::bigint[], $3::int[], $4::int[],
-                $5::text[], $6::int[], $7::float8[], $8::bigint[], $9::date[], $10::timestamptz[]
+                $5::text[], $6::text[], $7::int[], $8::bool[], $9::int[], $10::text[],
+                $11::float8[], $12::bigint[], $13::date[], $14::timestamptz[], $15::bigint[]
             )
             ON CONFLICT (imdb_id) DO UPDATE SET
                 parent_imdb_id = EXCLUDED.parent_imdb_id,
                 season_number = EXCLUDED.season_number,
                 episode_number = EXCLUDED.episode_number,
                 title = COALESCE(EXCLUDED.title, imdb_episodes.title),
+                original_title = COALESCE(EXCLUDED.original_title, imdb_episodes.original_title),
                 runtime_minutes = COALESCE(EXCLUDED.runtime_minutes, imdb_episodes.runtime_minutes),
+                is_adult = EXCLUDED.is_adult,
+                start_year = COALESCE(EXCLUDED.start_year, imdb_episodes.start_year),
+                genres = COALESCE(EXCLUDED.genres, imdb_episodes.genres),
                 rating = COALESCE(EXCLUDED.rating, imdb_episodes.rating),
                 votes = COALESCE(EXCLUDED.votes, imdb_episodes.votes),
                 air_date = COALESCE(EXCLUDED.air_date, imdb_episodes.air_date),
-                last_synced_at = EXCLUDED.last_synced_at
+                last_synced_at = EXCLUDED.last_synced_at,
+                row_hash = EXCLUDED.row_hash
+            WHERE imdb_episodes.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&imdb_ids)
@@ -931,11 +1031,69 @@ impl DbRepository {
         .bind(&season_nums)
         .bind(&episode_nums)
         .bind(&titles)
+        .bind(&original_titles)
         .bind(&runtime_mins)
+        .bind(&is_adults)
+        .bind(&start_years)
+        .bind(&genres_vec)
         .bind(&ratings)
         .bind(&votes_vec)
         .bind(&air_dates)
         .bind(&synced_ats)
+        .bind(&row_hashes)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Batch update episode titles and runtimes from title.basics data.
+    /// Only updates existing rows (episodes must already exist from title.episode sync).
+    /// Skips rows where row_hash hasn't changed (diff-based sync).
+    pub async fn update_episode_basics_batch(
+        &self,
+        imdb_ids: &[i64],
+        titles: &[Option<&str>],
+        original_titles: &[Option<&str>],
+        runtime_mins: &[Option<i32>],
+        is_adults: &[bool],
+        start_years: &[Option<i32>],
+        genres: &[Option<&str>],
+        row_hashes: &[i64],
+    ) -> Result<u64> {
+        if imdb_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let now = Utc::now();
+        let synced_ats: Vec<DateTime<Utc>> = vec![now; imdb_ids.len()];
+
+        let result = sqlx::query(
+            r#"
+            UPDATE imdb_episodes SET
+                title = COALESCE(u.title, imdb_episodes.title),
+                original_title = COALESCE(u.original_title, imdb_episodes.original_title),
+                runtime_minutes = COALESCE(u.runtime_minutes, imdb_episodes.runtime_minutes),
+                is_adult = u.is_adult,
+                start_year = COALESCE(u.start_year, imdb_episodes.start_year),
+                genres = COALESCE(u.genres, imdb_episodes.genres),
+                last_synced_at = u.synced_at,
+                row_hash = u.row_hash
+            FROM UNNEST($1::bigint[], $2::text[], $3::text[], $4::int[], $5::bool[], $6::int[], $7::text[], $8::timestamptz[], $9::bigint[])
+                AS u(imdb_id, title, original_title, runtime_minutes, is_adult, start_year, genres, synced_at, row_hash)
+            WHERE imdb_episodes.imdb_id = u.imdb_id
+              AND imdb_episodes.row_hash IS DISTINCT FROM u.row_hash
+            "#,
+        )
+        .bind(imdb_ids)
+        .bind(titles)
+        .bind(original_titles)
+        .bind(runtime_mins)
+        .bind(is_adults)
+        .bind(start_years)
+        .bind(genres)
+        .bind(&synced_ats)
+        .bind(row_hashes)
         .execute(&self.pool)
         .await?;
 
@@ -987,6 +1145,34 @@ impl DbRepository {
             SET rating = v.rating, votes = v.votes, last_synced_at = NOW()
             FROM (SELECT * FROM UNNEST($1::bigint[], $2::float8[], $3::bigint[]) AS t(id, rating, votes)) v
             WHERE m.imdb_id = v.id
+            "#,
+        )
+        .bind(ids)
+        .bind(ratings)
+        .bind(votes)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Batch update ratings for episodes using UNNEST
+    pub async fn update_episode_ratings_batch(
+        &self,
+        ids: &[i64],
+        ratings: &[f64],
+        votes: &[i64],
+    ) -> Result<u64> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        let result = sqlx::query(
+            r#"
+            UPDATE imdb_episodes e
+            SET rating = v.rating, votes = v.votes, last_synced_at = NOW()
+            FROM (SELECT * FROM UNNEST($1::bigint[], $2::float8[], $3::bigint[]) AS t(id, rating, votes)) v
+            WHERE e.imdb_id = v.id
             "#,
         )
         .bind(ids)
@@ -1086,7 +1272,8 @@ impl DbRepository {
 
     // ── People & Credits methods ───────────────────────────────────
 
-    /// Batch upsert people using UNNEST arrays
+    /// Batch upsert people using UNNEST arrays.
+    /// Skips rows where row_hash hasn't changed (diff-based sync).
     pub async fn upsert_people_batch(&self, batch: &[DbPerson]) -> Result<u64> {
         if batch.is_empty() {
             return Ok(0);
@@ -1098,6 +1285,7 @@ impl DbRepository {
         let mut death_years = Vec::with_capacity(batch.len());
         let mut professions = Vec::with_capacity(batch.len());
         let mut known_fors = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for p in batch {
             nconsts.push(p.nconst);
@@ -1106,20 +1294,23 @@ impl DbRepository {
             death_years.push(p.death_year);
             professions.push(p.primary_profession.as_deref());
             known_fors.push(p.known_for_titles.as_deref());
+            row_hashes.push(p.row_hash);
         }
 
         let result = sqlx::query(
             r#"
-            INSERT INTO imdb_people (nconst, primary_name, birth_year, death_year, primary_profession, known_for_titles)
+            INSERT INTO imdb_people (nconst, primary_name, birth_year, death_year, primary_profession, known_for_titles, row_hash)
             SELECT * FROM UNNEST(
-                $1::bigint[], $2::text[], $3::smallint[], $4::smallint[], $5::text[], $6::text[]
+                $1::bigint[], $2::text[], $3::smallint[], $4::smallint[], $5::text[], $6::text[], $7::bigint[]
             )
             ON CONFLICT (nconst) DO UPDATE SET
                 primary_name = EXCLUDED.primary_name,
                 birth_year = EXCLUDED.birth_year,
                 death_year = EXCLUDED.death_year,
                 primary_profession = EXCLUDED.primary_profession,
-                known_for_titles = EXCLUDED.known_for_titles
+                known_for_titles = EXCLUDED.known_for_titles,
+                row_hash = EXCLUDED.row_hash
+            WHERE imdb_people.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&nconsts)
@@ -1128,13 +1319,15 @@ impl DbRepository {
         .bind(&death_years)
         .bind(&professions)
         .bind(&known_fors)
+        .bind(&row_hashes)
         .execute(&self.pool)
         .await?;
 
         Ok(result.rows_affected())
     }
 
-    /// Batch upsert credits using UNNEST arrays
+    /// Batch upsert credits using UNNEST arrays.
+    /// Skips rows where row_hash hasn't changed (diff-based sync).
     pub async fn upsert_credits_batch(&self, batch: &[DbCredit]) -> Result<u64> {
         if batch.is_empty() {
             return Ok(0);
@@ -1146,6 +1339,7 @@ impl DbRepository {
         let mut categories = Vec::with_capacity(batch.len());
         let mut jobs = Vec::with_capacity(batch.len());
         let mut characters_vec = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for c in batch {
             tconsts.push(c.tconst);
@@ -1154,18 +1348,21 @@ impl DbRepository {
             categories.push(c.category.as_str());
             jobs.push(c.job.as_deref());
             characters_vec.push(c.characters.as_deref());
+            row_hashes.push(c.row_hash);
         }
 
         let result = sqlx::query(
             r#"
-            INSERT INTO imdb_credits (tconst, nconst, ordering, category, job, characters)
+            INSERT INTO imdb_credits (tconst, nconst, ordering, category, job, characters, row_hash)
             SELECT * FROM UNNEST(
-                $1::bigint[], $2::bigint[], $3::smallint[], $4::text[], $5::text[], $6::text[]
+                $1::bigint[], $2::bigint[], $3::smallint[], $4::text[], $5::text[], $6::text[], $7::bigint[]
             )
             ON CONFLICT (tconst, nconst, ordering) DO UPDATE SET
                 category = EXCLUDED.category,
                 job = EXCLUDED.job,
-                characters = EXCLUDED.characters
+                characters = EXCLUDED.characters,
+                row_hash = EXCLUDED.row_hash
+            WHERE imdb_credits.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&tconsts)
@@ -1174,10 +1371,221 @@ impl DbRepository {
         .bind(&categories)
         .bind(&jobs)
         .bind(&characters_vec)
+        .bind(&row_hashes)
         .execute(&self.pool)
         .await?;
 
         Ok(result.rows_affected())
+    }
+
+    /// Batch upsert title AKAs using UNNEST arrays.
+    /// Skips rows where row_hash hasn't changed (diff-based sync).
+    pub async fn upsert_aka_batch(&self, batch: &[DbTitleAka]) -> Result<u64> {
+        if batch.is_empty() {
+            return Ok(0);
+        }
+
+        let mut tconsts = Vec::with_capacity(batch.len());
+        let mut orderings = Vec::with_capacity(batch.len());
+        let mut titles = Vec::with_capacity(batch.len());
+        let mut regions = Vec::with_capacity(batch.len());
+        let mut languages = Vec::with_capacity(batch.len());
+        let mut types_vec = Vec::with_capacity(batch.len());
+        let mut attributes = Vec::with_capacity(batch.len());
+        let mut is_originals = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
+
+        for a in batch {
+            tconsts.push(a.tconst);
+            orderings.push(a.ordering);
+            titles.push(a.title.as_str());
+            regions.push(a.region.as_deref());
+            languages.push(a.language.as_deref());
+            types_vec.push(a.types.as_deref());
+            attributes.push(a.attributes.as_deref());
+            is_originals.push(a.is_original_title);
+            row_hashes.push(a.row_hash);
+        }
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO imdb_title_akas (tconst, ordering, title, region, language, types, attributes, is_original_title, row_hash)
+            SELECT * FROM UNNEST(
+                $1::bigint[], $2::smallint[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::bool[], $9::bigint[]
+            )
+            ON CONFLICT (tconst, ordering) DO UPDATE SET
+                title = EXCLUDED.title,
+                region = EXCLUDED.region,
+                language = EXCLUDED.language,
+                types = EXCLUDED.types,
+                attributes = EXCLUDED.attributes,
+                is_original_title = EXCLUDED.is_original_title,
+                row_hash = EXCLUDED.row_hash
+            WHERE imdb_title_akas.row_hash IS DISTINCT FROM EXCLUDED.row_hash
+            "#,
+        )
+        .bind(&tconsts)
+        .bind(&orderings)
+        .bind(&titles)
+        .bind(&regions)
+        .bind(&languages)
+        .bind(&types_vec)
+        .bind(&attributes)
+        .bind(&is_originals)
+        .bind(&row_hashes)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Batch upsert title crew using UNNEST arrays.
+    /// Skips rows where row_hash hasn't changed (diff-based sync).
+    pub async fn upsert_crew_batch(&self, batch: &[DbTitleCrew]) -> Result<u64> {
+        if batch.is_empty() {
+            return Ok(0);
+        }
+
+        let mut tconsts = Vec::with_capacity(batch.len());
+        let mut directors = Vec::with_capacity(batch.len());
+        let mut writers = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
+
+        for c in batch {
+            tconsts.push(c.tconst);
+            directors.push(c.directors.as_deref());
+            writers.push(c.writers.as_deref());
+            row_hashes.push(c.row_hash);
+        }
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO imdb_title_crew (tconst, directors, writers, row_hash)
+            SELECT * FROM UNNEST(
+                $1::bigint[], $2::text[], $3::text[], $4::bigint[]
+            )
+            ON CONFLICT (tconst) DO UPDATE SET
+                directors = EXCLUDED.directors,
+                writers = EXCLUDED.writers,
+                row_hash = EXCLUDED.row_hash
+            WHERE imdb_title_crew.row_hash IS DISTINCT FROM EXCLUDED.row_hash
+            "#,
+        )
+        .bind(&tconsts)
+        .bind(&directors)
+        .bind(&writers)
+        .bind(&row_hashes)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Get crew (directors + writers) for a title, resolved to names
+    pub async fn get_akas_for_title(&self, imdb_id: &str) -> Result<Vec<ImdbTitleAka>> {
+        let numeric_id =
+            parse_imdb_id(imdb_id).ok_or_else(|| anyhow::anyhow!("Invalid IMDB ID"))?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT title, region, language, types, attributes, is_original_title
+            FROM imdb_title_akas
+            WHERE tconst = $1
+            ORDER BY ordering
+            "#,
+        )
+        .bind(numeric_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|row| ImdbTitleAka {
+                title: row.get("title"),
+                region: row.get("region"),
+                language: row.get("language"),
+                types: row.get("types"),
+                attributes: row.get("attributes"),
+                is_original_title: row.get::<Option<bool>, _>("is_original_title").unwrap_or(false),
+            })
+            .collect())
+    }
+
+    pub async fn get_crew_for_title(&self, imdb_id: &str) -> Result<Option<TitleCrew>> {
+        let numeric_id = parse_imdb_id(imdb_id).ok_or_else(|| anyhow::anyhow!("Invalid IMDB ID"))?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT directors, writers
+            FROM imdb_title_crew
+            WHERE tconst = $1
+            "#,
+        )
+        .bind(numeric_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let row = match row {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+        let directors_csv: Option<String> = row.get("directors");
+        let writers_csv: Option<String> = row.get("writers");
+
+        // Resolve nconst IDs to names
+        let directors = self.resolve_crew_members(directors_csv.as_deref()).await?;
+        let writers = self.resolve_crew_members(writers_csv.as_deref()).await?;
+
+        Ok(Some(TitleCrew {
+            imdb_id: format!("tt{:07}", numeric_id),
+            directors,
+            writers,
+        }))
+    }
+
+    /// Resolve comma-separated nconst IDs to CrewMember structs with names
+    async fn resolve_crew_members(&self, csv: Option<&str>) -> Result<Vec<CrewMember>> {
+        let csv = match csv {
+            Some(s) if !s.is_empty() => s,
+            _ => return Ok(Vec::new()),
+        };
+
+        let ids: Vec<i64> = csv
+            .split(',')
+            .filter_map(|s| parse_nconst(s.trim()))
+            .collect();
+
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT nconst, primary_name
+            FROM imdb_people
+            WHERE nconst = ANY($1)
+            "#,
+        )
+        .bind(&ids)
+        .fetch_all(&self.pool)
+        .await?;
+
+        // Build lookup map and return in original order
+        let name_map: std::collections::HashMap<i64, String> = rows
+            .iter()
+            .map(|r| (r.get::<i64, _>("nconst"), r.get::<String, _>("primary_name")))
+            .collect();
+
+        Ok(ids
+            .iter()
+            .filter_map(|id| {
+                name_map.get(id).map(|name| CrewMember {
+                    nconst: format!("nm{:07}", id),
+                    name: name.clone(),
+                })
+            })
+            .collect())
     }
 
     /// Get credits for a title (JOIN with people for names), ordered by billing
@@ -1259,6 +1667,43 @@ impl DbRepository {
                     .unwrap_or_default(),
             }
         }))
+    }
+
+    /// Get the rows_processed count from the last completed sync for a dataset.
+    /// Used as an estimate for progress tracking on the next sync.
+    pub async fn last_completed_row_count(&self, dataset: &str) -> Result<i64> {
+        let result: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT rows_processed
+            FROM imdb_sync_status
+            WHERE dataset_name = $1 AND status = 'completed'
+            ORDER BY completed_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(dataset)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(result.unwrap_or(0))
+    }
+
+    /// Truncate all IMDB data tables and sync history for a full re-import.
+    /// Preserves schema (tables, indexes) but removes all rows.
+    pub async fn truncate_all_data(&self) -> Result<()> {
+        sqlx::query(
+            r#"
+            TRUNCATE imdb_series, imdb_movies, imdb_episodes,
+                     imdb_people, imdb_credits, imdb_title_akas, imdb_title_crew,
+                     imdb_sync_status
+            CASCADE
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        info!("Truncated all IMDB data tables and sync history");
+        Ok(())
     }
 
     /// Get pool for direct access (used by sync)

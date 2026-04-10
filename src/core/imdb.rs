@@ -448,6 +448,10 @@ pub struct ImdbStats {
     pub people_count: i64,
     #[serde(default)]
     pub credits_count: i64,
+    #[serde(default)]
+    pub akas_count: i64,
+    #[serde(default)]
+    pub crew_count: i64,
     pub last_sync: Option<String>,
     #[serde(default)]
     pub db_size_bytes: i64,

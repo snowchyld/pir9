@@ -15,6 +15,8 @@ interface ImdbStats {
   movieCount: number;
   peopleCount: number;
   creditsCount: number;
+  akasCount: number;
+  crewCount: number;
   dbSizeBytes: number;
   lastSync: string | null;
   lastBasicsSync: string | null;
@@ -27,6 +29,8 @@ interface SyncStatus {
   titleBasics: SyncDataset | null;
   titleEpisodes: SyncDataset | null;
   titleRatings: SyncDataset | null;
+  titleAkas: SyncDataset | null;
+  titleCrew: SyncDataset | null;
   nameBasics: SyncDataset | null;
   titlePrincipals: SyncDataset | null;
 }
@@ -36,6 +40,7 @@ interface SyncDataset {
   rowsProcessed: number;
   rowsInserted: number;
   rowsUpdated: number;
+  rowsUnchanged: number;
   startedAt: string;
   completedAt: string | null;
   status: string;
@@ -44,6 +49,8 @@ interface SyncDataset {
   downloadSizeBytes?: number;
   downloadBytesDone?: number;
   currentPhase?: string;
+  estimatedTotalRows?: number;
+  parsingProgress?: number;
 }
 
 interface DatasetInfo {
@@ -304,6 +311,8 @@ export class ImdbSettings extends BaseComponent {
       status.titleBasics?.status === 'running' ||
       status.titleEpisodes?.status === 'running' ||
       status.titleRatings?.status === 'running' ||
+      status.titleAkas?.status === 'running' ||
+      status.titleCrew?.status === 'running' ||
       status.nameBasics?.status === 'running' ||
       status.titlePrincipals?.status === 'running'
     );
@@ -372,6 +381,14 @@ export class ImdbSettings extends BaseComponent {
           <div class="stat-card">
             <div class="stat-value">${this.formatNumber(stats?.creditsCount ?? 0)}</div>
             <div class="stat-label">Credits</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">${this.formatNumber(stats?.akasCount ?? 0)}</div>
+            <div class="stat-label">Alternate Titles</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">${this.formatNumber(stats?.crewCount ?? 0)}</div>
+            <div class="stat-label">Crew</div>
           </div>
           <div class="stat-card">
             <div class="stat-value">${this.formatSize(stats?.dbSizeBytes ?? 0)}</div>
@@ -723,6 +740,11 @@ export class ImdbSettings extends BaseComponent {
           color: var(--color-success);
         }
 
+        .status-check {
+          color: var(--color-success);
+          font-weight: 700;
+        }
+
         .status-running {
           background-color: var(--color-warning-bg);
           color: var(--color-warning);
@@ -968,6 +990,8 @@ export class ImdbSettings extends BaseComponent {
       status.titleBasics ||
       status.titleEpisodes ||
       status.titleRatings ||
+      status.titleAkas ||
+      status.titleCrew ||
       status.nameBasics ||
       status.titlePrincipals;
     if (!hasAnyData) {
@@ -985,6 +1009,8 @@ export class ImdbSettings extends BaseComponent {
         ${this.renderDatasetStatus('Title Basics', status.titleBasics)}
         ${this.renderDatasetStatus('Episodes', status.titleEpisodes)}
         ${this.renderDatasetStatus('Ratings', status.titleRatings)}
+        ${this.renderDatasetStatus('Alternate Titles', status.titleAkas)}
+        ${this.renderDatasetStatus('Crew', status.titleCrew)}
         ${this.renderDatasetStatus('People', status.nameBasics)}
         ${this.renderDatasetStatus('Credits', status.titlePrincipals)}
       </div>
@@ -1002,12 +1028,20 @@ export class ImdbSettings extends BaseComponent {
           : 'status-error';
 
     const isDownloading = dataset.currentPhase === 'downloading';
+    const isParsing = dataset.currentPhase === 'parsing' && dataset.status === 'running';
     const downloadPct = dataset.downloadProgress ?? 0;
+    const parsingPct = dataset.parsingProgress ?? 0;
+
+    const isCompleted = dataset.status === 'completed';
+
+    // Build the stats line based on completion state
+    const unchangedStr = dataset.rowsUnchanged > 0 ? ` | ${this.formatNumber(dataset.rowsUnchanged)} unchanged` : '';
+    const completedStr = dataset.completedAt ? ` | Completed: ${this.formatDate(dataset.completedAt)}` : '';
 
     return html`
       <div class="sync-dataset">
         <div class="sync-dataset-name">
-          ${name}
+          ${isCompleted ? '<span class="status-check" title="Completed">&#10003;</span> ' : ''}${name}
           <span class="sync-dataset-status ${statusClass}">${dataset.status}</span>
         </div>
         ${
@@ -1021,12 +1055,24 @@ export class ImdbSettings extends BaseComponent {
             <div class="download-progress-fill" style="width: ${Math.min(downloadPct, 100)}%"></div>
           </div>
         `
-            : html`
+            : isParsing
+              ? html`
           <div class="sync-dataset-stats">
-            ${dataset.currentPhase === 'parsing' && dataset.status === 'running' ? 'Parsing... ' : ''}${this.formatNumber(dataset.rowsProcessed)} rows processed |
+            Parsing... ${this.formatNumber(dataset.rowsProcessed)}${dataset.estimatedTotalRows ? ` / ~${this.formatNumber(dataset.estimatedTotalRows)}` : ''} rows
+            ${parsingPct > 0 ? ` (${parsingPct.toFixed(1)}%)` : ''}
+            | ${this.formatNumber(dataset.rowsInserted)} written${unchangedStr}
+          </div>
+          ${dataset.estimatedTotalRows ? html`
+          <div class="download-progress-bar">
+            <div class="download-progress-fill" style="width: ${Math.min(parsingPct, 100)}%"></div>
+          </div>
+          ` : ''}
+        `
+              : html`
+          <div class="sync-dataset-stats">
+            ${this.formatNumber(dataset.rowsProcessed)} rows processed |
             ${this.formatNumber(dataset.rowsInserted)} inserted |
-            ${this.formatNumber(dataset.rowsUpdated)} updated
-            ${dataset.completedAt ? ` | Completed: ${this.formatDate(dataset.completedAt)}` : ''}
+            ${this.formatNumber(dataset.rowsUpdated)} updated${unchangedStr}${completedStr}
           </div>
         `
         }
@@ -1103,7 +1149,7 @@ export class ImdbSettings extends BaseComponent {
   }
 
   private formatNumber(n: number): string {
-    return n.toLocaleString();
+    return Math.max(0, n).toLocaleString();
   }
 
   private formatBytes(bytes: number): string {
@@ -1288,52 +1334,48 @@ export class ImdbSettings extends BaseComponent {
         <h3 class="subsection-title">Database Statistics</h3>
         <div class="stats-grid">
           <div class="stat-card">
-            <span class="stat-value">${(stats.artistCount ?? 0).toLocaleString()}</span>
+            <span class="stat-value">${this.formatNumber(stats.artistCount ?? 0)}</span>
             <span class="stat-label">Artists</span>
           </div>
           <div class="stat-card">
-            <span class="stat-value">${(stats.releaseGroupCount ?? 0).toLocaleString()}</span>
+            <span class="stat-value">${this.formatNumber(stats.releaseGroupCount ?? 0)}</span>
             <span class="stat-label">Albums</span>
           </div>
           <div class="stat-card">
-            <span class="stat-value">${(stats.releaseCount ?? 0).toLocaleString()}</span>
+            <span class="stat-value">${this.formatNumber(stats.releaseCount ?? 0)}</span>
             <span class="stat-label">Releases</span>
           </div>
           <div class="stat-card">
-            <span class="stat-value">${(stats.recordingCount ?? 0).toLocaleString()}</span>
+            <span class="stat-value">${this.formatNumber(stats.recordingCount ?? 0)}</span>
             <span class="stat-label">Recordings</span>
           </div>
           <div class="stat-card">
-            <span class="stat-value">${(stats.labelCount ?? 0).toLocaleString()}</span>
+            <span class="stat-value">${this.formatNumber(stats.labelCount ?? 0)}</span>
             <span class="stat-label">Labels</span>
           </div>
           <div class="stat-card">
-            <span class="stat-value">${(stats.workCount ?? 0).toLocaleString()}</span>
+            <span class="stat-value">${this.formatNumber(stats.workCount ?? 0)}</span>
             <span class="stat-label">Works</span>
           </div>
           <div class="stat-card">
-            <span class="stat-value">${(stats.areaCount ?? 0).toLocaleString()}</span>
+            <span class="stat-value">${this.formatNumber(stats.areaCount ?? 0)}</span>
             <span class="stat-label">Areas</span>
           </div>
           <div class="stat-card">
-            <span class="stat-value">${(stats.eventCount ?? 0).toLocaleString()}</span>
+            <span class="stat-value">${this.formatNumber(stats.eventCount ?? 0)}</span>
             <span class="stat-label">Events</span>
           </div>
           <div class="stat-card">
-            <span class="stat-value">${(stats.instrumentCount ?? 0).toLocaleString()}</span>
+            <span class="stat-value">${this.formatNumber(stats.instrumentCount ?? 0)}</span>
             <span class="stat-label">Instruments</span>
           </div>
           <div class="stat-card">
-            <span class="stat-value">${(stats.placeCount ?? 0).toLocaleString()}</span>
+            <span class="stat-value">${this.formatNumber(stats.placeCount ?? 0)}</span>
             <span class="stat-label">Places</span>
           </div>
           <div class="stat-card">
-            <span class="stat-value">${(stats.seriesCount ?? 0).toLocaleString()}</span>
+            <span class="stat-value">${this.formatNumber(stats.seriesCount ?? 0)}</span>
             <span class="stat-label">Series</span>
-          </div>
-          <div class="stat-card">
-            <span class="stat-value">${(stats.coverArtCount ?? 0).toLocaleString()}</span>
-            <span class="stat-label">Cover Art</span>
           </div>
           <div class="stat-card">
             <span class="stat-value">${this.formatSize(stats.dbSizeBytes ?? 0)}</span>

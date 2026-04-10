@@ -10,6 +10,7 @@
 //! - PIR9_IMDB_PORT: Service port (default 8990)
 //! - RUST_LOG: Log level (default info)
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -21,7 +22,7 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -39,10 +40,34 @@ mod tvmaze;
 
 use db::DbRepository;
 
-/// Handle to a running sync task — single source of truth for whether a sync is active
-struct SyncHandle {
+/// Well-known task slot names
+const TASK_SYNC: &str = "sync";
+const TASK_BACKFILL: &str = "backfill";
+
+/// Handle to a running background task
+struct TaskHandle {
     cancel_token: CancellationToken,
     join_handle: JoinHandle<()>,
+}
+
+/// Registry of named background tasks — allows independent operations to run concurrently
+type TaskMap = HashMap<String, TaskHandle>;
+
+/// Check whether a task slot is available (no task, or previous task finished).
+/// Automatically removes finished handles so they don't block future requests.
+fn try_claim_slot(tasks: &mut TaskMap, slot: &str) -> Result<(), &'static str> {
+    if let Some(handle) = tasks.get(slot) {
+        if !handle.join_handle.is_finished() {
+            return Err(match slot {
+                TASK_SYNC => "A sync/process is already running",
+                TASK_BACKFILL => "An air-date backfill is already running",
+                _ => "A task is already running in this slot",
+            });
+        }
+        // Finished (success, error, or panic) — evict stale handle
+        tasks.remove(slot);
+    }
+    Ok(())
 }
 
 /// Application state shared across handlers
@@ -50,7 +75,7 @@ struct SyncHandle {
 pub struct AppState {
     pub db: DbRepository,
     pub tmdb_client: Option<Arc<tmdb::TmdbClient>>,
-    sync_handle: Arc<Mutex<Option<SyncHandle>>>,
+    tasks: Arc<Mutex<TaskMap>>,
     pub download_progress: Arc<RwLock<DownloadProgress>>,
 }
 
@@ -74,10 +99,20 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "postgres://pir9:pir9@localhost:5433/pir9_imdb".to_string());
 
     info!("Connecting to database...");
+    let connect_options: PgConnectOptions = db_url.parse()?;
     let pool = PgPoolOptions::new()
         .max_connections(10)
         .acquire_timeout(std::time::Duration::from_secs(10))
-        .connect(&db_url)
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                // Skip WAL flush wait — this is re-syncable cache data
+                sqlx::query("SET synchronous_commit = off")
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with(connect_options)
         .await?;
 
     // Run migrations
@@ -100,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         db,
         tmdb_client,
-        sync_handle: Arc::new(Mutex::new(None)),
+        tasks: Arc::new(Mutex::new(HashMap::new())),
         download_progress: Arc::new(RwLock::new(DownloadProgress::default())),
     };
 
@@ -116,8 +151,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/movies/search", get(search_movies))
         .route("/api/movies/{imdb_id}", get(get_movie))
         .route("/api/movies/{imdb_id}/credits", get(get_title_credits))
-        // Series credits (same handler, different route for clarity)
+        .route("/api/movies/{imdb_id}/crew", get(get_title_crew))
+        .route("/api/movies/{imdb_id}/akas", get(get_title_akas))
+        // Series credits/crew/akas (same handlers, different route for clarity)
         .route("/api/series/{imdb_id}/credits", get(get_title_credits))
+        .route("/api/series/{imdb_id}/crew", get(get_title_crew))
+        .route("/api/series/{imdb_id}/akas", get(get_title_akas))
         // People
         .route("/api/people/{nconst}", get(get_person))
         // Stats
@@ -219,11 +258,23 @@ async fn get_series(
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct EpisodeQuery {
+    season: Option<i32>,
+}
+
 async fn get_episodes(
     State(state): State<Arc<AppState>>,
     Path(imdb_id): Path<String>,
+    Query(query): Query<EpisodeQuery>,
 ) -> impl IntoResponse {
-    match state.db.get_episodes(&imdb_id).await {
+    let result = if let Some(season) = query.season {
+        state.db.get_episodes_by_season(&imdb_id, season).await
+    } else {
+        state.db.get_episodes(&imdb_id).await
+    };
+
+    match result {
         Ok(episodes) => (StatusCode::OK, Json(episodes)).into_response(),
         Err(e) => {
             error!("Get episodes error: {}", e);
@@ -352,6 +403,45 @@ async fn get_title_credits(
     }
 }
 
+async fn get_title_akas(
+    State(state): State<Arc<AppState>>,
+    Path(imdb_id): Path<String>,
+) -> impl IntoResponse {
+    match state.db.get_akas_for_title(&imdb_id).await {
+        Ok(akas) => (StatusCode::OK, Json(akas)).into_response(),
+        Err(e) => {
+            error!("Get AKAs error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn get_title_crew(
+    State(state): State<Arc<AppState>>,
+    Path(imdb_id): Path<String>,
+) -> impl IntoResponse {
+    match state.db.get_crew_for_title(&imdb_id).await {
+        Ok(Some(crew)) => (StatusCode::OK, Json(crew)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Crew not found" })),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Get crew error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
 async fn get_person(
     State(state): State<Arc<AppState>>,
     Path(nconst): Path<String>,
@@ -392,29 +482,23 @@ async fn start_sync(
     State(state): State<Arc<AppState>>,
     body: Option<Json<models::SyncRequest>>,
 ) -> impl IntoResponse {
-    let datasets = body.map(|b| b.datasets.clone()).unwrap_or_default();
+    let req = body.map(|b| b.0).unwrap_or_default();
+    let datasets = req.datasets;
+    let force = req.force;
 
-    let mut handle_guard = state.sync_handle.lock().await;
+    let mut tasks = state.tasks.lock().await;
 
-    // Check if a sync is actually running (in-memory truth, not DB)
-    if let Some(ref handle) = *handle_guard {
-        if !handle.join_handle.is_finished() {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": "A sync is already running",
-                    "status": "running"
-                })),
-            )
-                .into_response();
-        }
-        // Previous sync task finished (normally, via error, or via panic).
-        // Clean up any stale 'running' DB records that the task didn't get to mark
-        // (e.g., if it panicked before reaching its cleanup code).
-        let _ = state.db.fail_stale_running_syncs().await;
+    if let Err(msg) = try_claim_slot(&mut tasks, TASK_SYNC) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": msg, "status": "running" })),
+        )
+            .into_response();
     }
 
-    // Create cancellation token and spawn the sync task
+    // Previous task finished — clean up any stale DB records (e.g. panic before cleanup)
+    let _ = state.db.fail_stale_running_syncs().await;
+
     let token = CancellationToken::new();
     let db = state.db.clone();
     let task_token = token.clone();
@@ -427,11 +511,21 @@ async fn start_sync(
     }
 
     let join_handle = tokio::spawn(async move {
-        info!("Starting IMDB sync (datasets: {:?})...", datasets);
+        // Force mode: truncate all data tables before syncing
+        if force {
+            info!("Force sync requested — truncating all IMDB data tables...");
+            if let Err(e) = db.truncate_all_data().await {
+                error!("Failed to truncate tables: {}", e);
+                let mut p = progress.write().await;
+                p.phase = "idle".to_string();
+                return;
+            }
+        }
+
+        info!("Starting IMDB sync (datasets: {:?}, force: {})...", datasets, force);
         match sync::run_full_sync_selective(&db, &datasets, task_token, progress.clone()).await {
             Ok(report) => {
                 info!("IMDB sync completed: {:?}", report);
-                // Reset progress to idle
                 let mut p = progress.write().await;
                 p.phase = "idle".to_string();
                 p.current_file.clear();
@@ -447,16 +541,21 @@ async fn start_sync(
         }
     });
 
-    *handle_guard = Some(SyncHandle {
-        cancel_token: token,
-        join_handle,
-    });
+    tasks.insert(
+        TASK_SYNC.to_string(),
+        TaskHandle {
+            cancel_token: token,
+            join_handle,
+        },
+    );
 
+    let message = if force { "Full sync started (tables truncated)" } else { "Sync started" };
     (
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
-            "message": "Sync started",
-            "status": "running"
+            "message": message,
+            "status": "running",
+            "force": force
         })),
     )
         .into_response()
@@ -465,12 +564,11 @@ async fn start_sync(
 async fn get_sync_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.db.get_sync_status().await {
         Ok(mut status) => {
-            // Enrich with live is_running from the in-memory handle
-            let handle_guard = state.sync_handle.lock().await;
-            let is_running = match &*handle_guard {
-                Some(handle) => !handle.join_handle.is_finished(),
-                None => false,
-            };
+            // Enrich with live is_running from the in-memory task registry
+            let tasks = state.tasks.lock().await;
+            let is_running = tasks
+                .get(TASK_SYNC)
+                .map_or(false, |h| !h.join_handle.is_finished());
 
             // Set top-level is_running
             status.is_running = is_running;
@@ -482,13 +580,17 @@ async fn get_sync_status(State(state): State<Arc<AppState>>) -> impl IntoRespons
             let dl_pct = dl_progress.percentage;
             let dl_bytes_done = dl_progress.bytes_done;
             let dl_total = dl_progress.total_bytes;
+            let est_total = dl_progress.estimated_total_rows;
+            let cur_rows = dl_progress.current_rows_processed;
             drop(dl_progress);
 
-            // Set per-dataset is_running + download progress on whichever has status="running"
+            // Set per-dataset is_running + download/parsing progress on whichever has status="running"
             for ds_opt in [
                 &mut status.title_basics,
                 &mut status.title_episodes,
                 &mut status.title_ratings,
+                &mut status.title_akas,
+                &mut status.title_crew,
                 &mut status.name_basics,
                 &mut status.title_principals,
             ] {
@@ -501,6 +603,16 @@ async fn get_sync_status(State(state): State<Arc<AppState>>) -> impl IntoRespons
                             ds.download_progress = Some(dl_pct);
                             ds.download_size_bytes = if dl_total > 0 { Some(dl_total) } else { None };
                             ds.download_bytes_done = if dl_bytes_done > 0 { Some(dl_bytes_done) } else { None };
+                        } else if dl_phase == "parsing" {
+                            // Attach parsing progress
+                            ds.estimated_total_rows = if est_total > 0 { Some(est_total) } else { None };
+                            ds.parsing_progress = if est_total > 0 {
+                                Some((cur_rows as f64 / est_total as f64 * 100.0).min(100.0))
+                            } else {
+                                None
+                            };
+                            // Use live rows_processed from progress state (more current than DB)
+                            ds.rows_processed = cur_rows;
                         }
                     } else if ds.is_running {
                         ds.current_phase = Some("parsing".to_string());
@@ -522,31 +634,36 @@ async fn get_sync_status(State(state): State<Arc<AppState>>) -> impl IntoRespons
 }
 
 async fn cancel_sync(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let handle_guard = state.sync_handle.lock().await;
+    let tasks = state.tasks.lock().await;
+    let mut cancelled = Vec::new();
 
-    match &*handle_guard {
-        Some(handle) if !handle.join_handle.is_finished() => {
-            info!("Cancelling running sync...");
+    for (name, handle) in tasks.iter() {
+        if !handle.join_handle.is_finished() {
+            info!("Cancelling running task: {}", name);
             handle.cancel_token.cancel();
-            // Don't take the handle — keep it so get_sync_status can still report
-            // is_running: true until the task finishes its wind-down
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "message": "Sync cancellation requested",
-                    "status": "cancelling"
-                })),
-            )
-                .into_response()
+            cancelled.push(name.clone());
         }
-        _ => (
+    }
+
+    if cancelled.is_empty() {
+        (
             StatusCode::OK,
             Json(serde_json::json!({
-                "message": "No sync is currently running",
+                "message": "No tasks are currently running",
                 "cancelled": 0
             })),
         )
-            .into_response(),
+            .into_response()
+    } else {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "message": format!("Cancellation requested for: {}", cancelled.join(", ")),
+                "status": "cancelling",
+                "cancelled": cancelled.len()
+            })),
+        )
+            .into_response()
     }
 }
 
@@ -623,19 +740,14 @@ async fn start_process(
 ) -> impl IntoResponse {
     let datasets = body.map(|b| b.datasets.clone()).unwrap_or_default();
 
-    // Check if a sync is already running
-    let mut handle_guard = state.sync_handle.lock().await;
-    if let Some(ref handle) = *handle_guard {
-        if !handle.join_handle.is_finished() {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": "A sync or process is already running — wait for it to complete",
-                    "status": "running"
-                })),
-            )
-                .into_response();
-        }
+    let mut tasks = state.tasks.lock().await;
+
+    if let Err(msg) = try_claim_slot(&mut tasks, TASK_SYNC) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": msg, "status": "running" })),
+        )
+            .into_response();
     }
 
     let token = CancellationToken::new();
@@ -668,12 +780,14 @@ async fn start_process(
         }
     });
 
-    // Store handle so cancel_sync and get_sync_status can track this task
-    *handle_guard = Some(SyncHandle {
-        cancel_token: token,
-        join_handle,
-    });
-    drop(handle_guard);
+    tasks.insert(
+        TASK_SYNC.to_string(),
+        TaskHandle {
+            cancel_token: token,
+            join_handle,
+        },
+    );
+    drop(tasks);
 
     (
         StatusCode::ACCEPTED,
@@ -715,24 +829,16 @@ async fn backfill_air_dates(
 ) -> impl IntoResponse {
     let limit = body.map(|b| b.limit).unwrap_or(100);
 
-    let mut handle_guard = state.sync_handle.lock().await;
+    let mut tasks = state.tasks.lock().await;
 
-    // Check if a sync or backfill is already running
-    if let Some(ref handle) = *handle_guard {
-        if !handle.join_handle.is_finished() {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": "A sync or backfill is already running",
-                    "status": "running"
-                })),
-            )
-                .into_response();
-        }
-        let _ = state.db.fail_stale_running_syncs().await;
+    if let Err(msg) = try_claim_slot(&mut tasks, TASK_BACKFILL) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": msg, "status": "running" })),
+        )
+            .into_response();
     }
 
-    // Create cancellation token and spawn the backfill task
     let token = CancellationToken::new();
     let db = state.db.clone();
     let task_token = token.clone();
@@ -755,10 +861,13 @@ async fn backfill_air_dates(
         }
     });
 
-    *handle_guard = Some(SyncHandle {
-        cancel_token: token,
-        join_handle,
-    });
+    tasks.insert(
+        TASK_BACKFILL.to_string(),
+        TaskHandle {
+            cancel_token: token,
+            join_handle,
+        },
+    );
 
     (
         StatusCode::ACCEPTED,

@@ -139,9 +139,11 @@ pub fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
         }
     }
 
-    // If no episodes found, try 1x01 format (single episode only)
+    // If no episodes found, try 1x01 format (single episode only).
+    // Require a non-digit (or start) before the season number to avoid false positives
+    // from resolution strings like "704x464" matching as season 4 episode 46.
     if episodes.is_empty() {
-        if let Some(caps) = Regex::new(r"(\d{1,2})x(\d{1,2})")
+        if let Some(caps) = Regex::new(r"(?:^|[^\d])(\d{1,2})x(\d{1,2})(?:[^\d]|$)")
             .ok()
             .and_then(|re| re.captures(filename))
         {
@@ -175,6 +177,24 @@ pub fn parse_episodes_from_filename(filename: &str) -> Vec<(i32, i32)> {
         {
             if let Some(ep) = caps.get(1).and_then(|m| m.as_str().parse::<i32>().ok()) {
                 episodes.push((1, ep));
+            }
+        }
+    }
+
+    // Try anime fansub: [Group] Title - 03 (quality) [CRC].ext
+    // Pattern: separator + dash + separator + 2-3 digit episode number.
+    // Common in fansub releases like "[SubGroup]_Series_Name_-_03_(720p)_[ABCD1234].mkv"
+    // Season defaults to 1 (anime typically uses absolute episode numbering).
+    if episodes.is_empty() {
+        if let Some(caps) =
+            Regex::new(r"[\s._]-[\s._](\d{2,3})(?:v\d)?(?:[\s._\(\[\]]|$)")
+                .ok()
+                .and_then(|re| re.captures(filename))
+        {
+            if let Some(ep) = caps.get(1).and_then(|m| m.as_str().parse::<i32>().ok()) {
+                if ep >= 1 {
+                    episodes.push((1, ep));
+                }
             }
         }
     }
@@ -229,7 +249,7 @@ fn is_bare_number_match(filename: &str) -> bool {
     let has_sxxexx = Regex::new(r"[Ss](\d{1,2})([Ee]\d{1,2})+")
         .ok()
         .is_some_and(|re| re.is_match(filename));
-    let has_alt = Regex::new(r"(\d{1,2})x(\d{1,2})")
+    let has_alt = Regex::new(r"(?:^|[^\d])(\d{1,2})x(\d{1,2})(?:[^\d]|$)")
         .ok()
         .is_some_and(|re| re.is_match(filename));
     let has_part = Regex::new(r"(?i)[\.\s_-](?:part|pt)[\.\s_-]?(\d{1,2})")
@@ -241,8 +261,11 @@ fn is_bare_number_match(filename: &str) -> bool {
     let has_special = Regex::new(r"[Ss]\d{1,2}[Mm](\d{1,2})")
         .ok()
         .is_some_and(|re| re.is_match(filename));
+    let has_anime = Regex::new(r"[\s._]-[\s._](\d{2,3})(?:v\d)?(?:[\s._\(\[\]]|$)")
+        .ok()
+        .is_some_and(|re| re.is_match(filename));
 
-    if has_sxxexx || has_alt || has_part || has_ep || has_special {
+    if has_sxxexx || has_alt || has_part || has_ep || has_special || has_anime {
         return false;
     }
 
@@ -843,6 +866,53 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_anime_fansub() {
+        let cases = vec![
+            // Standard anime fansub naming
+            (
+                "[Unknown]_Serial_Experiments_Lain_-_03_(704x464_DVD_H264)_[12FA4302].mkv",
+                vec![(1, 3)],
+            ),
+            (
+                "[SubGroup] Show Name - 01 (720p) [ABCD1234].mkv",
+                vec![(1, 1)],
+            ),
+            (
+                "[Fansub]_Anime_Title_-_13_(1080p)_[DEADBEEF].mkv",
+                vec![(1, 13)],
+            ),
+            // Version marker
+            (
+                "[Group] Title - 05v2 (720p) [ABC123].mkv",
+                vec![(1, 5)],
+            ),
+        ];
+
+        for (filename, expected) in cases {
+            assert_eq!(
+                parse_episodes_from_filename(filename),
+                expected,
+                "Failed for: {}",
+                filename
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolution_not_parsed_as_episode() {
+        // 704x464 in filename should NOT be parsed as season 4 episode 46
+        let result = parse_episodes_from_filename(
+            "[Unknown]_Serial_Experiments_Lain_-_03_(704x464_DVD_H264)_[12FA4302].mkv",
+        );
+        // Should match via anime pattern as (1, 3), NOT (4, 46) from resolution
+        assert_eq!(result, vec![(1, 3)]);
+
+        // Standalone resolution-only filename should not parse episodes from resolution
+        let result = parse_episodes_from_filename("704x464.mkv");
+        assert!(result.is_empty() || result[0] != (4, 46));
+    }
+
+    #[test]
     fn test_bare_number_does_not_override_explicit() {
         // S01E01 should NOT be treated as bare number
         assert!(!is_bare_number_match("S01E01.mkv"));
@@ -852,6 +922,10 @@ mod tests {
         assert!(!is_bare_number_match("Ep01.mkv"));
         // Part 1 should NOT be treated as bare number
         assert!(!is_bare_number_match("Show.Part.1.mkv"));
+        // Anime fansub should NOT be treated as bare number
+        assert!(!is_bare_number_match(
+            "[Unknown]_Serial_Experiments_Lain_-_03_(704x464_DVD_H264)_[12FA4302].mkv"
+        ));
         // Bare number IS a bare number match
         assert!(is_bare_number_match("01.mkv"));
         assert!(is_bare_number_match("01 - Title.mkv"));

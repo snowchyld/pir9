@@ -70,7 +70,7 @@ ENV RUST_LOG=info,pir9_musicbrainz=debug
 EXPOSE 8991
 
 # Run as non-root user for security
-RUN groupadd -r pir9 && useradd -r -g pir9 -d /app pir9 \
+RUN groupadd -g 1000 pir9 && useradd -u 1000 -g pir9 -s /bin/false -d /app pir9 \
     && chown -R pir9:pir9 /app
 USER pir9
 

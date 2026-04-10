@@ -151,6 +151,8 @@ services:
     volumes:
       - ./tmp/imdb_data:/data/cache
     environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
       - RUST_LOG=info,pir9_imdb=debug
       - PIR9_IMDB_PORT=8990
       - PIR9_IMDB_DB_URL=postgresql://pir9:pir9@10.0.0.20:5433/pir9_imdb
@@ -193,8 +195,8 @@ services:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8991/health"]
       interval: 30s
-      timeout: 3s
-      start_period: 10s
+      timeout: 10s
+      start_period: 60s
       retries: 3
 
   # ============================================================================

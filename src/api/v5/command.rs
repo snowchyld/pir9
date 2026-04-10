@@ -440,7 +440,6 @@ async fn execute_refresh_series(
     metadata_service: Option<&crate::core::metadata::MetadataService>,
     hybrid_event_bus: Option<&crate::core::messaging::HybridEventBus>,
 ) -> Result<String, String> {
-    use crate::core::datastore::models::EpisodeDbModel;
     use crate::core::datastore::repositories::{EpisodeRepository, SeriesRepository};
     use crate::core::metadata::EpisodeEnrichment;
     use chrono::{NaiveDate, Utc};
@@ -611,87 +610,11 @@ async fn execute_refresh_series(
             continue;
         }
 
-        // Sync episodes from Skyhook data
-        let mut episodes_added = 0;
-        let mut episodes_updated = 0;
-
-        for ep in &metadata.episodes {
-            let air_date = ep
-                .air_date
-                .as_ref()
-                .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-            let air_date_utc = ep
-                .air_date_utc
-                .as_ref()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| dt.with_timezone(&Utc));
-
-            // Check if episode exists
-            let existing = if ep.tvdb_id > 0 {
-                episode_repo.get_by_tvdb_id(ep.tvdb_id).await.ok().flatten()
-            } else {
-                episode_repo
-                    .get_by_series_season_episode(*series_id, ep.season_number, ep.episode_number)
-                    .await
-                    .ok()
-                    .flatten()
-            };
-
-            match existing {
-                Some(mut episode) => {
-                    episode.title = ep
-                        .title
-                        .clone()
-                        .unwrap_or_else(|| format!("Episode {}", ep.episode_number));
-                    episode.overview = ep.overview.clone();
-                    episode.air_date = air_date;
-                    episode.air_date_utc = air_date_utc;
-                    episode.runtime = ep.runtime.unwrap_or(0);
-                    episode.absolute_episode_number = ep.absolute_episode_number;
-                    if ep.tvdb_id > 0 {
-                        episode.tvdb_id = ep.tvdb_id;
-                    }
-
-                    if episode_repo.update(&episode).await.is_ok() {
-                        episodes_updated += 1;
-                    }
-                }
-                None => {
-                    let episode = EpisodeDbModel {
-                        id: 0,
-                        series_id: *series_id,
-                        tvdb_id: ep.tvdb_id,
-                        episode_file_id: None,
-                        season_number: ep.season_number,
-                        episode_number: ep.episode_number,
-                        absolute_episode_number: ep.absolute_episode_number,
-                        scene_absolute_episode_number: None,
-                        scene_episode_number: None,
-                        scene_season_number: None,
-                        title: ep
-                            .title
-                            .clone()
-                            .unwrap_or_else(|| format!("Episode {}", ep.episode_number)),
-                        overview: ep.overview.clone(),
-                        air_date,
-                        air_date_utc,
-                        runtime: ep.runtime.unwrap_or(0),
-                        has_file: false,
-                        monitored: series.monitored,
-                        unverified_scene_numbering: false,
-                        added: Utc::now(),
-                        last_search_time: None,
-                        imdb_id: None,
-                        imdb_rating: None,
-                        imdb_votes: None,
-                    };
-
-                    if episode_repo.insert(&episode).await.is_ok() {
-                        episodes_added += 1;
-                    }
-                }
-            }
-        }
+        // Sync episodes from Skyhook data (batched in single transaction for WAL efficiency)
+        let (episodes_added, episodes_updated) = episode_repo
+            .sync_episodes_batch(*series_id, series.monitored, &metadata.episodes)
+            .await
+            .map_err(|e| format!("Failed to sync episodes: {}", e))?;
 
         // Remap episode numbers if series uses a non-default TVDB ordering
         if series.episode_ordering != "aired" {

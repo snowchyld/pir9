@@ -116,6 +116,17 @@ impl EpisodeFileRepository {
         Ok(row)
     }
 
+    pub async fn get_by_ids(&self, ids: &[i64]) -> Result<Vec<super::models::EpisodeFileDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::EpisodeFileDbModel>(
+            "SELECT * FROM episode_files WHERE id = ANY($1)",
+        )
+        .bind(ids)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
     pub async fn get_by_series_id(
         &self,
         series_id: i64,
@@ -269,7 +280,7 @@ impl HistoryRepository {
                 .fetch_all(pool)
                 .await?;
             let count: (i64,) =
-                sqlx::query_as("SELECT COUNT(*) FROM history WHERE event_type = $1")
+                sqlx::query_as("SELECT COUNT(1) FROM history WHERE event_type = $1")
                     .bind(evt)
                     .fetch_one(pool)
                     .await?;
@@ -284,7 +295,7 @@ impl HistoryRepository {
                 .bind(offset)
                 .fetch_all(pool)
                 .await?;
-            let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM history")
+            let count: (i64,) = sqlx::query_as("SELECT COUNT(1) FROM history")
                 .fetch_one(pool)
                 .await?;
             Ok((rows, count.0))
@@ -390,15 +401,11 @@ impl HistoryRepository {
 
     pub async fn delete_bulk(&self, ids: &[i64]) -> Result<u64> {
         let pool = self.db.pool();
-        let mut total = 0u64;
-        for id in ids {
-            let result = sqlx::query("DELETE FROM history WHERE id = $1")
-                .bind(id)
-                .execute(pool)
-                .await?;
-            total += result.rows_affected();
-        }
-        Ok(total)
+        let result = sqlx::query("DELETE FROM history WHERE id = ANY($1)")
+            .bind(ids)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected())
     }
 
     pub async fn clear_by_event_type(&self, event_type: i32) -> Result<u64> {
@@ -532,6 +539,17 @@ impl SeriesRepository {
                 .fetch_optional(pool)
                 .await?;
         Ok(row)
+    }
+
+    pub async fn get_by_ids(&self, ids: &[i64]) -> Result<Vec<super::models::SeriesDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::SeriesDbModel>(
+            "SELECT * FROM series WHERE id = ANY($1)",
+        )
+        .bind(ids)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
     }
 
     pub async fn get_by_tvdb_id(
@@ -727,6 +745,16 @@ impl MovieRepository {
                 .fetch_optional(pool)
                 .await?;
         Ok(row)
+    }
+
+    pub async fn get_by_ids(&self, ids: &[i64]) -> Result<Vec<super::models::MovieDbModel>> {
+        let pool = self.db.pool();
+        let rows =
+            sqlx::query_as::<_, super::models::MovieDbModel>("SELECT * FROM movies WHERE id = ANY($1)")
+                .bind(ids)
+                .fetch_all(pool)
+                .await?;
+        Ok(rows)
     }
 
     pub async fn get_by_tmdb_id(
@@ -959,7 +987,7 @@ impl MovieRepository {
             base_where.push_str(" AND monitored = true");
         }
 
-        let count_sql = format!("SELECT COUNT(*) FROM movies WHERE {}", base_where);
+        let count_sql = format!("SELECT COUNT(1) FROM movies WHERE {}", base_where);
         let total: (i64,) = sqlx::query_as(&count_sql).fetch_one(pool).await?;
 
         let data_sql = format!(
@@ -1081,6 +1109,17 @@ impl EpisodeRepository {
         .fetch_optional(pool)
         .await?;
         Ok(row)
+    }
+
+    pub async fn get_by_ids(&self, ids: &[i64]) -> Result<Vec<super::models::EpisodeDbModel>> {
+        let pool = self.db.pool();
+        let rows = sqlx::query_as::<_, super::models::EpisodeDbModel>(
+            "SELECT * FROM episodes WHERE id = ANY($1) ORDER BY season_number, episode_number",
+        )
+        .bind(ids)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
     }
 
     pub async fn get_by_series_id(
@@ -1215,6 +1254,128 @@ impl EpisodeRepository {
         Ok(())
     }
 
+    /// Sync episodes from metadata in a single transaction.
+    /// Pre-loads existing episodes and batches all inserts/updates to minimize WAL flushes.
+    /// Returns (added, updated) counts.
+    pub async fn sync_episodes_batch(
+        &self,
+        series_id: i64,
+        monitored: bool,
+        episodes: &[crate::core::metadata::SkyhookEpisode],
+    ) -> Result<(usize, usize)> {
+        use chrono::{NaiveDate, Utc};
+        use std::collections::HashMap;
+
+        let pool = self.db.pool();
+
+        // Pre-load all existing episodes for this series in one query
+        let existing = sqlx::query_as::<_, super::models::EpisodeDbModel>(
+            "SELECT * FROM episodes WHERE series_id = $1",
+        )
+        .bind(series_id)
+        .fetch_all(pool)
+        .await?;
+
+        // Build lookup maps: by tvdb_id and by (season, episode)
+        let mut by_tvdb: HashMap<i64, super::models::EpisodeDbModel> = HashMap::new();
+        let mut by_pos: HashMap<(i32, i32), super::models::EpisodeDbModel> = HashMap::new();
+        for ep in existing {
+            if ep.tvdb_id > 0 {
+                by_tvdb.insert(ep.tvdb_id, ep.clone());
+            }
+            by_pos.insert((ep.season_number, ep.episode_number), ep);
+        }
+
+        let mut tx = pool.begin().await?;
+        let mut added = 0usize;
+        let mut updated = 0usize;
+
+        for ep in episodes {
+            let air_date = ep
+                .air_date
+                .as_ref()
+                .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+            let air_date_utc = ep
+                .air_date_utc
+                .as_ref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&Utc));
+            let title = ep
+                .title
+                .clone()
+                .unwrap_or_else(|| format!("Episode {}", ep.episode_number));
+
+            // Look up existing: by tvdb_id first, then by position
+            let existing_ep = if ep.tvdb_id > 0 {
+                by_tvdb
+                    .get(&ep.tvdb_id)
+                    .or_else(|| by_pos.get(&(ep.season_number, ep.episode_number)))
+            } else {
+                by_pos.get(&(ep.season_number, ep.episode_number))
+            };
+
+            if let Some(existing_ep) = existing_ep {
+                // Update existing episode
+                sqlx::query(
+                    r#"
+                    UPDATE episodes SET
+                        tvdb_id = $1, title = $2, overview = $3, air_date = $4,
+                        air_date_utc = $5, runtime = $6, absolute_episode_number = $7
+                    WHERE id = $8
+                    "#,
+                )
+                .bind(if ep.tvdb_id > 0 {
+                    ep.tvdb_id
+                } else {
+                    existing_ep.tvdb_id
+                })
+                .bind(&title)
+                .bind(&ep.overview)
+                .bind(air_date)
+                .bind(air_date_utc)
+                .bind(ep.runtime.unwrap_or(0))
+                .bind(ep.absolute_episode_number)
+                .bind(existing_ep.id)
+                .execute(&mut *tx)
+                .await?;
+                updated += 1;
+            } else {
+                // Insert new episode
+                sqlx::query(
+                    r#"
+                    INSERT INTO episodes (
+                        series_id, tvdb_id, season_number, episode_number,
+                        absolute_episode_number, title, overview, air_date, air_date_utc,
+                        runtime, has_file, monitored, unverified_scene_numbering, added
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+                    )
+                    "#,
+                )
+                .bind(series_id)
+                .bind(ep.tvdb_id)
+                .bind(ep.season_number)
+                .bind(ep.episode_number)
+                .bind(ep.absolute_episode_number)
+                .bind(&title)
+                .bind(&ep.overview)
+                .bind(air_date)
+                .bind(air_date_utc)
+                .bind(ep.runtime.unwrap_or(0))
+                .bind(false)
+                .bind(monitored)
+                .bind(false)
+                .bind(Utc::now())
+                .execute(&mut *tx)
+                .await?;
+                added += 1;
+            }
+        }
+
+        tx.commit().await?;
+        Ok((added, updated))
+    }
+
     pub async fn get_by_series_and_season(
         &self,
         series_id: i64,
@@ -1299,21 +1460,20 @@ impl EpisodeRepository {
         monitored: bool,
     ) -> Result<Vec<super::models::EpisodeDbModel>> {
         let pool = self.db.pool();
-        for id in episode_ids {
-            sqlx::query("UPDATE episodes SET monitored = $1 WHERE id = $2")
-                .bind(monitored)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
 
-        // Fetch updated episodes
-        let mut episodes = Vec::new();
-        for id in episode_ids {
-            if let Some(ep) = self.get_by_id(*id).await? {
-                episodes.push(ep);
-            }
-        }
+        // Batch update + fetch in two queries instead of N×2 individual queries
+        sqlx::query("UPDATE episodes SET monitored = $1 WHERE id = ANY($2)")
+            .bind(monitored)
+            .bind(episode_ids)
+            .execute(pool)
+            .await?;
+
+        let episodes = sqlx::query_as::<_, super::models::EpisodeDbModel>(
+            "SELECT * FROM episodes WHERE id = ANY($1) ORDER BY season_number, episode_number",
+        )
+        .bind(episode_ids)
+        .fetch_all(pool)
+        .await?;
 
         Ok(episodes)
     }
@@ -1372,7 +1532,7 @@ impl EpisodeRepository {
         // Count query: exclude IDs are $1 (no LIMIT/OFFSET params)
         let total: (i64,) = if has_exclusions {
             let count_sql = format!(
-                "SELECT COUNT(*) FROM episodes WHERE {} AND id NOT IN (SELECT UNNEST($1::bigint[]))",
+                "SELECT COUNT(1) FROM episodes WHERE {} AND id NOT IN (SELECT UNNEST($1::bigint[]))",
                 base_where
             );
             sqlx::query_as(&count_sql)
@@ -1380,7 +1540,7 @@ impl EpisodeRepository {
                 .fetch_one(pool)
                 .await?
         } else {
-            let count_sql = format!("SELECT COUNT(*) FROM episodes WHERE {}", base_where);
+            let count_sql = format!("SELECT COUNT(1) FROM episodes WHERE {}", base_where);
             sqlx::query_as(&count_sql).fetch_one(pool).await?
         };
 
@@ -1894,7 +2054,7 @@ impl LogRepository {
                 .fetch_all(pool)
                 .await?;
 
-            let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM logs WHERE LOWER(level) = $1")
+            let count: (i64,) = sqlx::query_as("SELECT COUNT(1) FROM logs WHERE LOWER(level) = $1")
                 .bind(&level_filter)
                 .fetch_one(pool)
                 .await?;
@@ -1911,7 +2071,7 @@ impl LogRepository {
                 .fetch_all(pool)
                 .await?;
 
-            let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM logs")
+            let count: (i64,) = sqlx::query_as("SELECT COUNT(1) FROM logs")
                 .fetch_one(pool)
                 .await?;
 
@@ -2418,15 +2578,11 @@ impl BlocklistRepository {
 
     pub async fn delete_bulk(&self, ids: &[i64]) -> Result<u64> {
         let pool = self.db.pool();
-        let mut total = 0u64;
-        for id in ids {
-            let result = sqlx::query("DELETE FROM blocklist WHERE id = $1")
-                .bind(id)
-                .execute(pool)
-                .await?;
-            total += result.rows_affected();
-        }
-        Ok(total)
+        let result = sqlx::query("DELETE FROM blocklist WHERE id = ANY($1)")
+            .bind(ids)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected())
     }
 }
 

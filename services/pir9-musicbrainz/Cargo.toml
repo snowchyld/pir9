@@ -1,6 +1,6 @@
 [package]
 name = "pir9-musicbrainz"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.93"
 authors = ["pir9 Team"]
@@ -48,6 +48,7 @@ dotenvy = "0.15"
 # Utilities
 futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["rt"] }
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
 
 [profile.release]
 opt-level = 3

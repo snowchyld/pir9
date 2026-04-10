@@ -95,6 +95,7 @@ pub struct DbReleaseTrack {
     pub title: String,
     pub recording_mbid: Option<String>,
     pub length_ms: Option<i32>,
+    pub row_hash: Option<i64>,
 }
 
 impl DbReleaseTrack {
@@ -313,6 +314,11 @@ pub struct DatasetSyncStatus {
     /// Current phase: "downloading", "parsing", "idle"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_phase: Option<String>,
+    pub rows_unchanged: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_total_rows: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parsing_progress: Option<f64>,
 }
 
 /// Live download progress state shared between sync task and status API
@@ -330,6 +336,10 @@ pub struct DownloadProgress {
     pub total_bytes: u64,
     /// When true, skip downloads and use cached files as-is
     pub process_only: bool,
+    /// Estimated total rows for current dataset (from last completed sync)
+    pub estimated_total_rows: i64,
+    /// Current rows processed in parsing phase
+    pub current_rows_processed: i64,
 }
 
 /// Sync report
@@ -357,6 +367,7 @@ pub struct SyncStats {
     pub rows_processed: i64,
     pub rows_inserted: i64,
     pub rows_updated: i64,
+    pub rows_unchanged: i64,
     pub duration_seconds: i64,
 }
 
@@ -381,6 +392,7 @@ pub struct DbArtist {
     pub rating: Option<f64>,
     pub rating_count: Option<i32>,
     pub last_synced_at: DateTime<Utc>,
+    pub row_hash: Option<i64>,
 }
 
 impl DbArtist {
@@ -419,6 +431,7 @@ pub struct DbReleaseGroup {
     pub rating: Option<f64>,
     pub rating_count: Option<i32>,
     pub last_synced_at: DateTime<Utc>,
+    pub row_hash: Option<i64>,
 }
 
 impl DbReleaseGroup {
@@ -456,6 +469,7 @@ pub struct DbRelease {
     pub packaging: Option<String>,
     pub track_count: i32,
     pub last_synced_at: DateTime<Utc>,
+    pub row_hash: Option<i64>,
 }
 
 impl DbRelease {
@@ -488,6 +502,7 @@ pub struct DbLabel {
     pub genres: String,
     pub tags: String,
     pub last_synced_at: DateTime<Utc>,
+    pub row_hash: Option<i64>,
 }
 
 impl DbLabel {
@@ -521,6 +536,7 @@ pub struct DbRecording {
     pub genres: String,
     pub tags: String,
     pub last_synced_at: DateTime<Utc>,
+    pub row_hash: Option<i64>,
 }
 
 impl DbRecording {
@@ -551,6 +567,7 @@ pub struct DbWork {
     pub genres: String,
     pub tags: String,
     pub last_synced_at: DateTime<Utc>,
+    pub row_hash: Option<i64>,
 }
 
 impl DbWork {
@@ -579,6 +596,7 @@ pub struct DbArea {
     pub iso_3166_2: Option<String>,
     pub disambiguation: Option<String>,
     pub last_synced_at: DateTime<Utc>,
+    pub row_hash: Option<i64>,
 }
 
 impl DbArea {
@@ -603,6 +621,7 @@ pub struct DbSeries {
     pub series_type: Option<String>,
     pub disambiguation: Option<String>,
     pub last_synced_at: DateTime<Utc>,
+    pub row_hash: Option<i64>,
 }
 
 impl DbSeries {
@@ -628,6 +647,7 @@ pub struct DbEvent {
     pub cancelled: bool,
     pub disambiguation: Option<String>,
     pub last_synced_at: DateTime<Utc>,
+    pub row_hash: Option<i64>,
 }
 
 impl DbEvent {
@@ -654,6 +674,7 @@ pub struct DbInstrument {
     pub description: Option<String>,
     pub disambiguation: Option<String>,
     pub last_synced_at: DateTime<Utc>,
+    pub row_hash: Option<i64>,
 }
 
 impl DbInstrument {
@@ -678,6 +699,7 @@ pub struct DbPlace {
     pub coordinates: Option<String>,
     pub disambiguation: Option<String>,
     pub last_synced_at: DateTime<Utc>,
+    pub row_hash: Option<i64>,
 }
 
 impl DbPlace {
@@ -704,6 +726,9 @@ pub struct SyncRequest {
     /// Which datasets to operate on. Empty = all.
     #[serde(default)]
     pub datasets: Vec<String>,
+    /// When true, TRUNCATE all data tables and sync history before syncing.
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// Metadata about a single dataset file (for GET /api/datasets)

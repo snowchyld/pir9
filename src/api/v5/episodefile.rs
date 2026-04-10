@@ -139,15 +139,9 @@ pub async fn get_episode_files(
             .filter_map(|s| s.trim().parse().ok())
             .collect();
 
-        let mut files = Vec::new();
-        for id in ids {
-            if let Some(ef) = repo.get_by_id(id).await.map_err(|e| {
-                EpisodeFileError::Internal(format!("Failed to fetch episode file: {}", e))
-            })? {
-                files.push(ef);
-            }
-        }
-        files
+        repo.get_by_ids(&ids).await.map_err(|e| {
+            EpisodeFileError::Internal(format!("Failed to fetch episode files: {}", e))
+        })?
     } else {
         repo.get_all().await.map_err(|e| {
             EpisodeFileError::Internal(format!("Failed to fetch episode files: {}", e))
@@ -302,51 +296,44 @@ pub async fn delete_episode_files_bulk(
     let file_repo = EpisodeFileRepository::new(state.db.clone());
     let episode_repo = EpisodeRepository::new(state.db.clone());
 
-    let mut deleted_count = 0;
     let mut disk_errors = 0;
 
-    for id in &body.episode_file_ids {
-        // Get the file info before deleting
-        let file = match file_repo.get_by_id(*id).await {
-            Ok(Some(f)) => f,
-            Ok(None) => {
-                tracing::warn!("Episode file {} not found during bulk delete", id);
-                continue;
-            }
-            Err(e) => {
-                tracing::warn!("Failed to fetch episode file {}: {}", id, e);
-                continue;
-            }
-        };
+    // Batch fetch all files upfront instead of N individual queries
+    let files = file_repo
+        .get_by_ids(&body.episode_file_ids)
+        .await
+        .unwrap_or_default();
 
-        let file_path = std::path::Path::new(&file.path);
-
+    for file in &files {
         // Delete the actual file from disk
+        let file_path = std::path::Path::new(&file.path);
         if file_path.exists() {
             if let Err(e) = tokio::fs::remove_file(&file.path).await {
                 tracing::warn!("Failed to delete file from disk: {} - {}", file.path, e);
                 disk_errors += 1;
             }
         }
-
-        // Update any episodes that reference this file
-        if let Ok(episodes) = episode_repo.get_by_series_id(file.series_id).await {
-            for mut ep in episodes {
-                if ep.episode_file_id == Some(*id) {
-                    ep.episode_file_id = None;
-                    ep.has_file = false;
-                    let _ = episode_repo.update(&ep).await;
-                }
-            }
-        }
-
-        // Delete the database record
-        if let Err(e) = file_repo.delete(*id).await {
-            tracing::warn!("Failed to delete episode file record {}: {}", id, e);
-        } else {
-            deleted_count += 1;
-        }
     }
+
+    // Batch unlink episodes referencing these files
+    let file_ids: Vec<i64> = files.iter().map(|f| f.id).collect();
+    if !file_ids.is_empty() {
+        let pool = state.db.pool();
+        let _ = sqlx::query(
+            "UPDATE episodes SET episode_file_id = NULL, has_file = false WHERE episode_file_id = ANY($1)",
+        )
+        .bind(&file_ids)
+        .execute(pool)
+        .await;
+
+        // Batch delete DB records
+        let _ = sqlx::query("DELETE FROM episode_files WHERE id = ANY($1)")
+            .bind(&file_ids)
+            .execute(pool)
+            .await;
+    }
+
+    let deleted_count = files.len();
 
     tracing::info!(
         "Bulk deleted {} episode files ({} disk errors)",

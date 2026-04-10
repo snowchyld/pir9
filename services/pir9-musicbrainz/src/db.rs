@@ -27,9 +27,179 @@ impl DbRepository {
         Self { pool }
     }
 
+    /// Update sync progress with all counters including rows_unchanged
+    pub async fn update_sync_progress_full(
+        &self,
+        sync_id: i64,
+        rows_processed: i64,
+        rows_inserted: i64,
+        rows_updated: i64,
+        rows_unchanged: i64,
+        last_processed_id: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE mb_sync_status
+            SET rows_processed = $2, rows_inserted = $3, rows_updated = $4,
+                rows_unchanged = $5, last_processed_id = $6
+            WHERE id = $1
+            "#,
+        )
+        .bind(sync_id)
+        .bind(rows_processed)
+        .bind(rows_inserted)
+        .bind(rows_updated)
+        .bind(rows_unchanged)
+        .bind(last_processed_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Get rows_processed from the last completed sync for a dataset
+    pub async fn last_completed_row_count(&self, dataset: &str) -> Result<i64> {
+        let result: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT rows_processed
+            FROM mb_sync_status
+            WHERE dataset_name = $1 AND status = 'completed'
+            ORDER BY completed_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(dataset)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(result.unwrap_or(0))
+    }
+
+    /// Truncate all MusicBrainz data tables and sync history
+    pub async fn truncate_all_data(&self) -> Result<()> {
+        sqlx::query(
+            r#"
+            TRUNCATE mb_artists, mb_release_groups, mb_releases, mb_labels,
+                     mb_recordings, mb_works, mb_areas, mb_series, mb_events,
+                     mb_instruments, mb_places, mb_release_tracks, mb_cover_art,
+                     mb_sync_status
+            CASCADE
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        info!("Truncated all MusicBrainz data tables and sync history");
+        Ok(())
+    }
+
     /// Get pool for direct access (used by sync)
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    // ── Index management for bulk sync ─────────────────────────────────
+    //
+    // During bulk sync, secondary indexes slow down UNNEST upserts without
+    // benefiting anything (no concurrent reads during sync).  We drop them
+    // before ingestion and recreate them once the dataset finishes.
+
+    /// Drop secondary (non-PK) indexes for a dataset to speed up bulk upserts.
+    pub async fn drop_sync_indexes(&self, dataset: &str) -> Result<()> {
+        let stmts = Self::drop_index_stmts(dataset);
+        if stmts.is_empty() {
+            return Ok(());
+        }
+        info!("Dropping {} secondary indexes for {}", stmts.len(), dataset);
+        for sql in stmts {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
+        Ok(())
+    }
+
+    /// Recreate secondary indexes after bulk sync completes.
+    pub async fn recreate_sync_indexes(&self, dataset: &str) -> Result<()> {
+        let stmts = Self::create_index_stmts(dataset);
+        if stmts.is_empty() {
+            return Ok(());
+        }
+        info!("Recreating {} secondary indexes for {}", stmts.len(), dataset);
+        for sql in stmts {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
+        Ok(())
+    }
+
+    /// Ensure all secondary indexes exist (startup safety net).
+    /// If the service crashed mid-sync with indexes dropped, this restores them.
+    pub async fn ensure_all_indexes(&self) -> Result<()> {
+        let datasets = [
+            "artist", "release-group", "release", "label",
+            "recording", "work", "area",
+        ];
+        for ds in datasets {
+            let stmts = Self::create_index_stmts(ds);
+            for sql in stmts {
+                sqlx::query(sql).execute(&self.pool).await?;
+            }
+        }
+        Ok(())
+    }
+
+    fn drop_index_stmts(dataset: &str) -> Vec<&'static str> {
+        match dataset {
+            "artist" | "artist.tar.xz" => vec![
+                "DROP INDEX IF EXISTS idx_mb_artists_name_trgm",
+                "DROP INDEX IF EXISTS idx_mb_artists_sort_name_trgm",
+            ],
+            "release-group" | "release-group.tar.xz" => vec![
+                "DROP INDEX IF EXISTS idx_mb_release_groups_artist",
+            ],
+            "release" | "release.tar.xz" => vec![
+                "DROP INDEX IF EXISTS idx_mb_releases_group",
+                "DROP INDEX IF EXISTS idx_mb_releases_artist",
+                // redundant with PK (release_mbid, disc_number, position) leading column
+                "DROP INDEX IF EXISTS idx_mb_release_tracks_release",
+                "DROP INDEX IF EXISTS idx_mb_release_tracks_recording",
+            ],
+            "label" | "label.tar.xz" => vec![
+                "DROP INDEX IF EXISTS idx_mb_labels_name_trgm",
+            ],
+            "recording" | "recording.tar.xz" => vec![
+                "DROP INDEX IF EXISTS idx_mb_recordings_artist",
+                "DROP INDEX IF EXISTS idx_mb_recordings_title_trgm",
+            ],
+            "area" | "area.tar.xz" => vec![
+                "DROP INDEX IF EXISTS idx_mb_areas_iso",
+            ],
+            _ => vec![],
+        }
+    }
+
+    fn create_index_stmts(dataset: &str) -> Vec<&'static str> {
+        match dataset {
+            "artist" | "artist.tar.xz" => vec![
+                "CREATE INDEX IF NOT EXISTS idx_mb_artists_name_trgm ON mb_artists USING gin (name gin_trgm_ops)",
+                "CREATE INDEX IF NOT EXISTS idx_mb_artists_sort_name_trgm ON mb_artists USING gin (sort_name gin_trgm_ops)",
+            ],
+            "release-group" | "release-group.tar.xz" => vec![
+                "CREATE INDEX IF NOT EXISTS idx_mb_release_groups_artist ON mb_release_groups(artist_mbid)",
+            ],
+            "release" | "release.tar.xz" => vec![
+                "CREATE INDEX IF NOT EXISTS idx_mb_releases_group ON mb_releases(release_group_mbid)",
+                "CREATE INDEX IF NOT EXISTS idx_mb_releases_artist ON mb_releases(artist_mbid)",
+                "CREATE INDEX IF NOT EXISTS idx_mb_release_tracks_release ON mb_release_tracks(release_mbid)",
+                "CREATE INDEX IF NOT EXISTS idx_mb_release_tracks_recording ON mb_release_tracks(recording_mbid)",
+            ],
+            "label" | "label.tar.xz" => vec![
+                "CREATE INDEX IF NOT EXISTS idx_mb_labels_name_trgm ON mb_labels USING gin (name gin_trgm_ops)",
+            ],
+            "recording" | "recording.tar.xz" => vec![
+                "CREATE INDEX IF NOT EXISTS idx_mb_recordings_artist ON mb_recordings(artist_mbid)",
+                "CREATE INDEX IF NOT EXISTS idx_mb_recordings_title_trgm ON mb_recordings USING gin (title gin_trgm_ops)",
+            ],
+            "area" | "area.tar.xz" => vec![
+                "CREATE INDEX IF NOT EXISTS idx_mb_areas_iso ON mb_areas(iso_3166_1)",
+            ],
+            _ => vec![],
+        }
     }
 
     // ── Artist queries ──────────────────────────────────────────────
@@ -87,6 +257,7 @@ impl DbRepository {
                     rating: row.get("rating"),
                     rating_count: row.get("rating_count"),
                     last_synced_at: row.get("last_synced_at"),
+                    row_hash: None,
                 };
                 db_artist.to_api()
             })
@@ -126,6 +297,7 @@ impl DbRepository {
                 rating: row.get("rating"),
                 rating_count: row.get("rating_count"),
                 last_synced_at: row.get("last_synced_at"),
+                row_hash: None,
             };
             db_artist.to_api()
         }))
@@ -173,6 +345,7 @@ impl DbRepository {
                 rating: row.get("rating"),
                 rating_count: row.get("rating_count"),
                 last_synced_at: row.get("last_synced_at"),
+                row_hash: None,
             };
             let mut api = db_rg.to_api();
             api.cover_art_url = row.get("cover_art_url");
@@ -215,6 +388,7 @@ impl DbRepository {
                 rating: row.get("rating"),
                 rating_count: row.get("rating_count"),
                 last_synced_at: row.get("last_synced_at"),
+                row_hash: None,
             };
             let mut api = db_rg.to_api();
             api.cover_art_url = row.get("cover_art_url");
@@ -253,6 +427,7 @@ impl DbRepository {
                     packaging: row.get("packaging"),
                     track_count: row.get("track_count"),
                     last_synced_at: row.get("last_synced_at"),
+                    row_hash: None,
                 };
                 db_release.to_api()
             })
@@ -323,6 +498,7 @@ impl DbRepository {
             let mut t_titles = Vec::with_capacity(chunk.len());
             let mut t_recording_mbids = Vec::with_capacity(chunk.len());
             let mut t_length_ms = Vec::with_capacity(chunk.len());
+            let mut t_row_hashes = Vec::with_capacity(chunk.len());
 
             for track in chunk {
                 t_release_mbids.push(track.release_mbid.as_str());
@@ -331,18 +507,21 @@ impl DbRepository {
                 t_titles.push(track.title.as_str());
                 t_recording_mbids.push(track.recording_mbid.as_deref());
                 t_length_ms.push(track.length_ms);
+                t_row_hashes.push(track.row_hash);
             }
 
             let result = sqlx::query(
                 r#"
-                INSERT INTO mb_release_tracks (release_mbid, disc_number, position, title, recording_mbid, length_ms)
+                INSERT INTO mb_release_tracks (release_mbid, disc_number, position, title, recording_mbid, length_ms, row_hash)
                 SELECT * FROM UNNEST(
-                    $1::text[], $2::int[], $3::int[], $4::text[], $5::text[], $6::int[]
+                    $1::text[], $2::int[], $3::int[], $4::text[], $5::text[], $6::int[], $7::bigint[]
                 )
                 ON CONFLICT (release_mbid, disc_number, position) DO UPDATE SET
                     title = EXCLUDED.title,
                     recording_mbid = EXCLUDED.recording_mbid,
-                    length_ms = EXCLUDED.length_ms
+                    length_ms = EXCLUDED.length_ms,
+                    row_hash = EXCLUDED.row_hash
+                WHERE mb_release_tracks.row_hash IS DISTINCT FROM EXCLUDED.row_hash
                 "#,
             )
             .bind(&t_release_mbids)
@@ -351,6 +530,7 @@ impl DbRepository {
             .bind(&t_titles)
             .bind(&t_recording_mbids)
             .bind(&t_length_ms)
+            .bind(&t_row_hashes)
             .execute(&self.pool)
             .await?;
 
@@ -364,66 +544,41 @@ impl DbRepository {
 
     /// Get database statistics
     pub async fn get_stats(&self) -> Result<MbStats> {
-        let artist_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mb_artists")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
+        // Use pg_class.reltuples for approximate counts — instant vs full table scan.
+        // Kept accurate by autovacuum/ANALYZE; exact COUNT(*) was taking 9s+ per table.
+        let counts: Vec<(String, i64)> = sqlx::query_as(
+            r#"
+            SELECT c.relname::text, c.reltuples::bigint
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public'
+              AND c.relname IN (
+                'mb_artists', 'mb_release_groups', 'mb_releases', 'mb_cover_art',
+                'mb_labels', 'mb_recordings', 'mb_works', 'mb_areas',
+                'mb_series', 'mb_events', 'mb_instruments', 'mb_places'
+              )
+              AND c.relkind = 'r'
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
 
-        let release_group_count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM mb_release_groups")
-                .fetch_one(&self.pool)
-                .await
-                .unwrap_or(0);
-
-        let release_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mb_releases")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
-
-        let cover_art_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mb_cover_art")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
-
-        let label_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mb_labels")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
-
-        let recording_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mb_recordings")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
-
-        let work_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mb_works")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
-
-        let area_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mb_areas")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
-
-        let series_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mb_series")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
-
-        let event_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mb_events")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
-
-        let instrument_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mb_instruments")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
-
-        let place_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mb_places")
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
+        let get = |name: &str| -> i64 {
+            counts.iter().find(|(n, _)| n == name).map_or(0, |(_, c)| *c)
+        };
+        let artist_count = get("mb_artists");
+        let release_group_count = get("mb_release_groups");
+        let release_count = get("mb_releases");
+        let cover_art_count = get("mb_cover_art");
+        let label_count = get("mb_labels");
+        let recording_count = get("mb_recordings");
+        let work_count = get("mb_works");
+        let area_count = get("mb_areas");
+        let series_count = get("mb_series");
+        let event_count = get("mb_events");
+        let instrument_count = get("mb_instruments");
+        let place_count = get("mb_places");
 
         // Get last sync time
         let last_sync: Option<String> = sqlx::query_scalar(
@@ -475,6 +630,7 @@ impl DbRepository {
             let row = sqlx::query(
                 r#"
                 SELECT dataset_name, rows_processed, rows_inserted, rows_updated,
+                       COALESCE(rows_unchanged, 0) as rows_unchanged,
                        started_at, completed_at, status, error_message
                 FROM mb_sync_status
                 WHERE dataset_name = $1
@@ -491,6 +647,7 @@ impl DbRepository {
                 rows_processed: r.get("rows_processed"),
                 rows_inserted: r.get("rows_inserted"),
                 rows_updated: r.get("rows_updated"),
+                rows_unchanged: r.get("rows_unchanged"),
                 started_at: r
                     .get::<chrono::DateTime<chrono::Utc>, _>("started_at")
                     .to_rfc3339(),
@@ -504,6 +661,8 @@ impl DbRepository {
                 download_size_bytes: None,
                 download_bytes_done: None,
                 current_phase: None,
+                estimated_total_rows: None,
+                parsing_progress: None,
             }))
         }
 
@@ -720,6 +879,7 @@ impl DbRepository {
         let mut ratings = Vec::with_capacity(batch.len());
         let mut rating_counts = Vec::with_capacity(batch.len());
         let mut synced_ats = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for a in batch {
             mbids.push(a.mbid.as_str());
@@ -736,17 +896,18 @@ impl DbRepository {
             ratings.push(a.rating);
             rating_counts.push(a.rating_count);
             synced_ats.push(a.last_synced_at);
+            row_hashes.push(a.row_hash);
         }
 
         let result = sqlx::query(
             r#"
             INSERT INTO mb_artists (mbid, name, sort_name, artist_type, gender, area,
                                     begin_date, end_date, disambiguation, genres, tags,
-                                    rating, rating_count, last_synced_at)
+                                    rating, rating_count, last_synced_at, row_hash)
             SELECT * FROM UNNEST(
                 $1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
                 $7::text[], $8::text[], $9::text[], $10::text[], $11::text[],
-                $12::float8[], $13::int[], $14::timestamptz[]
+                $12::float8[], $13::int[], $14::timestamptz[], $15::bigint[]
             )
             ON CONFLICT (mbid) DO UPDATE SET
                 name = EXCLUDED.name,
@@ -761,7 +922,9 @@ impl DbRepository {
                 tags = EXCLUDED.tags,
                 rating = COALESCE(EXCLUDED.rating, mb_artists.rating),
                 rating_count = COALESCE(EXCLUDED.rating_count, mb_artists.rating_count),
-                last_synced_at = EXCLUDED.last_synced_at
+                last_synced_at = EXCLUDED.last_synced_at,
+                row_hash = EXCLUDED.row_hash
+            WHERE mb_artists.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&mbids)
@@ -778,6 +941,7 @@ impl DbRepository {
         .bind(&ratings)
         .bind(&rating_counts)
         .bind(&synced_ats)
+        .bind(&row_hashes)
         .execute(&self.pool)
         .await?;
 
@@ -802,6 +966,7 @@ impl DbRepository {
         let mut ratings = Vec::with_capacity(batch.len());
         let mut rating_counts = Vec::with_capacity(batch.len());
         let mut synced_ats = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for rg in batch {
             mbids.push(rg.mbid.as_str());
@@ -816,17 +981,20 @@ impl DbRepository {
             ratings.push(rg.rating);
             rating_counts.push(rg.rating_count);
             synced_ats.push(rg.last_synced_at);
+            row_hashes.push(rg.row_hash);
         }
 
         let result = sqlx::query(
             r#"
             INSERT INTO mb_release_groups (mbid, title, artist_mbid, artist_name,
                                            primary_type, secondary_types, first_release_date,
-                                           genres, tags, rating, rating_count, last_synced_at)
+                                           genres, tags, rating, rating_count, last_synced_at,
+                                           row_hash)
             SELECT * FROM UNNEST(
                 $1::text[], $2::text[], $3::text[], $4::text[],
                 $5::text[], $6::text[], $7::text[],
-                $8::text[], $9::text[], $10::float8[], $11::int[], $12::timestamptz[]
+                $8::text[], $9::text[], $10::float8[], $11::int[], $12::timestamptz[],
+                $13::bigint[]
             )
             ON CONFLICT (mbid) DO UPDATE SET
                 title = EXCLUDED.title,
@@ -839,7 +1007,9 @@ impl DbRepository {
                 tags = EXCLUDED.tags,
                 rating = COALESCE(EXCLUDED.rating, mb_release_groups.rating),
                 rating_count = COALESCE(EXCLUDED.rating_count, mb_release_groups.rating_count),
-                last_synced_at = EXCLUDED.last_synced_at
+                last_synced_at = EXCLUDED.last_synced_at,
+                row_hash = EXCLUDED.row_hash
+            WHERE mb_release_groups.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&mbids)
@@ -854,6 +1024,7 @@ impl DbRepository {
         .bind(&ratings)
         .bind(&rating_counts)
         .bind(&synced_ats)
+        .bind(&row_hashes)
         .execute(&self.pool)
         .await?;
 
@@ -878,6 +1049,7 @@ impl DbRepository {
         let mut packagings = Vec::with_capacity(batch.len());
         let mut track_counts = Vec::with_capacity(batch.len());
         let mut synced_ats = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for r in batch {
             mbids.push(r.mbid.as_str());
@@ -892,15 +1064,18 @@ impl DbRepository {
             packagings.push(r.packaging.as_deref());
             track_counts.push(r.track_count);
             synced_ats.push(r.last_synced_at);
+            row_hashes.push(r.row_hash);
         }
 
         let result = sqlx::query(
             r#"
             INSERT INTO mb_releases (mbid, release_group_mbid, title, artist_mbid, artist_name,
-                                     date, country, status, barcode, packaging, track_count, last_synced_at)
+                                     date, country, status, barcode, packaging, track_count,
+                                     last_synced_at, row_hash)
             SELECT * FROM UNNEST(
                 $1::text[], $2::text[], $3::text[], $4::text[], $5::text[],
-                $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $11::int[], $12::timestamptz[]
+                $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $11::int[],
+                $12::timestamptz[], $13::bigint[]
             )
             ON CONFLICT (mbid) DO UPDATE SET
                 release_group_mbid = EXCLUDED.release_group_mbid,
@@ -913,7 +1088,9 @@ impl DbRepository {
                 barcode = EXCLUDED.barcode,
                 packaging = EXCLUDED.packaging,
                 track_count = EXCLUDED.track_count,
-                last_synced_at = EXCLUDED.last_synced_at
+                last_synced_at = EXCLUDED.last_synced_at,
+                row_hash = EXCLUDED.row_hash
+            WHERE mb_releases.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&mbids)
@@ -928,6 +1105,7 @@ impl DbRepository {
         .bind(&packagings)
         .bind(&track_counts)
         .bind(&synced_ats)
+        .bind(&row_hashes)
         .execute(&self.pool)
         .await?;
 
@@ -982,6 +1160,7 @@ impl DbRepository {
                     genres: row.get("genres"),
                     tags: row.get("tags"),
                     last_synced_at: row.get("last_synced_at"),
+                    row_hash: None,
                 };
                 db.to_api()
             })
@@ -1018,6 +1197,7 @@ impl DbRepository {
                 genres: row.get("genres"),
                 tags: row.get("tags"),
                 last_synced_at: row.get("last_synced_at"),
+                row_hash: None,
             };
             db.to_api()
         }))
@@ -1069,6 +1249,7 @@ impl DbRepository {
                     genres: row.get("genres"),
                     tags: row.get("tags"),
                     last_synced_at: row.get("last_synced_at"),
+                    row_hash: None,
                 };
                 db.to_api()
             })
@@ -1103,6 +1284,7 @@ impl DbRepository {
                 genres: row.get("genres"),
                 tags: row.get("tags"),
                 last_synced_at: row.get("last_synced_at"),
+                row_hash: None,
             };
             db.to_api()
         }))
@@ -1127,6 +1309,7 @@ impl DbRepository {
         let mut genres_vec = Vec::with_capacity(batch.len());
         let mut tags_vec = Vec::with_capacity(batch.len());
         let mut synced_ats = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for l in batch {
             mbids.push(l.mbid.as_str());
@@ -1141,15 +1324,18 @@ impl DbRepository {
             genres_vec.push(l.genres.as_str());
             tags_vec.push(l.tags.as_str());
             synced_ats.push(l.last_synced_at);
+            row_hashes.push(l.row_hash);
         }
 
         let result = sqlx::query(
             r#"
             INSERT INTO mb_labels (mbid, name, sort_name, label_type, area, label_code,
-                                   begin_date, end_date, disambiguation, genres, tags, last_synced_at)
+                                   begin_date, end_date, disambiguation, genres, tags,
+                                   last_synced_at, row_hash)
             SELECT * FROM UNNEST(
                 $1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::int[],
-                $7::text[], $8::text[], $9::text[], $10::text[], $11::text[], $12::timestamptz[]
+                $7::text[], $8::text[], $9::text[], $10::text[], $11::text[],
+                $12::timestamptz[], $13::bigint[]
             )
             ON CONFLICT (mbid) DO UPDATE SET
                 name = EXCLUDED.name,
@@ -1162,7 +1348,9 @@ impl DbRepository {
                 disambiguation = EXCLUDED.disambiguation,
                 genres = EXCLUDED.genres,
                 tags = EXCLUDED.tags,
-                last_synced_at = EXCLUDED.last_synced_at
+                last_synced_at = EXCLUDED.last_synced_at,
+                row_hash = EXCLUDED.row_hash
+            WHERE mb_labels.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&mbids)
@@ -1177,6 +1365,7 @@ impl DbRepository {
         .bind(&genres_vec)
         .bind(&tags_vec)
         .bind(&synced_ats)
+        .bind(&row_hashes)
         .execute(&self.pool)
         .await?;
 
@@ -1200,6 +1389,7 @@ impl DbRepository {
         let mut genres_vec = Vec::with_capacity(batch.len());
         let mut tags_vec = Vec::with_capacity(batch.len());
         let mut synced_ats = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for r in batch {
             mbids.push(r.mbid.as_str());
@@ -1212,15 +1402,18 @@ impl DbRepository {
             genres_vec.push(r.genres.as_str());
             tags_vec.push(r.tags.as_str());
             synced_ats.push(r.last_synced_at);
+            row_hashes.push(r.row_hash);
         }
 
         let result = sqlx::query(
             r#"
             INSERT INTO mb_recordings (mbid, title, artist_mbid, artist_name, length_ms,
-                                       first_release_date, isrcs, genres, tags, last_synced_at)
+                                       first_release_date, isrcs, genres, tags, last_synced_at,
+                                       row_hash)
             SELECT * FROM UNNEST(
                 $1::text[], $2::text[], $3::text[], $4::text[], $5::int[],
-                $6::text[], $7::text[], $8::text[], $9::text[], $10::timestamptz[]
+                $6::text[], $7::text[], $8::text[], $9::text[], $10::timestamptz[],
+                $11::bigint[]
             )
             ON CONFLICT (mbid) DO UPDATE SET
                 title = EXCLUDED.title,
@@ -1231,7 +1424,9 @@ impl DbRepository {
                 isrcs = EXCLUDED.isrcs,
                 genres = EXCLUDED.genres,
                 tags = EXCLUDED.tags,
-                last_synced_at = EXCLUDED.last_synced_at
+                last_synced_at = EXCLUDED.last_synced_at,
+                row_hash = EXCLUDED.row_hash
+            WHERE mb_recordings.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&mbids)
@@ -1244,6 +1439,7 @@ impl DbRepository {
         .bind(&genres_vec)
         .bind(&tags_vec)
         .bind(&synced_ats)
+        .bind(&row_hashes)
         .execute(&self.pool)
         .await?;
 
@@ -1266,6 +1462,7 @@ impl DbRepository {
         let mut genres_vec = Vec::with_capacity(batch.len());
         let mut tags_vec = Vec::with_capacity(batch.len());
         let mut synced_ats = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for w in batch {
             mbids.push(w.mbid.as_str());
@@ -1277,15 +1474,16 @@ impl DbRepository {
             genres_vec.push(w.genres.as_str());
             tags_vec.push(w.tags.as_str());
             synced_ats.push(w.last_synced_at);
+            row_hashes.push(w.row_hash);
         }
 
         let result = sqlx::query(
             r#"
             INSERT INTO mb_works (mbid, title, work_type, languages, iswcs,
-                                  disambiguation, genres, tags, last_synced_at)
+                                  disambiguation, genres, tags, last_synced_at, row_hash)
             SELECT * FROM UNNEST(
                 $1::text[], $2::text[], $3::text[], $4::text[], $5::text[],
-                $6::text[], $7::text[], $8::text[], $9::timestamptz[]
+                $6::text[], $7::text[], $8::text[], $9::timestamptz[], $10::bigint[]
             )
             ON CONFLICT (mbid) DO UPDATE SET
                 title = EXCLUDED.title,
@@ -1295,7 +1493,9 @@ impl DbRepository {
                 disambiguation = EXCLUDED.disambiguation,
                 genres = EXCLUDED.genres,
                 tags = EXCLUDED.tags,
-                last_synced_at = EXCLUDED.last_synced_at
+                last_synced_at = EXCLUDED.last_synced_at,
+                row_hash = EXCLUDED.row_hash
+            WHERE mb_works.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&mbids)
@@ -1307,6 +1507,7 @@ impl DbRepository {
         .bind(&genres_vec)
         .bind(&tags_vec)
         .bind(&synced_ats)
+        .bind(&row_hashes)
         .execute(&self.pool)
         .await?;
 
@@ -1328,6 +1529,7 @@ impl DbRepository {
         let mut iso_3166_2s = Vec::with_capacity(batch.len());
         let mut disambiguations = Vec::with_capacity(batch.len());
         let mut synced_ats = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for a in batch {
             mbids.push(a.mbid.as_str());
@@ -1338,15 +1540,16 @@ impl DbRepository {
             iso_3166_2s.push(a.iso_3166_2.as_deref());
             disambiguations.push(a.disambiguation.as_deref());
             synced_ats.push(a.last_synced_at);
+            row_hashes.push(a.row_hash);
         }
 
         let result = sqlx::query(
             r#"
             INSERT INTO mb_areas (mbid, name, sort_name, area_type, iso_3166_1, iso_3166_2,
-                                  disambiguation, last_synced_at)
+                                  disambiguation, last_synced_at, row_hash)
             SELECT * FROM UNNEST(
                 $1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
-                $7::text[], $8::timestamptz[]
+                $7::text[], $8::timestamptz[], $9::bigint[]
             )
             ON CONFLICT (mbid) DO UPDATE SET
                 name = EXCLUDED.name,
@@ -1355,7 +1558,9 @@ impl DbRepository {
                 iso_3166_1 = EXCLUDED.iso_3166_1,
                 iso_3166_2 = EXCLUDED.iso_3166_2,
                 disambiguation = EXCLUDED.disambiguation,
-                last_synced_at = EXCLUDED.last_synced_at
+                last_synced_at = EXCLUDED.last_synced_at,
+                row_hash = EXCLUDED.row_hash
+            WHERE mb_areas.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&mbids)
@@ -1366,6 +1571,7 @@ impl DbRepository {
         .bind(&iso_3166_2s)
         .bind(&disambiguations)
         .bind(&synced_ats)
+        .bind(&row_hashes)
         .execute(&self.pool)
         .await?;
 
@@ -1384,6 +1590,7 @@ impl DbRepository {
         let mut series_types = Vec::with_capacity(batch.len());
         let mut disambiguations = Vec::with_capacity(batch.len());
         let mut synced_ats = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for s in batch {
             mbids.push(s.mbid.as_str());
@@ -1391,19 +1598,24 @@ impl DbRepository {
             series_types.push(s.series_type.as_deref());
             disambiguations.push(s.disambiguation.as_deref());
             synced_ats.push(s.last_synced_at);
+            row_hashes.push(s.row_hash);
         }
 
         let result = sqlx::query(
             r#"
-            INSERT INTO mb_series (mbid, name, series_type, disambiguation, last_synced_at)
+            INSERT INTO mb_series (mbid, name, series_type, disambiguation, last_synced_at,
+                                   row_hash)
             SELECT * FROM UNNEST(
-                $1::text[], $2::text[], $3::text[], $4::text[], $5::timestamptz[]
+                $1::text[], $2::text[], $3::text[], $4::text[], $5::timestamptz[],
+                $6::bigint[]
             )
             ON CONFLICT (mbid) DO UPDATE SET
                 name = EXCLUDED.name,
                 series_type = EXCLUDED.series_type,
                 disambiguation = EXCLUDED.disambiguation,
-                last_synced_at = EXCLUDED.last_synced_at
+                last_synced_at = EXCLUDED.last_synced_at,
+                row_hash = EXCLUDED.row_hash
+            WHERE mb_series.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&mbids)
@@ -1411,6 +1623,7 @@ impl DbRepository {
         .bind(&series_types)
         .bind(&disambiguations)
         .bind(&synced_ats)
+        .bind(&row_hashes)
         .execute(&self.pool)
         .await?;
 
@@ -1433,6 +1646,7 @@ impl DbRepository {
         let mut cancelled_vec = Vec::with_capacity(batch.len());
         let mut disambiguations = Vec::with_capacity(batch.len());
         let mut synced_ats = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for e in batch {
             mbids.push(e.mbid.as_str());
@@ -1444,15 +1658,16 @@ impl DbRepository {
             cancelled_vec.push(e.cancelled);
             disambiguations.push(e.disambiguation.as_deref());
             synced_ats.push(e.last_synced_at);
+            row_hashes.push(e.row_hash);
         }
 
         let result = sqlx::query(
             r#"
             INSERT INTO mb_events (mbid, name, event_type, begin_date, end_date, time,
-                                   cancelled, disambiguation, last_synced_at)
+                                   cancelled, disambiguation, last_synced_at, row_hash)
             SELECT * FROM UNNEST(
                 $1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
-                $7::bool[], $8::text[], $9::timestamptz[]
+                $7::bool[], $8::text[], $9::timestamptz[], $10::bigint[]
             )
             ON CONFLICT (mbid) DO UPDATE SET
                 name = EXCLUDED.name,
@@ -1462,7 +1677,9 @@ impl DbRepository {
                 time = EXCLUDED.time,
                 cancelled = EXCLUDED.cancelled,
                 disambiguation = EXCLUDED.disambiguation,
-                last_synced_at = EXCLUDED.last_synced_at
+                last_synced_at = EXCLUDED.last_synced_at,
+                row_hash = EXCLUDED.row_hash
+            WHERE mb_events.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&mbids)
@@ -1474,6 +1691,7 @@ impl DbRepository {
         .bind(&cancelled_vec)
         .bind(&disambiguations)
         .bind(&synced_ats)
+        .bind(&row_hashes)
         .execute(&self.pool)
         .await?;
 
@@ -1493,6 +1711,7 @@ impl DbRepository {
         let mut descriptions = Vec::with_capacity(batch.len());
         let mut disambiguations = Vec::with_capacity(batch.len());
         let mut synced_ats = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for i in batch {
             mbids.push(i.mbid.as_str());
@@ -1501,21 +1720,25 @@ impl DbRepository {
             descriptions.push(i.description.as_deref());
             disambiguations.push(i.disambiguation.as_deref());
             synced_ats.push(i.last_synced_at);
+            row_hashes.push(i.row_hash);
         }
 
         let result = sqlx::query(
             r#"
             INSERT INTO mb_instruments (mbid, name, instrument_type, description,
-                                        disambiguation, last_synced_at)
+                                        disambiguation, last_synced_at, row_hash)
             SELECT * FROM UNNEST(
-                $1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::timestamptz[]
+                $1::text[], $2::text[], $3::text[], $4::text[], $5::text[],
+                $6::timestamptz[], $7::bigint[]
             )
             ON CONFLICT (mbid) DO UPDATE SET
                 name = EXCLUDED.name,
                 instrument_type = EXCLUDED.instrument_type,
                 description = EXCLUDED.description,
                 disambiguation = EXCLUDED.disambiguation,
-                last_synced_at = EXCLUDED.last_synced_at
+                last_synced_at = EXCLUDED.last_synced_at,
+                row_hash = EXCLUDED.row_hash
+            WHERE mb_instruments.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&mbids)
@@ -1524,6 +1747,7 @@ impl DbRepository {
         .bind(&descriptions)
         .bind(&disambiguations)
         .bind(&synced_ats)
+        .bind(&row_hashes)
         .execute(&self.pool)
         .await?;
 
@@ -1544,6 +1768,7 @@ impl DbRepository {
         let mut coordinates_vec = Vec::with_capacity(batch.len());
         let mut disambiguations = Vec::with_capacity(batch.len());
         let mut synced_ats = Vec::with_capacity(batch.len());
+        let mut row_hashes = Vec::with_capacity(batch.len());
 
         for p in batch {
             mbids.push(p.mbid.as_str());
@@ -1553,15 +1778,16 @@ impl DbRepository {
             coordinates_vec.push(p.coordinates.as_deref());
             disambiguations.push(p.disambiguation.as_deref());
             synced_ats.push(p.last_synced_at);
+            row_hashes.push(p.row_hash);
         }
 
         let result = sqlx::query(
             r#"
             INSERT INTO mb_places (mbid, name, place_type, area, coordinates,
-                                   disambiguation, last_synced_at)
+                                   disambiguation, last_synced_at, row_hash)
             SELECT * FROM UNNEST(
                 $1::text[], $2::text[], $3::text[], $4::text[], $5::text[],
-                $6::text[], $7::timestamptz[]
+                $6::text[], $7::timestamptz[], $8::bigint[]
             )
             ON CONFLICT (mbid) DO UPDATE SET
                 name = EXCLUDED.name,
@@ -1569,7 +1795,9 @@ impl DbRepository {
                 area = EXCLUDED.area,
                 coordinates = EXCLUDED.coordinates,
                 disambiguation = EXCLUDED.disambiguation,
-                last_synced_at = EXCLUDED.last_synced_at
+                last_synced_at = EXCLUDED.last_synced_at,
+                row_hash = EXCLUDED.row_hash
+            WHERE mb_places.row_hash IS DISTINCT FROM EXCLUDED.row_hash
             "#,
         )
         .bind(&mbids)
@@ -1579,6 +1807,7 @@ impl DbRepository {
         .bind(&coordinates_vec)
         .bind(&disambiguations)
         .bind(&synced_ats)
+        .bind(&row_hashes)
         .execute(&self.pool)
         .await?;
 

@@ -43,8 +43,19 @@ pub struct ImdbEpisode {
     pub episode_number: Option<i32>,
     /// Episode title
     pub title: Option<String>,
+    /// Original title (if different from primary)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_title: Option<String>,
     /// Runtime in minutes
     pub runtime_minutes: Option<i32>,
+    /// Whether this is adult content
+    pub is_adult: bool,
+    /// Year the episode aired
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_year: Option<i32>,
+    /// Comma-separated genres
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub genres: Option<String>,
     /// Average rating (1-10)
     pub rating: Option<f64>,
     /// Number of votes
@@ -95,6 +106,8 @@ pub struct ImdbStats {
     pub movie_count: i64,
     pub people_count: i64,
     pub credits_count: i64,
+    pub akas_count: i64,
+    pub crew_count: i64,
     pub last_sync: Option<String>,
     pub db_size_bytes: Option<i64>,
 }
@@ -111,6 +124,8 @@ pub struct SyncStatus {
     pub title_ratings: Option<DatasetSyncStatus>,
     pub name_basics: Option<DatasetSyncStatus>,
     pub title_principals: Option<DatasetSyncStatus>,
+    pub title_akas: Option<DatasetSyncStatus>,
+    pub title_crew: Option<DatasetSyncStatus>,
 }
 
 /// Status for a single dataset sync
@@ -121,6 +136,7 @@ pub struct DatasetSyncStatus {
     pub rows_processed: i64,
     pub rows_inserted: i64,
     pub rows_updated: i64,
+    pub rows_unchanged: i64,
     pub started_at: String,
     pub completed_at: Option<String>,
     pub status: String,
@@ -139,6 +155,12 @@ pub struct DatasetSyncStatus {
     /// Current phase: "downloading", "parsing", "idle"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_phase: Option<String>,
+    /// Estimated total rows for this dataset (from last completed sync)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_total_rows: Option<i64>,
+    /// Parsing progress percentage (0-100)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parsing_progress: Option<f64>,
 }
 
 /// Live download progress state shared between sync task and status API
@@ -156,6 +178,10 @@ pub struct DownloadProgress {
     pub total_bytes: u64,
     /// When true, skip downloads and use cached files as-is
     pub process_only: bool,
+    /// Estimated total rows for current dataset (from last completed sync)
+    pub estimated_total_rows: i64,
+    /// Current rows processed in parsing phase
+    pub current_rows_processed: i64,
 }
 
 /// Sync report
@@ -167,6 +193,8 @@ pub struct SyncReport {
     pub title_ratings: Option<SyncStats>,
     pub name_basics: Option<SyncStats>,
     pub title_principals: Option<SyncStats>,
+    pub title_akas: Option<SyncStats>,
+    pub title_crew: Option<SyncStats>,
     pub errors: Vec<String>,
 }
 
@@ -177,6 +205,7 @@ pub struct SyncStats {
     pub rows_processed: i64,
     pub rows_inserted: i64,
     pub rows_updated: i64,
+    pub rows_unchanged: i64,
     pub duration_seconds: i64,
 }
 
@@ -195,6 +224,7 @@ pub struct DbSeries {
     pub rating: Option<f64>,
     pub votes: Option<i64>,
     pub last_synced_at: DateTime<Utc>,
+    pub row_hash: Option<i64>,
 }
 
 impl DbSeries {
@@ -227,11 +257,16 @@ pub struct DbEpisode {
     pub season_number: Option<i32>,
     pub episode_number: Option<i32>,
     pub title: Option<String>,
+    pub original_title: Option<String>,
     pub runtime_minutes: Option<i32>,
+    pub is_adult: bool,
+    pub start_year: Option<i32>,
+    pub genres: Option<String>,
     pub rating: Option<f64>,
     pub votes: Option<i64>,
     pub air_date: Option<NaiveDate>,
     pub last_synced_at: DateTime<Utc>,
+    pub row_hash: Option<i64>,
 }
 
 impl DbEpisode {
@@ -243,7 +278,11 @@ impl DbEpisode {
             season_number: self.season_number,
             episode_number: self.episode_number,
             title: self.title.clone(),
+            original_title: self.original_title.clone(),
             runtime_minutes: self.runtime_minutes,
+            is_adult: self.is_adult,
+            start_year: self.start_year,
+            genres: self.genres.clone(),
             rating: self.rating,
             votes: self.votes,
             air_date: self.air_date.map(|d| d.to_string()),
@@ -268,6 +307,7 @@ pub struct DbMovie {
     pub poster_url: Option<String>,
     pub fanart_url: Option<String>,
     pub tmdb_fetched_at: Option<DateTime<Utc>>,
+    pub row_hash: Option<i64>,
 }
 
 impl DbMovie {
@@ -303,6 +343,63 @@ pub struct DbPerson {
     pub death_year: Option<i16>,
     pub primary_profession: Option<String>,
     pub known_for_titles: Option<String>,
+    pub row_hash: Option<i64>,
+}
+
+/// Internal database row for an alternate title (from title.akas)
+#[derive(Debug, Clone)]
+pub struct DbTitleAka {
+    pub tconst: i64,
+    pub ordering: i16,
+    pub title: String,
+    pub region: Option<String>,
+    pub language: Option<String>,
+    pub types: Option<String>,
+    pub attributes: Option<String>,
+    pub is_original_title: Option<bool>,
+    pub row_hash: Option<i64>,
+}
+
+/// API response for alternative titles
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImdbTitleAka {
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub types: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attributes: Option<String>,
+    pub is_original_title: bool,
+}
+
+/// Internal database row for title crew (from title.crew)
+#[derive(Debug, Clone)]
+pub struct DbTitleCrew {
+    pub tconst: i64,
+    pub directors: Option<String>,
+    pub writers: Option<String>,
+    pub row_hash: Option<i64>,
+}
+
+/// API response: crew for a title (directors + writers resolved to names)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TitleCrew {
+    pub imdb_id: String,
+    pub directors: Vec<CrewMember>,
+    pub writers: Vec<CrewMember>,
+}
+
+/// A single director or writer with resolved name
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrewMember {
+    pub nconst: String,
+    pub name: String,
 }
 
 /// Internal database row for a credit (from title.principals)
@@ -314,6 +411,7 @@ pub struct DbCredit {
     pub category: String,
     pub job: Option<String>,
     pub characters: Option<String>,
+    pub row_hash: Option<i64>,
 }
 
 /// API response: a single credit entry with resolved person name
@@ -359,6 +457,10 @@ pub struct SyncRequest {
     /// Which datasets to operate on. Empty = all.
     #[serde(default)]
     pub datasets: Vec<String>,
+    /// When true, TRUNCATE all data tables and sync history before syncing.
+    /// This forces a clean full re-import from scratch.
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// Metadata about a single dataset file (for GET /api/datasets)

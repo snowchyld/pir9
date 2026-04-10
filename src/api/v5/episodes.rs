@@ -255,15 +255,9 @@ async fn list_episodes(
                     .filter_map(|s| s.trim().parse().ok())
                     .collect();
 
-                let mut episodes = Vec::new();
-                for id in ids {
-                    if let Some(ep) = repo.get_by_id(id).await.map_err(|e| {
-                        EpisodeError::Internal(format!("Failed to fetch episode: {}", e))
-                    })? {
-                        episodes.push(ep);
-                    }
-                }
-                episodes
+                repo.get_by_ids(&ids).await.map_err(|e| {
+                    EpisodeError::Internal(format!("Failed to fetch episodes: {}", e))
+                })?
             } else {
                 // Return empty if no filter provided to avoid returning entire database
                 vec![]

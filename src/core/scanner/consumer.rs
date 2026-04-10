@@ -1575,7 +1575,6 @@ impl ScanResultConsumer {
         };
 
         let episode_file_repo = EpisodeFileRepository::new(self.db.clone());
-        let episode_repo = EpisodeRepository::new(self.db.clone());
         let history_repo = HistoryRepository::new(self.db.clone());
 
         let mut total_imported = 0;
@@ -1646,14 +1645,18 @@ impl ScanResultConsumer {
                 Ok(file_id) => {
                     total_imported += 1;
 
-                    // Link episodes to the file
-                    for episode_id in &mapping.episode_ids {
-                        if let Ok(Some(mut ep)) = episode_repo.get_by_id(*episode_id).await {
-                            ep.has_file = true;
-                            ep.episode_file_id = Some(file_id);
-                            if episode_repo.update(&ep).await.is_ok() {
-                                total_episodes_linked += 1;
-                            }
+                    // Batch link episodes to the file
+                    if !mapping.episode_ids.is_empty() {
+                        let pool = self.db.pool();
+                        let linked = sqlx::query(
+                            "UPDATE episodes SET has_file = true, episode_file_id = $1 WHERE id = ANY($2)",
+                        )
+                        .bind(file_id)
+                        .bind(&mapping.episode_ids)
+                        .execute(pool)
+                        .await;
+                        if let Ok(result) = linked {
+                            total_episodes_linked += result.rows_affected() as usize;
                         }
                     }
 

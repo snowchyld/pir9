@@ -298,6 +298,8 @@ async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             "movieCount": stats.movie_count,
             "peopleCount": stats.people_count,
             "creditsCount": stats.credits_count,
+            "akasCount": stats.akas_count,
+            "crewCount": stats.crew_count,
             "dbSizeBytes": stats.db_size_bytes,
             "lastSync": stats.last_sync,
             "lastBasicsSync": stats.last_sync,

@@ -233,13 +233,12 @@ async fn enrich_series_slugs(state: &AppState, records: &mut [HistoryResource]) 
     }
 
     let series_repo = SeriesRepository::new(state.db.clone());
-    let mut slug_map: HashMap<i64, String> = HashMap::new();
-
-    for id in series_ids {
-        if let Ok(Some(s)) = series_repo.get_by_id(id).await {
-            slug_map.insert(id, s.title_slug);
-        }
-    }
+    let ids_vec: Vec<i64> = series_ids.into_iter().collect();
+    let all_series = series_repo.get_by_ids(&ids_vec).await.unwrap_or_default();
+    let slug_map: HashMap<i64, String> = all_series
+        .into_iter()
+        .map(|s| (s.id, s.title_slug))
+        .collect();
 
     for record in records.iter_mut() {
         if let Some(slug) = slug_map.get(&record.series_id) {

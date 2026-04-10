@@ -21,7 +21,8 @@ use axum::{
     Router,
 };
 use serde::Deserialize;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::ConnectOptions;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -74,10 +75,28 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "postgres://pir9:pir9@localhost:5434/pir9_musicbrainz".to_string());
 
     info!("Connecting to database...");
+    let connect_options: PgConnectOptions = db_url
+        .parse::<PgConnectOptions>()?
+        // Raise slow-statement threshold — bulk UNNEST upserts of 5 000 rows
+        // routinely take 2-5 s; the 1 s default just creates log noise.
+        .log_slow_statements(tracing::log::LevelFilter::Warn, std::time::Duration::from_secs(10));
     let pool = PgPoolOptions::new()
         .max_connections(10)
         .acquire_timeout(std::time::Duration::from_secs(10))
-        .connect(&db_url)
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                // Skip WAL flush wait — this is re-syncable cache data
+                sqlx::query("SET synchronous_commit = off")
+                    .execute(&mut *conn)
+                    .await?;
+                // Give UNNEST expansion and sort enough RAM to stay out of disk
+                sqlx::query("SET work_mem = '256MB'")
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with(connect_options)
         .await?;
 
     // Run migrations
@@ -88,6 +107,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Startup cleanup: mark any stale 'running' syncs as failed (crash recovery)
     db.fail_stale_running_syncs().await?;
+
+    // Ensure secondary indexes exist (recovers from crash mid-sync with indexes dropped)
+    db.ensure_all_indexes().await?;
 
     let state = AppState {
         db,

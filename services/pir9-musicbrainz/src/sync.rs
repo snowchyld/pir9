@@ -24,6 +24,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
+use xxhash_rust::xxh64::xxh64;
 use xz2::read::XzDecoder;
 
 use std::sync::Arc;
@@ -51,6 +52,19 @@ const CACHE_DIR: &str = "/data/cache";
 
 /// Extracted JSONL directory (decompressed from tar.xz, reused on resume)
 const EXTRACTED_DIR: &str = "/data/cache/extracted";
+
+/// Hash a JSONL line for diff detection.
+#[inline]
+fn hash_jsonl_row(line: &str) -> i64 {
+    xxh64(line.as_bytes(), 0) as i64
+}
+
+/// Accumulate flush results: (written, batch_size) → updates inserted + unchanged counters
+#[inline]
+fn accum_flush(inserted: &mut i64, unchanged: &mut i64, result: (u64, u64)) {
+    *inserted += result.0 as i64;
+    *unchanged += (result.1 - result.0) as i64;
+}
 
 thread_local! {
     /// When true, download_dataset skips downloading and uses cached file as-is
@@ -651,8 +665,8 @@ async fn run_single_dataset_impl(
     match result {
         Ok(DatasetResult::Completed(stats)) => {
             info!(
-                "{} completed: {} processed, {} inserted, {} updated",
-                dataset, stats.rows_processed, stats.rows_inserted, stats.rows_updated
+                "{} completed: {} processed, {} inserted, {} updated, {} unchanged",
+                dataset, stats.rows_processed, stats.rows_inserted, stats.rows_updated, stats.rows_unchanged
             );
             match dataset {
                 "artist.tar.xz" => report.artists = Some(stats),
@@ -760,7 +774,9 @@ async fn sync_artists(
 
     let (sync_id, resume) = get_or_resume_sync(db, dataset).await?;
 
+    db.drop_sync_indexes(dataset).await?;
     let result = sync_artists_inner(db, &url, sync_id, &resume, token, progress).await;
+    db.recreate_sync_indexes(dataset).await?;
 
     match result {
         Ok(DatasetResult::Completed(stats)) => {
@@ -892,7 +908,7 @@ fn parse_jsonl_file<T: Send + 'static>(
     initial_rows: i64,
     token: &CancellationToken,
     tx: &mpsc::Sender<ParsedBatch<T>>,
-    parse_fn: impl Fn(&serde_json::Value, String) -> T,
+    parse_fn: impl Fn(&serde_json::Value, String, &str) -> T,
 ) -> Result<()> {
     let file = std::fs::File::open(jsonl_path)?;
     let reader = std::io::BufReader::new(file);
@@ -925,7 +941,7 @@ fn parse_jsonl_file<T: Send + 'static>(
             continue;
         }
 
-        batch.push(parse_fn(&json, mbid.clone()));
+        batch.push(parse_fn(&json, mbid.clone(), &line));
 
         rows_processed += 1;
         last_id = mbid;
@@ -970,7 +986,7 @@ fn parse_jsonl_file<T: Send + 'static>(
     Ok(())
 }
 
-fn parse_artist_json(json: &serde_json::Value, mbid: String) -> DbArtist {
+fn parse_artist_json(json: &serde_json::Value, mbid: String, line: &str) -> DbArtist {
     let name = json
         .get("name")
         .and_then(|v| v.as_str())
@@ -1033,6 +1049,7 @@ fn parse_artist_json(json: &serde_json::Value, mbid: String) -> DbArtist {
         rating,
         rating_count,
         last_synced_at: Utc::now(),
+        row_hash: Some(hash_jsonl_row(line)),
     }
 }
 
@@ -1055,7 +1072,9 @@ async fn sync_release_groups(
 
     let (sync_id, resume) = get_or_resume_sync(db, dataset).await?;
 
+    db.drop_sync_indexes(dataset).await?;
     let result = sync_release_groups_inner(db, &url, sync_id, &resume, token, progress).await;
+    db.recreate_sync_indexes(dataset).await?;
 
     match result {
         Ok(DatasetResult::Completed(stats)) => {
@@ -1173,7 +1192,7 @@ async fn sync_release_groups_inner(
     }))
 }
 
-fn parse_release_group_json(json: &serde_json::Value, mbid: String) -> DbReleaseGroup {
+fn parse_release_group_json(json: &serde_json::Value, mbid: String, line: &str) -> DbReleaseGroup {
     let title = json
         .get("title")
         .and_then(|v| v.as_str())
@@ -1222,6 +1241,7 @@ fn parse_release_group_json(json: &serde_json::Value, mbid: String) -> DbRelease
         rating,
         rating_count,
         last_synced_at: Utc::now(),
+        row_hash: Some(hash_jsonl_row(line)),
     }
 }
 
@@ -1244,7 +1264,9 @@ async fn sync_releases(
 
     let (sync_id, resume) = get_or_resume_sync(db, dataset).await?;
 
+    db.drop_sync_indexes(dataset).await?;
     let result = sync_releases_inner(db, &url, sync_id, &resume, token, progress).await;
+    db.recreate_sync_indexes(dataset).await?;
 
     match result {
         Ok(DatasetResult::Completed(stats)) => {
@@ -1450,7 +1472,7 @@ fn parse_release_jsonl(
             None => continue,
         };
 
-        batch.push(parse_release_json(&json, mbid.clone(), release_group_mbid));
+        batch.push(parse_release_json(&json, mbid.clone(), release_group_mbid, &line));
 
         rows_processed += 1;
         last_id = mbid;
@@ -1505,6 +1527,7 @@ fn parse_release_json(
     json: &serde_json::Value,
     mbid: String,
     release_group_mbid: String,
+    line: &str,
 ) -> ParsedRelease {
     let title = json
         .get("title")
@@ -1743,10 +1766,12 @@ async fn sync_generic<T: Send + 'static>(
 
     let (sync_id, resume) = get_or_resume_sync(db, dataset).await?;
 
+    db.drop_sync_indexes(dataset).await?;
     let result = sync_generic_inner(
         db, &url, dataset, sync_id, &resume, token, progress, parse_fn, &upsert_fn,
     )
     .await;
+    db.recreate_sync_indexes(dataset).await?;
 
     match result {
         Ok(DatasetResult::Completed(stats)) => {
